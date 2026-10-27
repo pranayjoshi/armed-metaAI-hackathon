@@ -1,7 +1,8 @@
 """Microphone -> voice activity -> on-device speech recognition -> utterances.
 
-ASR runs locally: NVIDIA Parakeet TDT 0.6B v3 on MLX (~80 ms per command on
-an M1 Pro), with mlx-whisper as the fallback. Audio never leaves the machine.
+ASR runs locally: NVIDIA Parakeet TDT 0.6B v3 on MLX (200-320 ms per 1-2 s
+command on an M1 Pro), with mlx-whisper as the fallback. Audio never leaves
+the machine.
 """
 
 from __future__ import annotations
@@ -26,7 +27,10 @@ def make_parakeet() -> Transcriber:
 
     model = from_pretrained("mlx-community/parakeet-tdt-0.6b-v3")
     rate = int(model.preprocessor_config.sample_rate)
-    model.generate(get_logmel(mx.zeros(rate // 2), model.preprocessor_config))  # warm up
+    # Warm up on speech-length noise: the first real call otherwise costs ~2.5 s.
+    noise = np.random.default_rng(0).normal(0, 0.01, rate * 2).astype(np.float32)
+    for length in (rate, rate * 2):
+        model.generate(get_logmel(mx.array(noise[:length]), model.preprocessor_config))
 
     def transcribe(audio: np.ndarray, sample_rate: int) -> str:
         if sample_rate != rate:

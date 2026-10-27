@@ -41,7 +41,7 @@ CONFIRM_PHRASES = (
     "sure",
 )
 HOME_PHRASES = ("go home", "home position", "reset position", "go back")
-POINT_PHRASES = ("point at", "point to", "show me", "which one is", "highlight")
+POINT_PHRASES = ("point at", "point to", "show me", "which one is", "highlight", "point")
 PICK_PHRASES = (
     "give me",
     "hand me",
