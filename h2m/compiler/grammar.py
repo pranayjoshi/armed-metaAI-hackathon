@@ -14,19 +14,54 @@ from h2m.contract import Verb
 
 STOP_PHRASES = ("emergency stop", "full stop", "stop", "halt", "freeze")
 CANCEL_PHRASES = (
-    "never mind", "nevermind", "don't do that", "dont do that", "scratch that",
-    "forget it", "cancel", "abort", "no no", "wait",
+    "never mind",
+    "nevermind",
+    "don't do that",
+    "dont do that",
+    "scratch that",
+    "forget it",
+    "cancel",
+    "abort",
+    "no no",
+    "wait",
 )
 CONFIRM_PHRASES = (
-    "yes please", "go ahead", "do it", "that's right", "thats right", "correct",
-    "confirm", "yes", "yeah", "yep", "okay", "ok", "sure",
+    "yes please",
+    "go ahead",
+    "do it",
+    "that's right",
+    "thats right",
+    "correct",
+    "confirm",
+    "yes",
+    "yeah",
+    "yep",
+    "okay",
+    "ok",
+    "sure",
 )
 HOME_PHRASES = ("go home", "home position", "reset position", "go back")
 POINT_PHRASES = ("point at", "point to", "show me", "which one is", "highlight")
 PICK_PHRASES = (
-    "give me", "hand me", "pass me", "bring me", "get me", "can i have", "i need",
-    "i want", "pick up", "pick", "grab", "take", "fetch", "put away", "move",
-    "give", "pass", "bring", "get",
+    "give me",
+    "hand me",
+    "pass me",
+    "bring me",
+    "get me",
+    "can i have",
+    "i need",
+    "i want",
+    "pick up",
+    "pick",
+    "grab",
+    "take",
+    "fetch",
+    "put away",
+    "move",
+    "give",
+    "pass",
+    "bring",
+    "get",
 )
 GENTLE_WORDS = ("gently", "gentle", "softly", "soft", "carefully", "careful", "lightly")
 FIRM_WORDS = ("firmly", "firm", "tightly", "tight", "hard", "securely")
