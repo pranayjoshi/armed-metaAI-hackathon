@@ -1,0 +1,66 @@
+"""The step contract: the one structure every input compiles into.
+
+A contract says what the robot should do next (verb), to what (object and
+where it is), how (grip effort, speed) and how sure the system is, plus what
+is still unresolved. The safety gate decides whether it runs.
+"""
+
+from __future__ import annotations
+
+import itertools
+from dataclasses import asdict, dataclass, field
+from enum import StrEnum
+from typing import Any
+
+from h2m.core import now
+
+
+class Verb(StrEnum):
+    PICK_PLACE = "pick_place"  # pick the object and put it in the tray
+    POINT = "point"  # point at the object
+    HOME = "home"
+    STOP = "stop"
+    CANCEL = "cancel"
+    CONFIRM = "confirm"
+    UNKNOWN = "unknown"
+
+
+MOTION_VERBS = frozenset({Verb.PICK_PLACE, Verb.POINT, Verb.HOME})
+TARGETED_VERBS = frozenset({Verb.PICK_PLACE, Verb.POINT})
+
+_ids = itertools.count(1)
+
+
+@dataclass
+class Candidate:
+    object_id: str
+    name: str
+    score: float
+
+
+@dataclass
+class StepContract:
+    verb: Verb
+    object_id: str | None = None
+    object_name: str | None = None
+    table_xy: tuple[float, float] | None = None
+    grip_effort: float | None = None  # 0..1, from EMG or words like "gently"
+    speed: float = 1.0  # 0..1 scale on the arm's configured max speed
+    confidence: float = 0.0
+    target_margin: float | None = None
+    evidence: dict[str, float] = field(default_factory=dict)
+    candidates: list[Candidate] = field(default_factory=list)
+    unresolved: list[str] = field(default_factory=list)
+    utterance: str = ""
+    source: str = "grammar"  # grammar | llm | ui
+    id: str = field(default_factory=lambda: f"c{next(_ids):05d}")
+    created_at: float = field(default_factory=now)
+
+    @property
+    def needs_motion(self) -> bool:
+        return self.verb in MOTION_VERBS
+
+    def as_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["verb"] = str(self.verb)
+        return data

@@ -1,0 +1,111 @@
+# Human2Machine runtime configuration.
+# Every threshold that affects what the robot does lives here, not in code.
+
+objects:
+  # What is on the table. `prompt` is what the detector looks for and what
+  # people can say ("hand me the cup"). `max_grip` caps squeeze for that object
+  # (0 = gripper fully open, 1 = hardest allowed squeeze).
+  - id: cup
+    name: paper cup
+    prompt: paper cup
+    max_grip: 0.35
+  - id: block
+    name: wooden block
+    prompt: wooden block
+    max_grip: 0.9
+  - id: ball
+    name: tennis ball
+    prompt: tennis ball
+    max_grip: 0.6
+
+speech:
+  source: mic            # mic | off  (typed commands always work)
+  asr: parakeet          # parakeet | whisper
+  sample_rate_hz: 16000
+  device: null           # sounddevice name or index; null = default input
+  vad_start_ratio: 3.0   # speech when frame RMS > ratio x noise floor
+  silence_end_ms: 450
+  preroll_ms: 250
+  max_utterance_ms: 6000
+
+vision:
+  source: camera         # camera | off
+  scene_camera: 0        # overhead camera index
+  wrist_camera: 1        # wrist camera index, null to disable
+  width: 1280
+  height: 720
+  detector: yoloe        # yoloe | none
+  detector_model: yoloe-26s-seg.pt
+  min_confidence: 0.25
+  pointing: true         # MediaPipe hand landmarks -> pointing target
+  publish_hz: 10
+  stale_ms: 800          # objects unseen this long are dropped
+  # Image -> table homography from `h2m calibrate-table`; null = normalized image coords.
+  table_homography: null
+
+emg:
+  source: ganglion       # ganglion | synthetic | off
+  transport: ble         # ble | usb_dongle
+  serial_port: null      # usb_dongle only
+  mac_address: null      # optional BLE address / CoreBluetooth UUID
+  sample_rate_hz: 200
+  # Electrode placement: flexors squeeze (grip + confirm), extensors open-hand (stop).
+  flexor_channels: [0, 1]
+  extensor_channels: [2, 3]
+  bandpass_hz: [20, 90]
+  notch_hz: 60
+  window_ms: 250
+  hop_ms: 50
+  smoothing: 0.35        # EMA on effort, 0..1 (higher = faster)
+  confirm_effort: 0.30   # squeeze above this ...
+  confirm_hold_ms: 350   # ... for this long confirms a pending request
+  stop_effort: 0.55      # extensor effort above this vetoes motion
+  stop_hold_ms: 80
+  profile: default       # calibration profile name in data/profiles/
+
+compiler:
+  llm: auto              # auto (use if MODEL_API_KEY set) | on | off
+  base_url: https://api.meta.ai/v1
+  model: muse-spark-1.1
+  timeout_s: 4.0
+  send_image: true
+
+safety:
+  auto_approve: 0.85     # act without asking at or above this confidence ...
+  ask_below: 0.85        # ... ask between ask_floor and auto_approve
+  ask_floor: 0.45        # hold below this
+  target_margin: 0.20    # top target must beat the runner-up by this much
+  confirm_timeout_s: 8.0
+  always_confirm: true   # physical arm: every motion needs a confirmation
+  default_grip: 0.5      # grip effort when nobody squeezed
+
+arm:
+  backend: virtual       # virtual | lerobot
+  port: null             # or env H2M_ARM_PORT
+  robot_id: h2m_follower
+  poses_file: configs/poses.yaml
+  control_hz: 30
+  max_joint_speed_deg_s: 30
+  max_gripper_speed_pct_s: 60
+  max_step_deg: 4.0
+  arrive_tolerance_deg: 3.0
+  tracking_error_deg: 20.0
+  skill_timeout_s: 25
+  # Gripper percent-open values. Grip effort maps soft..hard into this range.
+  gripper_open: 60
+  gripper_soft_close: 25
+  gripper_hard_close: 0
+  # Never exceed this share of servo torque (LeRobot burnout cap is 50%).
+  max_gripper_torque: 0.5
+  slot_tolerance: 0.12   # table distance from an object to a taught slot
+  joint_limits:
+    shoulder_pan: [-100, 100]
+    shoulder_lift: [-100, 100]
+    elbow_flex: [-100, 100]
+    wrist_flex: [-100, 100]
+    wrist_roll: [-150, 150]
+    gripper: [0, 100]
+
+server:
+  host: 127.0.0.1
+  port: 8080

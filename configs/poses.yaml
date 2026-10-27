@@ -1,0 +1,37 @@
+# Taught joint poses for the SO-101 follower (degrees; gripper 0-100 percent open).
+#
+# PLACEHOLDERS: the virtual arm can run them, the real arm refuses any pose
+# with `taught: false`. Teach each by hand-guiding the follower (torque off):
+#
+#   h2m arm teach home
+#   h2m arm teach slot_1.above
+#
+# Slots are marked table positions. `table_xy` uses the same coordinates as
+# vision objects (normalized image coords, or table coords after calibration).
+poses:
+  home:
+    taught: false
+    joints: {shoulder_pan: 0, shoulder_lift: -90, elbow_flex: 90, wrist_flex: 60, wrist_roll: 0, gripper: 5}
+  tray_above:
+    taught: false
+    joints: {shoulder_pan: 70, shoulder_lift: -30, elbow_flex: 40, wrist_flex: 60, wrist_roll: 0, gripper: 5}
+  tray_release:
+    taught: false
+    joints: {shoulder_pan: 70, shoulder_lift: -10, elbow_flex: 30, wrist_flex: 65, wrist_roll: 0, gripper: 5}
+
+slots:
+  slot_1:
+    table_xy: [0.25, 0.55]
+    above: {taught: false, joints: {shoulder_pan: -30, shoulder_lift: -20, elbow_flex: 30, wrist_flex: 70, wrist_roll: 0, gripper: 60}}
+    grasp: {taught: false, joints: {shoulder_pan: -30, shoulder_lift: 0, elbow_flex: 20, wrist_flex: 75, wrist_roll: 0, gripper: 60}}
+    point: {taught: false, joints: {shoulder_pan: -30, shoulder_lift: -40, elbow_flex: 45, wrist_flex: 70, wrist_roll: 0, gripper: 5}}
+  slot_2:
+    table_xy: [0.50, 0.55]
+    above: {taught: false, joints: {shoulder_pan: 0, shoulder_lift: -20, elbow_flex: 30, wrist_flex: 70, wrist_roll: 0, gripper: 60}}
+    grasp: {taught: false, joints: {shoulder_pan: 0, shoulder_lift: 0, elbow_flex: 20, wrist_flex: 75, wrist_roll: 0, gripper: 60}}
+    point: {taught: false, joints: {shoulder_pan: 0, shoulder_lift: -40, elbow_flex: 45, wrist_flex: 70, wrist_roll: 0, gripper: 5}}
+  slot_3:
+    table_xy: [0.75, 0.55]
+    above: {taught: false, joints: {shoulder_pan: 30, shoulder_lift: -20, elbow_flex: 30, wrist_flex: 70, wrist_roll: 0, gripper: 60}}
+    grasp: {taught: false, joints: {shoulder_pan: 30, shoulder_lift: 0, elbow_flex: 20, wrist_flex: 75, wrist_roll: 0, gripper: 60}}
+    point: {taught: false, joints: {shoulder_pan: 30, shoulder_lift: -40, elbow_flex: 45, wrist_flex: 70, wrist_roll: 0, gripper: 5}}
