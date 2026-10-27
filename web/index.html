@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Human2Machine</title>
+  <link rel="stylesheet" href="/web/app.css" />
+</head>
+<body>
+  <header class="bar">
+    <div class="brand"><span class="mark">H2M</span><span class="name">Human2Machine</span></div>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-view="operate" aria-selected="true">Operate</button>
+      <button role="tab" data-view="setup">Setup</button>
+      <button role="tab" data-view="sessions">Sessions</button>
+    </nav>
+    <div class="chips" id="chips"></div>
+    <button class="stop" id="stop" title="Stop the arm now (Space)">STOP</button>
+  </header>
+
+  <main>
+    <!-- OPERATE -->
+    <section class="view" id="view-operate">
+      <div class="operate">
+        <div class="scene card">
+          <div class="card-head">
+            <h2>Workspace</h2>
+            <span class="muted" id="scene-meta"></span>
+          </div>
+          <div class="stage" id="stage">
+            <img id="scene-img" alt="Overhead camera" />
+            <svg id="overlay" preserveAspectRatio="none"></svg>
+            <div class="stage-empty" id="stage-empty">No camera — virtual table</div>
+          </div>
+          <form class="say" id="say-form" autocomplete="off">
+            <span class="mic" id="mic" title="Microphone"></span>
+            <input id="say" placeholder='Say or type a request — "hand me the cup gently"' />
+            <button class="btn">Send</button>
+          </form>
+        </div>
+
+        <div class="side">
+          <div class="card request" id="request">
+            <div class="card-head"><h2>Request</h2><span class="verdict" id="verdict"></span></div>
+            <p class="heard" id="heard">Waiting for a request…</p>
+            <div class="contract" id="contract"></div>
+            <div class="ask" id="ask" hidden></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Muscle</h2><span class="muted" id="emg-meta"></span></div>
+            <div class="meter-row">
+              <label>Grip</label>
+              <div class="meter grip"><span id="grip-bar"></span><i id="grip-confirm"></i></div>
+              <b id="grip-val">—</b>
+            </div>
+            <div class="meter-row">
+              <label>Open hand</label>
+              <div class="meter open"><span id="open-bar"></span><i id="open-stop"></i></div>
+              <b id="open-val">—</b>
+            </div>
+            <canvas id="emg-trace" height="70"></canvas>
+            <p class="hint">Squeeze to confirm — how hard sets the grip. Open your hand to stop.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Arm</h2><span class="pill" id="arm-state">—</span></div>
+            <div class="arm-progress"><span id="arm-progress"></span></div>
+            <p class="muted" id="arm-detail">—</p>
+            <div class="meter-row">
+              <label>Grip load</label>
+              <div class="meter load"><span id="load-bar"></span></div>
+              <b id="load-val">—</b>
+            </div>
+            <div class="btn-row">
+              <button class="btn primary" data-arm="arm">Arm</button>
+              <button class="btn" data-arm="disarm">Disarm</button>
+              <button class="btn" data-arm="reset">Reset</button>
+              <button class="btn" data-arm="home">Home</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card activity-card">
+        <div class="card-head"><h2>Activity</h2><span class="muted" id="latency"></span></div>
+        <ol class="activity" id="activity"></ol>
+      </div>
+    </section>
+
+    <!-- SETUP -->
+    <section class="view" id="view-setup" hidden>
+      <div class="grid2">
+        <div class="card">
+          <div class="card-head"><h2>EMG calibration</h2><span class="pill" id="cal-state">—</span></div>
+          <p class="muted">Two electrodes on the forearm flexors (palm side, channels 1–2), two on the extensors (back, channels 3–4), reference on the elbow bone. Each step records for 3 seconds.</p>
+          <ol class="cal-steps">
+            <li><button class="btn" data-cal="rest">1 · Relax</button><span>Arm resting on the table, hand loose.</span><em id="cal-rest"></em></li>
+            <li><button class="btn" data-cal="squeeze">2 · Squeeze</button><span>Make a fist as hard as is comfortable.</span><em id="cal-squeeze"></em></li>
+            <li><button class="btn" data-cal="open">3 · Open hand</button><span>Spread fingers wide, bend wrist back.</span><em id="cal-open"></em></li>
+            <li><button class="btn primary" data-cal="finish">4 · Save profile</button><span>Checks every channel responded.</span><em id="cal-finish"></em></li>
+          </ol>
+          <div id="synthetic" hidden>
+            <h3>Synthetic EMG (development only)</h3>
+            <label class="slider">Flexor drive <input type="range" min="0" max="1" step="0.01" value="0" id="syn-flexor" /></label>
+            <label class="slider">Extensor drive <input type="range" min="0" max="1" step="0.01" value="0" id="syn-extensor" /></label>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Devices</h2></div>
+          <dl class="kv" id="devices"></dl>
+          <h3>Arm poses</h3>
+          <p class="muted" id="poses"></p>
+          <h3>Objects</h3>
+          <ul class="objects" id="objects"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- SESSIONS -->
+    <section class="view" id="view-sessions" hidden>
+      <div class="grid2">
+        <div class="card">
+          <div class="card-head"><h2>Session</h2><span class="pill" id="session-state">not recording</span></div>
+          <form class="row" id="session-form">
+            <input id="participant" placeholder="Participant id (e.g. p01)" />
+            <button class="btn primary" id="session-btn">Start session</button>
+          </form>
+          <h3>Trial</h3>
+          <form class="trial-form" id="trial-form">
+            <label>Expected action
+              <select id="t-action"><option value="pick_place">pick &amp; place</option><option value="point">point</option><option value="home">home</option><option value="none">no action (distractor)</option></select>
+            </label>
+            <label>Expected object <select id="t-object"></select></label>
+            <label>Condition
+              <select id="t-condition"><option>speech</option><option>speech+point</option><option>speech+point+emg</option><option>point+emg</option><option>noise</option></select>
+            </label>
+            <label>Instruction <input id="t-instruction" placeholder="What the participant was asked" /></label>
+            <button class="btn primary">Start trial</button>
+          </form>
+          <div class="outcomes" id="outcomes">
+            <button class="btn ok" data-outcome="success">Success</button>
+            <button class="btn" data-outcome="wrong_object">Wrong object</button>
+            <button class="btn" data-outcome="wrong_action">Wrong action</button>
+            <button class="btn" data-outcome="no_action">No action</button>
+            <button class="btn" data-outcome="dropped">Dropped</button>
+            <button class="btn bad" data-outcome="crushed">Crushed</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>This session</h2></div>
+          <p class="muted" id="trial-now">No trial running.</p>
+          <div class="tally" id="tally"></div>
+          <p class="muted">Run <code>h2m bench</code> for the full report: wrong-action rate, ask rate, latency, grip outcomes per condition.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+  <div class="toast" id="toast" hidden></div>
+  <script src="/web/app.js"></script>
+</body>
+</html>

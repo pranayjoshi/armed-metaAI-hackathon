@@ -360,6 +360,8 @@ class EmgService:
                 "calibrated": self.profile.calibrated,
                 "profile": self.profile.name,
                 "error": self.error,
+                "confirm_effort": self.cfg.get("confirm_effort", 0.3),
+                "stop_effort": self.cfg.get("stop_effort", 0.55),
                 "trace": list(self.trace)[-100:],
             }
 
