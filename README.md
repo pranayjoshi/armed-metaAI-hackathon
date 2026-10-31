@@ -51,6 +51,10 @@ h2m run --arm lerobot --emg ganglion --i-have-the-estop
 
 The real arm refuses untaught poses, needs operator **Arm** in the UI, keeps gripper torque ≤ 50%, freezes on any fault, and asks for confirmation before every motion (`safety.always_confirm`).
 
+## Hardware bring-up
+
+Step-by-step SO-101 setup (ports, motor ids, calibration, cameras, teleop, recording) lives in [docs/hardware](docs/hardware/README.md), with a script for each step in `scripts/`.
+
 ## Muse Spark
 
 Set `MODEL_API_KEY` (Meta Model API) and H2M uses `muse-spark-1.1` for requests the grammar cannot parse ("could you put away the thing I was drinking from"). The model returns the same structure as the grammar; target fusion with pointing and the safety decision remain deterministic. STOP and CANCEL never reach it.
