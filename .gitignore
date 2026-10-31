@@ -16,3 +16,6 @@ models/*
 *.ts
 *.task
 *.npz
+
+# Local hardware test captures (camera frames, rerun dumps)
+outputs/
