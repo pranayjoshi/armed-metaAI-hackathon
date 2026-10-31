@@ -24,6 +24,8 @@ Everything runs in one process on one clock. Audio, video and EMG stay on the ma
 
 ## Quick start
 
+Prefer conda? It also installs ffmpeg and the LeRobot arm extra: `conda env create -f environment.yml && conda activate lerobot`.
+
 ```bash
 uv venv --python 3.12 && uv pip install -e ".[dev,emg,speech,vision]"
 h2m fetch-models            # MediaPipe hand model, YOLOE-26, Parakeet (downloads once)
