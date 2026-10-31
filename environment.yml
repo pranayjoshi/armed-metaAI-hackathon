@@ -1,0 +1,10 @@
+name: lerobot
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - ffmpeg
+  - pip
+  - pip:
+      - -e ".[arm,dev]"
+      - rerun-sdk
