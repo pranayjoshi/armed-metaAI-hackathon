@@ -194,3 +194,19 @@ arm:
 server:
   host: 127.0.0.1
   port: 8080
+
+demo:
+  # `h2m demo` scripted scenario (h2m/scenario.py): virtual arm, synthetic EMG, canned
+  # explanation, labelled SIMULATION. Pacing only: the gate, rules, stops and arm
+  # limits above apply unchanged, and it refuses to run on anything but the virtual arm.
+  sample_dir: data/demo  # bundled synthetic incidents served by `h2m demo`
+  request: hand me the cup
+  beat_s: 1.2            # pause between beats so a viewer can follow
+  approve_after_s: 2.0   # scripted operator reads the rule card (never under 0.5 s)
+  brace_zone: laptop     # the synthetic brace fires as the carried cup reaches this zone ...
+  brace_margin: 0.0      # ... within this table distance of it (schematic estimate) ...
+  brace_fallback_s: 4.0  # ... or this long into the carry, whichever is first
+  brace_drive: 0.9       # SyntheticSource drive on flexor and extensor during the brace
+  brace_hold_s: 0.6
+  step_timeout_s: 30.0   # a step that takes longer fails the scenario (and says which)
+  loop_pause_s: 8.0      # `h2m demo --loop`: pause before the next pass

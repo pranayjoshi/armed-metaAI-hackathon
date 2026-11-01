@@ -1,0 +1,18 @@
+{
+  "cause_object": "laptop",
+  "relation": "carried_over",
+  "held_property": "liquid",
+  "say": "You braced as I carried the cup of water over your laptop. Should I keep liquids away from it?",
+  "confidence": 0.8,
+  "rule": {
+    "when_holding": [
+      "liquid"
+    ],
+    "avoid": "laptop",
+    "response": "route_around"
+  },
+  "source": "canned",
+  "mask_box": null,
+  "mask_source": null,
+  "problems": []
+}

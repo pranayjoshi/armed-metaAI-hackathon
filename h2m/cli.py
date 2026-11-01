@@ -1,10 +1,12 @@
-"""Command line: `h2m run`, `h2m fetch-models`, `h2m arm ...`, `h2m emg ...`, `h2m bench`."""
+"""Command line: `h2m run`, `h2m replay`, `h2m demo`, `h2m fetch-models`, `h2m arm ...`,
+`h2m emg ...`, `h2m bench`."""
 
 from __future__ import annotations
 
 import argparse
 import os
 import sys
+import threading
 import time
 
 from h2m.core import ROOT, load_config, load_env
@@ -48,6 +50,61 @@ def cmd_run(args: argparse.Namespace) -> int:
         uvicorn.run(create_app(h2m), host=host, port=port, log_level="warning")
     finally:
         h2m.shutdown()
+    return 0
+
+
+def _serve_replay(cfg: dict, app, port: int | None) -> None:
+    import uvicorn
+
+    # Same local-only rules as `h2m run` (docs/LOCAL_API.md): the Host check refuses
+    # anything but 127.0.0.1 / localhost, whatever address this binds to.
+    host = cfg["server"].get("host", "127.0.0.1")
+    port = int(port or cfg["server"].get("port", 8080))
+    print(f"H2M replay: http://{host}:{port}  (read-only; no arm, no model, no network)")
+    uvicorn.run(app, host=host, port=port, log_level="warning")
+
+
+def cmd_replay(args: argparse.Namespace) -> int:
+    """Serve a recorded incident, a session, or a folder of them. Nothing moves."""
+    from pathlib import Path
+
+    from h2m.replay import ReplayError, ReplayLibrary
+    from h2m.server import create_replay_app
+
+    cfg = load_config(args.config)
+    try:
+        library = ReplayLibrary.from_path(Path(args.path), root=ROOT)
+    except ReplayError as exc:
+        print(f"Cannot replay {args.path}: {exc}")
+        return 1
+    found = library.summaries()
+    print(f"{len(found['incidents'])} incident(s), {len(found['sessions'])} session(s)")
+    _serve_replay(cfg, create_replay_app(library, cfg), args.port)
+    return 0
+
+
+def cmd_demo(args: argparse.Namespace) -> int:
+    """Software demo: the bundled synthetic sample plus the scripted scenario on the
+    virtual arm (SIMULATION). No arm, no API key, no network."""
+    from h2m.replay import ReplayLibrary
+    from h2m.scenario import Scenario
+    from h2m.server import create_replay_app
+
+    cfg = load_config(args.config)
+    sample = ROOT / str((cfg.get("demo", {}) or {}).get("sample_dir", "data/demo"))
+    scenario = None if args.no_scenario else Scenario(cfg)
+    scan = [sample] + ([scenario.incidents_dir] if scenario else [])
+    library = ReplayLibrary(scan_dirs=scan, root=ROOT)
+    if not library.incident_ids():
+        print(f"no bundled sample in {sample} (python scripts/make_demo_sample.py)")
+    if scenario is not None:
+        scenario.start(loop=args.loop)
+        print(f"SIMULATION running on the virtual arm (work dir {scenario.workdir})")
+    try:
+        _serve_replay(cfg, create_replay_app(library, cfg, scenario), args.port)
+    finally:
+        if scenario is not None:
+            scenario.close()
     return 0
 
 
@@ -96,7 +153,8 @@ def cmd_arm(args: argparse.Namespace) -> int:
     from h2m.robot.backend import JOINTS
     from h2m.robot.skills import save_pose
 
-    arm = build_arm(cfg)
+    # read and teach only make sense on the real follower, whatever `run` defaults to.
+    arm = build_arm({**cfg, "backend": "lerobot"} if args.action != "check" else cfg)
     if args.action == "check":
         missing = arm.poses.untaught()
         print("all poses taught" if not missing else "untaught: " + ", ".join(missing))
@@ -122,6 +180,8 @@ def cmd_arm(args: argparse.Namespace) -> int:
             joints = arm.backend.read_joints()
             save_pose(arm.poses, args.pose, joints)
             print("saved", args.pose, {j: round(v, 1) for j, v in joints.items()})
+            # Pin the goal here first, or the arm jumps back when torque returns.
+            arm.backend.write_goal(joints)
             arm.backend.set_torque(True)
     except KeyboardInterrupt:
         pass
@@ -150,18 +210,53 @@ def cmd_emg(args: argparse.Namespace) -> int:
     emg.start()
     time.sleep(1.0)
     if args.action == "calibrate":
-        for phase, text in (
-            ("rest", "Relax your forearm completely"),
-            ("squeeze", "Squeeze your fist as hard as is comfortable"),
-            ("open", "Open your hand wide and bend the wrist back"),
-        ):
-            input(f"\n{text}. Press Enter, then hold for 4 seconds...")
-            print(emg.calibrate(phase, 4.0))
-        print(emg.calibrate("finish"))
+        # Real contractions come in bursts well above what a long hold sustains, so the
+        # fist and open-hand scales come from three hard pulses, not one steady hold.
+        steps = (
+            ("rest", "REST: let your forearm go completely limp, supported on the desk", 0),
+            ("squeeze", "FIST: at each NOW, squeeze as hard as you can; relax in between", 3),
+            ("open", "OPEN HAND: at each NOW, spread and bend back hard; relax in between", 3),
+        )
+        for phase, text, pulses in steps:
+            while True:
+                input(f"\n{text}\nPress Enter, then wait for the countdown...")
+                for count in (3, 2, 1):
+                    print(f"  {count}...", flush=True)
+                    time.sleep(1.0)
+                timers = []
+                for i in range(pulses):
+                    timers.append(threading.Timer(2.0 * i, print, ("  NOW, hard!",)))
+                    timers.append(threading.Timer(2.0 * i + 1.0, print, ("  relax",)))
+                print("  HOLD STILL" if not pulses else "  Recording", flush=True)
+                for timer in timers:
+                    timer.start()
+                result = emg.calibrate(phase, 2.0 * pulses if pulses else 4.0)
+                print("  Done, relax.")
+                if not result.get("ok"):
+                    print(f"  Failed: {result.get('detail')}")
+                    return 1
+                print(f"  Levels on channels 1-4: {result['rms']}")
+                problems = emg.phase_problems(phase)
+                for problem in problems:
+                    print(f"  WARNING: {problem}")
+                prompt = "Enter to redo, or type k to keep it anyway: " if problems else None
+                if prompt is None or input(f"  {prompt}").strip().lower() == "k":
+                    break
+        result = emg.calibrate("finish")
+        if not result.get("ok"):
+            print(f"\nNot saved: {result.get('detail')}")
+            return 1
+        profile = result["profile"]
+        print(f"\nSaved profile {profile['name']!r}:")
+        for key in ("rest", "squeeze_max", "open_max", "brace_max"):
+            if profile[key]:
+                print(f"  {key:12} {[round(v, 1) for v in profile[key]]}")
         return 0
     try:
         while True:
             s = emg.snapshot()
+            if s["error"]:  # all zeros would look like a quiet, connected arm
+                return 1
             bar = "#" * int(s["effort"] * 40)
             ext = "#" * int(s["extensor"] * 20)
             print(
@@ -220,6 +315,17 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--port", type=int)
     run.add_argument("--i-have-the-estop", action="store_true", help="required with --arm lerobot")
     run.set_defaults(func=cmd_run)
+
+    rp = sub.add_parser("replay", help="serve a recorded incident or session, read-only")
+    rp.add_argument("path", help="data/incidents/<id>, data/sessions/<id>, or a folder of them")
+    rp.add_argument("--port", type=int)
+    rp.set_defaults(func=cmd_replay)
+
+    demo = sub.add_parser("demo", help="software demo: bundled sample + simulated scenario")
+    demo.add_argument("--no-scenario", action="store_true", help="serve the sample only")
+    demo.add_argument("--loop", action="store_true", help="re-run the scenario after it ends")
+    demo.add_argument("--port", type=int)
+    demo.set_defaults(func=cmd_demo)
 
     fetch = sub.add_parser("fetch-models", help="download and warm all local models")
     fetch.set_defaults(func=cmd_fetch_models)

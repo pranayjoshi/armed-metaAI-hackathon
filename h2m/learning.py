@@ -15,9 +15,12 @@ import json
 import queue
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+import numpy as np
 
 from h2m.core import ROOT, now
 from h2m.incident import (
@@ -98,6 +101,9 @@ class Learner:
         self._emg_seen = float("-inf")
         self._running = False
         self.error: str | None = None
+        # Simulation only (h2m.scenario): a rendered top-down view of the virtual table,
+        # sampled into the clip when there is no real camera. Never set with a camera.
+        self.virtual_camera: Callable[[], np.ndarray | None] | None = None
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -133,6 +139,11 @@ class Learner:
             if vision.wrist is not None:
                 item = vision.wrist.latest()
                 wrist = item[0] if item else None
+        elif self.virtual_camera is not None:
+            try:
+                overhead = self.virtual_camera()
+            except Exception:  # a broken render must not stop joint / EMG sampling
+                overhead = None
         snap = self.app.arm.snapshot()
         q = snap.get("joints") or {}
         joints = [q[j] for j in JOINTS] if all(j in q for j in JOINTS) else None
@@ -198,6 +209,26 @@ class Learner:
             objects.append({"id": name, "name": name, "kind": "avoid_zone", "table_box": box})
         return objects
 
+    def _provenance(self) -> dict[str, Any]:
+        """Where this clip came from, saved with it so a replay can say whether it was
+        recorded on hardware or in the simulation."""
+        app = self.app
+        source = getattr(app.emg, "source", None) if app.emg is not None else None
+        arm_hw = bool(app.arm.backend.is_hardware)
+        emg_hw = bool(getattr(source, "is_hardware", False)) if source is not None else None
+        if app.vision is not None:
+            camera = "camera"
+        else:
+            camera = "virtual" if self.virtual_camera is not None else "off"
+        return {
+            "arm": app.arm.backend.name,
+            "arm_hardware": arm_hw,
+            "emg": getattr(source, "name", "off") if source is not None else "off",
+            "emg_hardware": emg_hw,
+            "camera": camera,
+            "simulation": not (arm_hw and emg_hw is True and camera != "virtual"),
+        }
+
     def process(self, trig: IncidentTrigger) -> None:
         after = float(self.cfg.get("after_s", 1.0))
         self.buffer.freeze(t=trig.t, after_s=after)
@@ -209,7 +240,13 @@ class Learner:
             time.sleep(delay)  # the sampler keeps recording the after-window meanwhile
         inc: Incident | None
         try:
-            inc = self.buffer.save(self.root, self._objects(), self._held(trig.t), reset=True)
+            extra = {
+                "trigger": {"source": trig.source, "t": trig.t, "onset_t": trig.onset_t},
+                "provenance": self._provenance(),
+            }
+            inc = self.buffer.save(
+                self.root, self._objects(), self._held(trig.t), reset=True, extra=extra
+            )
         except Exception as exc:
             self.buffer.reset()
             self.log.emit("incident.error", detail=f"incident save failed: {exc}")

@@ -1,5 +1,8 @@
 """HTTP + WebSocket API and the static operator UI.
 
+``create_app`` serves the live runtime. ``create_replay_app`` serves recorded incidents
+and sessions and the scripted simulation, read-only (docs/REPLAY_API.md).
+
 Local-only, same-origin (see docs/LOCAL_API.md):
 - Any Host other than 127.0.0.1 / localhost (any port) is refused (DNS rebinding).
 - A request or WebSocket with an Origin that is not this same local origin is refused,
@@ -18,6 +21,7 @@ import json
 import re
 import secrets
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -27,13 +31,17 @@ from fastapi.staticfiles import StaticFiles
 
 from h2m.app import H2M, RELEASE_DISABLED
 from h2m.core import ROOT
+from h2m.replay import ReplayError, ReplayLibrary, source_label
 from h2m.robot import ArmState
+from h2m.routing import RoutesUnavailable, catalog_tags, load_routes
 from h2m.rules import RulesUnavailable
+from h2m.scenario import SIM_NOTE, Scenario
 
 INCIDENT_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")  # folder names only: no path traversal
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost"})
 TOKEN_HEADER = "X-H2M-Token"
 TOKEN_META = "h2m-token"
+MODE_META = "h2m-mode"  # "replay" on the replay / demo server
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # Stopping is always safe: the STOP button must work even from a page without the token.
 TOKENLESS = frozenset({"/api/stop"})
@@ -64,9 +72,8 @@ def origin_problem(host: str | None, origin: str | None) -> str | None:
     return None
 
 
-def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
-    app = FastAPI(title="Human2Machine")
-    web = ROOT / "web"
+def _local_only(app: FastAPI, token: str | None) -> None:
+    """Host, Origin and token checks (docs/LOCAL_API.md) on every HTTP request."""
     app.state.token = token or secrets.token_urlsafe(32)
 
     @app.middleware("http")
@@ -80,6 +87,22 @@ def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
         if problem is not None:
             return JSONResponse({"detail": problem}, status_code=403)
         return await call_next(request)
+
+
+def _page(web: Path, token: str, mode: str | None = None) -> HTMLResponse:
+    # The token goes into the page itself: readable only by this origin's scripts.
+    html = (web / "index.html").read_text()
+    meta = f'<meta name="{TOKEN_META}" content="{token}" />'
+    if mode is not None:
+        meta += f'\n  <meta name="{MODE_META}" content="{mode}" />'
+    html = html.replace("<head>", f"<head>\n  {meta}", 1) if "<head>" in html else meta + html
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
+def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
+    app = FastAPI(title="Human2Machine")
+    web = ROOT / "web"
+    _local_only(app, token)
 
     def result(ok: bool, detail: str) -> dict[str, Any]:
         if not ok:
@@ -311,11 +334,201 @@ def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
 
     @app.get("/")
     def index() -> HTMLResponse:
-        # The token goes into the page itself: readable only by this origin's scripts.
-        html = (web / "index.html").read_text()
-        meta = f'<meta name="{TOKEN_META}" content="{app.state.token}" />'
-        html = html.replace("<head>", f"<head>\n  {meta}", 1) if "<head>" in html else meta + html
-        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+        return _page(web, app.state.token)
+
+    app.mount("/web", StaticFiles(directory=web), name="web")
+    return app
+
+
+# ── replay / software demo ───────────────────────────────────────────────────
+def create_replay_app(
+    library: ReplayLibrary,
+    cfg: dict[str, Any],
+    scenario: Scenario | None = None,
+    token: str | None = None,
+) -> FastAPI:
+    """Read-only server for recorded incidents and sessions, plus the scripted
+    simulation (docs/REPLAY_API.md). Same Host / Origin / token rules as the live API.
+
+    It has no actuation endpoint at all: no request, confirm, choose, arm, gripper,
+    EMG drive, calibration, rule approval or rule deletion route exists here, with or
+    without the token. The only POST is ``/api/stop`` (always safe): it stops the
+    simulation's virtual arm and aborts the script; the stop stays latched."""
+    app = FastAPI(title="Human2Machine replay")
+    web = ROOT / "web"
+    _local_only(app, token)
+    emg_cfg = cfg.get("emg", {}) or {}
+    brace_effort = float(emg_cfg.get("brace_effort", 0.35))
+    brace_calm = float(emg_cfg.get("brace_calm", 0.12))
+    try:
+        routes = load_routes(ROOT / (cfg.get("rules", {}) or {}).get("routes_file",
+                                                                       "configs/routes.yaml"))
+        routes_error = None
+    except RoutesUnavailable as exc:  # proposals then show as invalid, never as fine
+        routes, routes_error = None, str(exc)
+    zones = sorted(routes.zones) if routes else []
+    tags = sorted(catalog_tags(routes, cfg.get("objects", []))) if routes else []
+
+    def labels() -> dict[str, Any]:
+        if scenario is not None:
+            return {"mode": "replay", "label": "SIMULATION", "simulation": True,
+                    "note": SIM_NOTE}
+        return {"mode": "replay", "label": "REPLAY", "simulation": None,
+                "note": "Replay of saved recordings. Nothing here moves an arm."}
+
+    def incident(iid: str) -> Any:
+        if not INCIDENT_ID.fullmatch(iid):
+            raise HTTPException(400, "bad incident id")
+        try:
+            return library.incident(iid)
+        except KeyError as exc:
+            raise HTTPException(404, "no such incident") from exc
+        except ReplayError as exc:
+            raise HTTPException(503, f"incident unreadable: {exc}") from exc
+
+    def need_scenario() -> Scenario:
+        if scenario is None:
+            raise HTTPException(404, "no simulation running (start it with `h2m demo`)")
+        return scenario
+
+    def replay_state() -> dict[str, Any]:
+        h = scenario.h2m if scenario is not None else None
+        out = {
+            **labels(),
+            "replay": {
+                "incidents": len(library.incident_ids()),
+                "sessions": len(library.session_ids()),
+                "routes_error": routes_error,
+            },
+            "scenario": scenario.snapshot() if scenario is not None else None,
+        }
+        return {**h.snapshot(), **out} if h is not None else out
+
+    @app.get("/api/state")
+    def state() -> dict[str, Any]:
+        return replay_state()
+
+    @app.websocket("/api/live")
+    async def live(ws: WebSocket) -> None:
+        if origin_problem(ws.headers.get("host"), ws.headers.get("origin")) is not None:
+            await ws.close(code=1008)
+            return
+        await ws.accept()
+        try:
+            while True:
+                await ws.send_json(replay_state())
+                await asyncio.sleep(0.1 if scenario is not None else 1.0)
+        except (WebSocketDisconnect, RuntimeError):
+            return
+
+    @app.post("/api/stop")
+    def stop() -> dict[str, Any]:
+        if scenario is None or scenario.h2m is None:
+            return {"ok": True, "detail": "replay: nothing is moving"}
+        scenario.operator_stop("ui stop")
+        return {"ok": True, "detail": "stopped the simulated arm; the scenario is aborted"}
+
+    @app.get("/api/replay")
+    def replay_index() -> dict[str, Any]:
+        return {**labels(), **library.summaries(), "scenario": scenario is not None,
+                "zones": zones, "routes_error": routes_error}
+
+    @app.get("/api/replay/incidents")
+    def replay_incidents() -> dict[str, Any]:
+        return {**labels(), "incidents": library.summaries()["incidents"]}
+
+    @app.get("/api/replay/incident/{incident_id}")
+    def replay_incident(incident_id: str) -> dict[str, Any]:
+        inc = incident(incident_id)
+        return inc.payload(f"/api/replay/incident/{inc.id}", zones, tags, brace_effort,
+                           brace_calm)
+
+    @app.get("/api/replay/incident/{incident_id}/emg")
+    def replay_emg(incident_id: str) -> dict[str, Any]:
+        inc = incident(incident_id)
+        return {"id": inc.id, **source_label(inc.meta),
+                **inc.emg_series(brace_effort, brace_calm)}
+
+    @app.get("/api/replay/incident/{incident_id}/timeline")
+    def replay_timeline(incident_id: str) -> dict[str, Any]:
+        inc = incident(incident_id)
+        return {"id": inc.id, **source_label(inc.meta),
+                "timeline": inc.timeline(zones, tags, brace_effort, brace_calm)}
+
+    @app.get("/api/replay/incident/{incident_id}/frame/{index}/{cam}.jpg")
+    def replay_frame(incident_id: str, index: int, cam: str) -> Response:
+        path = incident(incident_id).frame_path(index, cam)
+        if path is None:
+            raise HTTPException(404, "no such frame")
+        return Response(path.read_bytes(), media_type="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/replay/session/{session_id}")
+    def replay_session(session_id: str) -> dict[str, Any]:
+        if not INCIDENT_ID.fullmatch(session_id):
+            raise HTTPException(400, "bad session id")
+        try:
+            return library.session(session_id).payload()
+        except KeyError as exc:
+            raise HTTPException(404, "no such session") from exc
+        except ReplayError as exc:
+            raise HTTPException(503, f"session unreadable: {exc}") from exc
+
+    @app.get("/api/replay/scenario")
+    def replay_scenario() -> dict[str, Any]:
+        return need_scenario().snapshot()
+
+    @app.get("/api/replay/scenario/timeline")
+    def replay_scenario_timeline() -> dict[str, Any]:
+        return need_scenario().timeline()
+
+    @app.get("/api/replay/scenario/frame.jpg")
+    def replay_scenario_frame() -> Response:
+        data = need_scenario().frame()
+        if data is None:
+            raise HTTPException(404, "no frame yet")
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    # Read-only mirrors of live GET routes, so the operator views can render the simulation.
+    @app.get("/api/camera/{name}.jpg")
+    def camera(name: str) -> Response:
+        data = scenario.frame() if scenario is not None and name == "scene" else None
+        if data is None:
+            raise HTTPException(404, "no frame")
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/rules")
+    def rules_list() -> dict[str, Any]:
+        h = scenario.h2m if scenario is not None else None
+        if h is None:
+            return {"rules": [], "zones": zones, **labels()}
+        try:
+            rules = h.rules.list()
+        except RulesUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return {"rules": [asdict(r) for r in rules], "zones": zones, **labels()}
+
+    @app.get("/api/rules/proposal")
+    def proposal() -> dict[str, Any]:
+        h = scenario.h2m if scenario is not None else None
+        return {"proposal": h.learner.snapshot()["proposal"] if h is not None else None,
+                **labels()}
+
+    @app.get("/api/incident")
+    def incident_latest() -> dict[str, Any]:
+        h = scenario.h2m if scenario is not None else None
+        return {"incident": h.learner.snapshot()["incident"] if h is not None else None,
+                **labels()}
+
+    @app.get("/api/incident/{incident_id}")
+    def incident_get(incident_id: str) -> dict[str, Any]:
+        inc = incident(incident_id)
+        return {"incident": inc.meta, "explanation": inc.explanation_payload(),
+                **source_label(inc.meta)}
+
+    @app.get("/")
+    def index() -> HTMLResponse:
+        return _page(web, app.state.token, mode="replay")
 
     app.mount("/web", StaticFiles(directory=web), name="web")
     return app

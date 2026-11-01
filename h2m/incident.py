@@ -65,6 +65,8 @@ class Incident:
     objects: list[dict[str, Any]] = field(default_factory=list)
     held: str | None = None
     path: Path | None = None
+    # Extra meta.json keys (trigger, provenance). Never overwrite the keys above.
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 class IncidentBuffer:
@@ -152,6 +154,7 @@ class IncidentBuffer:
         held: str | None = None,
         incident_id: str | None = None,
         reset: bool = False,
+        extra: dict[str, Any] | None = None,
     ) -> Incident:
         """Save the frozen clip. The buffers are copied under the lock so writers on
         other threads cannot change them mid-save; the disk write happens outside it.
@@ -168,7 +171,7 @@ class IncidentBuffer:
             emg = np.zeros((0, 0), dtype=np.float32)
         emg_t = np.array([r[0] for r in emg_rows], dtype=np.float64)
         iid = incident_id or time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
-        inc = Incident(iid, freeze_at, frames, emg, emg_t, objects or [], held)
+        inc = Incident(iid, freeze_at, frames, emg, emg_t, objects or [], held, extra=extra or {})
         inc.path = save_incident(inc, root)
         if reset:  # only after a successful write, so a failed save loses nothing
             self.reset()
@@ -211,6 +214,7 @@ def save_incident(inc: Incident, root: str | Path = "data/incidents") -> Path:
         "contracts": [{"t": f.t, "contract": f.contract} for f in inc.frames if f.contract],
         "emg": "emg.npy (column 0 = time, rest = channels)",
     }
+    meta.update({k: v for k, v in inc.extra.items() if k not in meta})
     (d / "meta.json").write_text(json.dumps(meta, indent=2, default=str))
     return d
 
@@ -223,7 +227,7 @@ class Explanation:
     say: str
     confidence: float
     rule: dict[str, Any] | None
-    source: str = "wonder"  # or "fallback"
+    source: str = "wonder"  # or "fallback", or "canned" (the simulation's fixed stand-in)
     mask_box: tuple[float, float, float, float] | None = None
     mask_source: str | None = None  # "sam" or "box"
 
@@ -488,6 +492,9 @@ def explain(incident: Incident, client: WonderClient | None) -> Explanation:
         exp = validate_explanation(_parse_json(raw))
         if exp is None:
             return fallback_explanation()
+        # A stand-in client (the simulation's canned one) labels its output as such.
+        label = getattr(client, "explanation_source", None)
+        exp.source = label if isinstance(label, str) and label else "wonder"
         exp.mask_box, exp.mask_source = _locate(exp, incident, client)
     except Exception:
         return fallback_explanation()

@@ -1,0 +1,999 @@
+{
+  "id": "demo-liquid-over-laptop",
+  "t_freeze": 3970798.528896625,
+  "held": "paper cup (tags: liquid, fragile)",
+  "objects": [
+    {
+      "id": "cup",
+      "name": "paper cup",
+      "confidence": 1.0,
+      "table_xy": [
+        0.25,
+        0.55
+      ]
+    },
+    {
+      "id": "block",
+      "name": "wooden block",
+      "confidence": 1.0,
+      "table_xy": [
+        0.5,
+        0.55
+      ]
+    },
+    {
+      "id": "ball",
+      "name": "tennis ball",
+      "confidence": 1.0,
+      "table_xy": [
+        0.75,
+        0.55
+      ]
+    },
+    {
+      "id": "laptop",
+      "name": "laptop",
+      "kind": "avoid_zone",
+      "table_box": [
+        0.25,
+        0.12,
+        0.35,
+        0.28
+      ]
+    }
+  ],
+  "keyframes": [
+    {
+      "label": "t-6.0s",
+      "t": 3970792.57761375,
+      "overhead": "keyframes/00_overhead.jpg"
+    },
+    {
+      "label": "t-4.7s",
+      "t": 3970793.824593916,
+      "overhead": "keyframes/01_overhead.jpg"
+    },
+    {
+      "label": "t-3.7s",
+      "t": 3970794.855285041,
+      "overhead": "keyframes/02_overhead.jpg"
+    },
+    {
+      "label": "t-2.6s",
+      "t": 3970795.896235541,
+      "overhead": "keyframes/03_overhead.jpg"
+    },
+    {
+      "label": "t-1.4s",
+      "t": 3970797.151120083,
+      "overhead": "keyframes/04_overhead.jpg"
+    },
+    {
+      "label": "t-0.1s",
+      "t": 3970798.394256875,
+      "overhead": "keyframes/05_overhead.jpg"
+    },
+    {
+      "label": "t+0.9s",
+      "t": 3970799.439700041,
+      "overhead": "keyframes/06_overhead.jpg"
+    }
+  ],
+  "joints": [
+    {
+      "t": 3970792.57761375,
+      "q": [
+        -18.8,
+        -71.2,
+        71.2,
+        70.0,
+        0.0,
+        42.6
+      ]
+    },
+    {
+      "t": 3970792.787644166,
+      "q": [
+        -25.5,
+        -64.5,
+        64.5,
+        70.0,
+        0.0,
+        55.9
+      ]
+    },
+    {
+      "t": 3970792.991628041,
+      "q": [
+        -30.0,
+        -57.9,
+        57.9,
+        70.0,
+        0.0,
+        60.0
+      ]
+    },
+    {
+      "t": 3970793.196923416,
+      "q": [
+        -30.0,
+        -52.2,
+        52.2,
+        70.0,
+        0.0,
+        60.0
+      ]
+    },
+    {
+      "t": 3970793.406963458,
+      "q": [
+        -30.0,
+        -45.7,
+        45.7,
+        70.0,
+        0.0,
+        60.0
+      ]
+    },
+    {
+      "t": 3970793.6162005,
+      "q": [
+        -30.0,
+        -40.1,
+        40.1,
+        70.0,
+        0.0,
+        60.0
+      ]
+    },
+    {
+      "t": 3970793.824593916,
+      "q": [
+        -30.0,
+        -33.6,
+        33.6,
+        70.0,
+        0.0,
+        60.0
+      ]
+    },
+    {
+      "t": 3970794.028472208,
+      "q": [
+        -30.0,
+        -26.9,
+        30.0,
+        70.0,
+        0.0,
+        60.0
+      ]
+    },
+    {
+      "t": 3970794.237557375,
+      "q": [
+        -30.0,
+        -21.3,
+        30.0,
+        70.0,
+        0.0,
+        60.0
+      ]
+    },
+    {
+      "t": 3970794.443127125,
+      "q": [
+        -30.0,
+        -15.5,
+        25.5,
+        74.5,
+        0.0,
+        60.0
+      ]
+    },
+    {
+      "t": 3970794.650135,
+      "q": [
+        -30.0,
+        -9.1,
+        20.0,
+        75.0,
+        0.0,
+        60.0
+      ]
+    },
+    {
+      "t": 3970794.855285041,
+      "q": [
+        -30.0,
+        -3.5,
+        20.0,
+        75.0,
+        0.0,
+        60.0
+      ]
+    },
+    {
+      "t": 3970795.065346916,
+      "q": [
+        -30.0,
+        0.0,
+        20.0,
+        75.0,
+        0.0,
+        55.7
+      ]
+    },
+    {
+      "t": 3970795.275681083,
+      "q": [
+        -30.0,
+        0.0,
+        20.0,
+        75.0,
+        0.0,
+        42.4
+      ]
+    },
+    {
+      "t": 3970795.482562291,
+      "q": [
+        -30.0,
+        0.0,
+        20.0,
+        75.0,
+        0.0,
+        31.2
+      ]
+    },
+    {
+      "t": 3970795.687912083,
+      "q": [
+        -30.0,
+        0.0,
+        20.0,
+        75.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970795.896235541,
+      "q": [
+        -30.0,
+        0.0,
+        20.0,
+        75.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970796.100918958,
+      "q": [
+        -30.0,
+        0.0,
+        20.0,
+        75.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970796.309221083,
+      "q": [
+        -30.0,
+        -5.7,
+        25.7,
+        70.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970796.520958458,
+      "q": [
+        -30.0,
+        -11.3,
+        30.0,
+        70.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970796.735183375,
+      "q": [
+        -30.0,
+        -17.9,
+        30.0,
+        70.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970796.94092025,
+      "q": [
+        -25.6,
+        -24.4,
+        34.4,
+        65.6,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970797.151120083,
+      "q": [
+        -19.9,
+        -30.0,
+        40.0,
+        60.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970797.359829208,
+      "q": [
+        -13.3,
+        -30.0,
+        40.0,
+        60.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970797.569064,
+      "q": [
+        -6.7,
+        -30.0,
+        40.0,
+        60.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970797.775464666,
+      "q": [
+        -1.2,
+        -30.0,
+        40.0,
+        60.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970797.980923666,
+      "q": [
+        5.4,
+        -30.0,
+        40.0,
+        60.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970798.186820875,
+      "q": [
+        11.1,
+        -30.0,
+        40.0,
+        60.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970798.394256875,
+      "q": [
+        17.7,
+        -30.0,
+        40.0,
+        60.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970798.604317833,
+      "q": [
+        22.0,
+        -30.0,
+        40.0,
+        60.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970798.812562625,
+      "q": [
+        22.0,
+        -30.0,
+        40.0,
+        60.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970799.02108725,
+      "q": [
+        22.0,
+        -30.0,
+        40.0,
+        60.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970799.229565625,
+      "q": [
+        22.0,
+        -30.0,
+        40.0,
+        60.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "t": 3970799.439700041,
+      "q": [
+        22.0,
+        -30.0,
+        40.0,
+        60.0,
+        0.0,
+        30.0
+      ]
+    }
+  ],
+  "contracts": [
+    {
+      "t": 3970792.57761375,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "approach"
+      }
+    },
+    {
+      "t": 3970792.787644166,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "approach"
+      }
+    },
+    {
+      "t": 3970792.991628041,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "approach"
+      }
+    },
+    {
+      "t": 3970793.196923416,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "approach"
+      }
+    },
+    {
+      "t": 3970793.406963458,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "approach"
+      }
+    },
+    {
+      "t": 3970793.6162005,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "approach"
+      }
+    },
+    {
+      "t": 3970793.824593916,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "approach"
+      }
+    },
+    {
+      "t": 3970794.028472208,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "approach"
+      }
+    },
+    {
+      "t": 3970794.237557375,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "approach"
+      }
+    },
+    {
+      "t": 3970794.443127125,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "approach"
+      }
+    },
+    {
+      "t": 3970794.650135,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "approach"
+      }
+    },
+    {
+      "t": 3970794.855285041,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "approach"
+      }
+    },
+    {
+      "t": 3970795.065346916,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "grasp"
+      }
+    },
+    {
+      "t": 3970795.275681083,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "grasp"
+      }
+    },
+    {
+      "t": 3970795.482562291,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "grasp"
+      }
+    },
+    {
+      "t": 3970795.687912083,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "grasp"
+      }
+    },
+    {
+      "t": 3970795.896235541,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "grasp"
+      }
+    },
+    {
+      "t": 3970796.100918958,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "carry"
+      }
+    },
+    {
+      "t": 3970796.309221083,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "carry"
+      }
+    },
+    {
+      "t": 3970796.520958458,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "carry"
+      }
+    },
+    {
+      "t": 3970796.735183375,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "carry"
+      }
+    },
+    {
+      "t": 3970796.94092025,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "carry"
+      }
+    },
+    {
+      "t": 3970797.151120083,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "carry"
+      }
+    },
+    {
+      "t": 3970797.359829208,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "carry"
+      }
+    },
+    {
+      "t": 3970797.569064,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "carry"
+      }
+    },
+    {
+      "t": 3970797.775464666,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "carry"
+      }
+    },
+    {
+      "t": 3970797.980923666,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "carry"
+      }
+    },
+    {
+      "t": 3970798.186820875,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "carry"
+      }
+    },
+    {
+      "t": 3970798.394256875,
+      "contract": {
+        "contract_id": "c00001",
+        "object_id": "cup",
+        "verb": "pick_place",
+        "confirmed_by": "ui",
+        "route": "direct",
+        "applied_rules": [],
+        "requested_effort": 0.5,
+        "object_name": "paper cup",
+        "tags": [
+          "liquid",
+          "fragile"
+        ],
+        "stage": "carry"
+      }
+    }
+  ],
+  "emg": "emg.npy (column 0 = time, rest = channels)",
+  "trigger": {
+    "source": "brace",
+    "t": 3970798.528896625,
+    "onset_t": 3970798.35
+  },
+  "provenance": {
+    "arm": "virtual",
+    "arm_hardware": false,
+    "emg": "synthetic",
+    "emg_hardware": false,
+    "camera": "virtual",
+    "simulation": true
+  },
+  "synthetic": true,
+  "synthetic_note": "SYNTHETIC sample: produced by `python scripts/make_demo_sample.py` running the scripted scenario (h2m/scenario.py) on the virtual arm. Frames are a schematic render of the virtual table, EMG is SyntheticSource, the explanation is canned. Not a recording of a person or a real arm.",
+  "source_incident": "20261101-132012-863e88"
+}
