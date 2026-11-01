@@ -88,7 +88,7 @@ class Candidate:
     kind: str  # one of KINDS
     label: str  # text for the card, built by this module
     confidence: str  # "likely" | "maybe"
-    source: str  # "muse" | "fallback"
+    source: str  # "muse" | "fallback" | "scanning"
     contract: dict[str, Any]
     tool_call: tuple[str, dict[str, Any]] | None = None
     object_id: str | None = None
@@ -634,6 +634,23 @@ def rank_candidates_ex(
         return RankResult([], False, "error")
 
 
+def scanning_candidates(
+    scene: Sequence[Mapping[str, Any]] | None,
+    *,
+    holding: str | None = None,
+    reachable: Any = None,
+    phrases: Mapping[str, str] | None = None,
+) -> list[Candidate]:
+    """The scanning baseline: every option of the closed list in its fixed scanning order
+    (picks in scene order, place near user while holding, looks, taught phrases). No
+    history, no head direction, no model. Never raises."""
+    try:
+        options = build_options(scene, holding, reachable, phrases)
+        return [_to_candidate(o, "maybe", "scanning") for o in options]
+    except Exception:
+        return []
+
+
 def rank_candidates(
     scene: Sequence[Mapping[str, Any]] | None,
     history: Sequence[Any] | None,
@@ -662,11 +679,16 @@ class IntentRanker:
     ``on_update(generation, result)`` if the reply is valid and still current.
     ``cancel`` (call it whenever the arm moves or stops again) drops any late reply.
     The thread never touches the arm. The UI should apply an upgrade only before the
-    person has started to select, so a card cannot change under their twitch."""
+    person has started to select, so a card cannot change under their twitch.
+
+    ``on_fallback(generation, result)`` (optional) is called instead when the upgrade
+    could not use Muse (``result.note`` says why: no_key, timeout_or_error, ...) and the
+    request is still current, so the caller can degrade to scanning."""
 
     client: ChatClient | None
     on_update: Callable[[int, RankResult], None]
     defaults: dict[str, Any] = field(default_factory=dict)
+    on_fallback: Callable[[int, RankResult], None] | None = None
     _gen: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -704,6 +726,8 @@ class IntentRanker:
                 current = gen == self._gen
             if current and result.used_muse:
                 self.on_update(gen, result)
+            elif current and self.on_fallback is not None:
+                self.on_fallback(gen, result)
         except Exception:
             pass
 
@@ -720,5 +744,6 @@ __all__ = [
     "fallback_order",
     "rank_candidates",
     "rank_candidates_ex",
+    "scanning_candidates",
     "validate_choices",
 ]

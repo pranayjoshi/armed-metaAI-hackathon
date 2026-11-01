@@ -70,15 +70,24 @@ emg:
   stop_hold_ms: 80
   # Brace (flinch): min(flexor, extensor) on a faster window, normalized per user.
   # Priority is brace > open hand > squeeze.
-  brace_feature: flexor_spike  # flexor_spike: a sudden squeeze, plus co-contraction | cocontraction: both muscles only
+  # brace_feature: flexor_spike ships and means OR: co-contraction at brace_effort, OR a
+  # flexor-only spike at the higher brace_spike_effort. cocontraction = the first trigger only.
+  # Replay of the recorded flinch runs (data/flinch, 12 flinches), shipped config: the OR
+  # variant stopped the arm (brace or open hand) on 10/12, with no squeeze or twitch after any
+  # flinch; the 2 misses peak at ~0.3, under every threshold. 10 of the 12 reach fast flexor
+  # >= 0.9, so they sit in the spike band whatever the extensors do. The spike threshold is
+  # above the twitch band, so a flexor-only twitch never freezes and a flexor-only flinch
+  # always does. (An earlier "both features scored identically" held for one run only.)
+  brace_feature: flexor_spike  # flexor_spike (the OR) | cocontraction (co-contraction only)
   brace_window_ms: 100   # parallel fast window, same hop as above
   brace_smoothing: 0.6   # EMA on the fast flexor / extensor, 0..1
   brace_effort: 0.35     # brace feature above this counts as co-contraction
+  brace_spike_effort: 0.6  # flexor-only spike (flexor_spike mode) above this is a brace; twitch_max_effort must not exceed it
   brace_calm: 0.12       # "calm baseline": brace at or below this before the rise
   brace_rise_ms: 150     # must be calm this long before crossing: slower ramps are ignored
   brace_baseline_ms: 250 # ... and have stayed calm for this long before that
   brace_hold_hops: 2     # hops (hop_ms each) above brace_effort before firing
-  brace_lockout_ms: 1500 # after a brace, squeeze events are suppressed (open hand never is)
+  brace_lockout_ms: 1500 # after a brace or an open hand, squeeze and twitch are suppressed (open hand never is)
   brace_trace_ms: 1500   # recent fast trace carried by emg.brace
   cocontraction_effort: 0.18  # squeeze needs extensors below this (well under brace_effort), so a brace never confirms
   cocontraction_ratio: 0.6    # ... or below this share of flexor effort: a hard fist leaks into the extensors (the limit is capped at brace_effort)
@@ -88,10 +97,13 @@ emg:
   # twitch_double_ms (onset to onset) = emg.double_twitch. A lone twitch is emitted only once the
   # double window has passed (twitch_double_ms after its onset). Brace > open hand > twitch:
   # any brace/open hand/squeeze, a busy or slow rise, or extensors above twitch_extensor_max
-  # voids the burst. With brace_feature: flexor_spike a burst that reaches brace_effort is a
-  # brace, so twitches there must stay below it; use cocontraction for the cleanest split.
+  # voids the burst. A twitch lives in [twitch_effort, twitch_max_effort): a burst that reaches
+  # twitch_max_effort (= brace_spike_effort) is a brace's, never a twitch. emg.burst_onset (payload
+  # onset_t only) fires on the first hop of a calm rise above twitch_effort, so a MOVING arm can
+  # freeze at once instead of after the 0.6 s the lone twitch is held back.
   twitch: true
   twitch_effort: 0.35    # fast flexor level that opens a burst
+  twitch_max_effort: 0.6 # at or above this fast flexor level the burst is not a twitch (same value as brace_spike_effort)
   twitch_release: 0.6    # burst ends when it falls below this share of twitch_effort
   twitch_calm: 0.12      # "calm baseline" before the rise (and before a re-arm)
   twitch_rise_ms: 100    # must have been calm this long before crossing: slower ramps are ignored
@@ -99,6 +111,7 @@ emg:
   twitch_min_ms: 150     # shorter than this is noise (the 100 ms window smears a burst by ~2 hops)
   twitch_max_ms: 400     # longer than this is a squeeze, not a twitch
   twitch_extensor_max: 0.18  # extensors must stay under this: a co-contraction is never a twitch
+  twitch_max_gap_ms: 150 # a twitch / double twitch whose window spans a read gap longer than this is refused (nothing emitted)
   twitch_double_ms: 600  # second onset within this of the first = double twitch
   twitch_refractory_ms: 300  # after an emitted twitch / double, bursts are ignored this long
   # Calibration profile = data/profiles/<name>.json plus the optional overrides below.
@@ -165,6 +178,35 @@ safety:
   operator_release_poses: [tray_release, tray_above, "*.grasp"]
   operator_release_tol_deg: 5.0
   operator_release_confirm_s: 10.0
+
+selection:
+  # Reflex cards (h2m/selection.py, docs/SELECTION_API.md). SAFETY REVIEW: a twitch is an
+  # answer here. twitch = SELECT the highlighted card (a motion card is then announced and
+  # shows "confirm?"; a second twitch confirms it, a double twitch goes back), double
+  # twitch = next card, brace or open hand on an idle arm = refuse it (while moving they
+  # freeze, unchanged). Confirming runs the card through the same tool path, gate and
+  # confirmation as any tool request, and only answers the plain confirmation: a gate
+  # question with a warning the card never showed (gripper not proven empty) waits for a
+  # squeeze, yes or a click. A twitch never confirms any other request and never approves
+  # a rule. Off until the bench shows twitches do not come out of startles.
+  # Only the literal true enables it.
+  enabled: false
+  reaction_s: 0.7        # a select begins >= this after the UI ack of the card; a confirm >= this after the announcement (floor 0.3)
+  require_ack: true      # the reaction clock starts at POST /api/selection/ack for that exact card; no ack = refused. false only for headless tests / scanning runs
+  after_veto_s: 3.0      # no select or confirm begins within this of any brace or open hand, swallowed ones too (floor 3.0); a refusal re-highlights
+  confirm_s: 8.0         # an unanswered "confirm?" goes back to the menu after this (cap 30)
+  mode: intent           # intent (ranked cards, Muse upgrade) | scanning (fixed scene order, every option: the baseline)
+  cards: 3               # intent mode shows this many (at most 3)
+  muse: true             # intent mode asks Muse Spark to rank (needs MODEL_API_KEY); false = deterministic ranking only
+  deadline_s: 2.5        # a Muse ranking later than this is dropped; no key / timeout / error switch to scanning for the run
+  spark:                 # h2m.intent.SparkClient (base_url defaults to compiler.base_url)
+    model: null          # null = env H2M_SPARK_MODEL, else muse-spark-1.3
+    timeout_s: 2.0
+    reasoning_effort: minimal
+  reshow_s: 3.0          # after every card is refused, a stop or a cancel: wait this long before new cards
+  veto_refractory_s: 1.5 # a flinch often fires brace AND open hand: within this, one refusal (both counted)
+  table_x: [0.0, 1.0]    # table x range split into left / centre / right thirds (head direction tie-break)
+  phrases: {}            # taught phrases offered as "say" cards, {id: text}; never model text
 
 rules:
   user: default          # rule memory file: data/rules/<user>.json

@@ -136,6 +136,43 @@ def test_open_hand_after_brace_fires_through_what_was_the_lockout(rig):
     assert len(rig.events("emg.open_hand")) == n + 1
 
 
+def test_open_hand_locks_out_squeeze_but_never_itself(rig):
+    rig.run(0.5, 0.0, 0.9)
+    assert len(rig.events("emg.open_hand")) == 1
+    assert rig.clock < rig.svc._open_until
+    rig.run(0.3, 0.0, 0.0)
+    rig.run(0.8, 0.9, 0.0)  # a full squeeze inside the lockout: does not confirm
+    rig.run(0.3, 0.0, 0.0)
+    assert rig.events("emg.squeeze") == []
+    rig.run(0.4, 0.0, 0.9)  # but the stop gesture fires again
+    assert len(rig.events("emg.open_hand")) == 2
+
+
+def test_squeeze_works_again_once_the_open_hand_lockout_is_over(rig):
+    rig.run(0.5, 0.0, 0.9)
+    rig.run(0.5, 0.0, 0.0)
+    rig.run(2.0, 0.0, 0.0)
+    assert rig.clock > rig.svc._open_until
+    rig.run(1.0, 0.9, 0.0)
+    assert len(rig.events("emg.squeeze")) == 1
+
+
+def test_squeeze_held_through_an_open_hand_waits_for_release(rig):
+    # Flexors stay tense (past a lowered confirm_effort, short of a brace) while the hand
+    # opens: when the lockout ends the held fist must not confirm anything.
+    rig.svc.cfg["confirm_effort"] = 0.15
+    rig.run(0.5, 0.25, 0.9)
+    assert len(rig.events("emg.open_hand")) == 1
+    assert rig.svc.effort >= 0.15
+    rig.run(4.0, 0.25, 0.0)
+    assert rig.svc.effort >= 0.15
+    assert rig.events("emg.brace") == []
+    assert rig.events("emg.squeeze") == []
+    rig.run(0.5, 0.0, 0.0)  # a release re-arms it
+    rig.run(1.0, 0.25, 0.0)
+    assert len(rig.events("emg.squeeze")) == 1
+
+
 def test_squeeze_needs_quiet_extensors(rig):
     # Moderate co-contraction: flexors past the confirm level, extensors above the
     # co-contraction level but nowhere near the open-hand level. Never a squeeze.
@@ -188,6 +225,42 @@ def test_flexor_spike_mode_keeps_cocontraction_from_a_busy_flexor(rig):
     rig.run(0.5, 0.7, 0.45)
     assert [e.data["trigger"] for e in rig.events("emg.brace")] == ["cocontraction"]
     assert "emg.squeeze" not in rig.kinds()
+
+
+def test_shipped_brace_feature_is_the_or_of_cocontraction_and_a_higher_spike(rig):
+    cfg = load_config()["emg"]
+    assert cfg["brace_feature"] == "flexor_spike"
+    assert cfg["brace_spike_effort"] > cfg["brace_effort"]
+    rig.svc.brace_feature = cfg["brace_feature"]
+    rig.run(1.0)
+    rig.run(0.5, 0.9, 0.0)  # flexor-only: the spike trigger
+    [spike] = rig.events("emg.brace")
+    assert spike.data["trigger"] == "flexor_spike"
+    rig.run(3.0)
+    rig.run(0.5, 0.9, 0.9)  # both muscle groups: the co-contraction trigger
+    assert len(rig.events("emg.brace")) == 2
+
+
+def test_flexor_spike_has_its_own_higher_threshold(rig):
+    # The spike trigger reads brace_spike_effort, not brace_effort: raised out of reach, a
+    # flexor-only burst no longer freezes, while co-contraction still does.
+    _spike_rig(rig).svc.brace_spike_thr = 1.5
+    rig.run(0.5, 0.9, 0.0)
+    assert rig.events("emg.brace") == []
+    rig.run(3.0)
+    rig.run(0.5, 0.9, 0.9)
+    assert [e.data["trigger"] for e in rig.events("emg.brace")] == ["cocontraction"]
+
+
+def test_brace_meter_threshold_line_is_where_either_trigger_fires(rig):
+    _spike_rig(rig).run(0.5, 0.9, 0.0)
+    assert rig.events("emg.brace")
+    assert rig.svc.brace >= rig.svc.brace_thr
+    rig.run(3.0)
+    rig.svc.brace_spike_thr = 1.5  # out of reach: the same flexor-only spike fires nothing ...
+    rig.run(0.5, 0.9, 0.0)
+    assert len(rig.events("emg.brace")) == 1
+    assert rig.svc.brace < rig.svc.brace_thr  # ... and the meter stays under its line
 
 
 def test_flinch_from_a_light_grip_does_not_confirm(rig):

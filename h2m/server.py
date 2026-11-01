@@ -99,6 +99,30 @@ def _page(web: Path, token: str, mode: str | None = None) -> HTMLResponse:
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
+async def _json_object(request: Request) -> dict[str, Any]:
+    """The body as a JSON object (empty body = {}), else 400."""
+    raw = await request.body()
+    try:
+        body = json.loads(raw) if raw.strip() else {}
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+    return body
+
+
+def _pins(body: dict[str, Any], required: bool) -> tuple[str | None, int | None]:
+    """``card_id`` (string) and ``menu`` (integer) from a selection body, else 400."""
+    card_id, menu = body.get("card_id"), body.get("menu")
+    if required and (card_id is None or menu is None):
+        raise HTTPException(400, "send the card_id and menu of the highlighted card")
+    if card_id is not None and not isinstance(card_id, str):
+        raise HTTPException(400, "card_id must be a string")
+    if menu is not None and (isinstance(menu, bool) or not isinstance(menu, int)):
+        raise HTTPException(400, "menu must be an integer")
+    return card_id, menu
+
+
 def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
     app = FastAPI(title="Human2Machine")
     web = ROOT / "web"
@@ -159,6 +183,47 @@ def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
     def stop() -> dict[str, Any]:
         h2m.stop("ui stop")
         return {"ok": True}
+
+    # selection: Reflex cards (docs/SELECTION_API.md). The POSTs are the UI equivalents
+    # of double twitch (step), twitch (accept) and brace (dismiss), tokened like any POST.
+    @app.get("/api/selection")
+    def selection() -> dict[str, Any]:
+        return h2m.selection_snapshot()
+
+    @app.post("/api/selection/step")
+    async def selection_step(request: Request) -> dict[str, Any]:
+        _, menu = _pins(await _json_object(request), required=False)
+        return result(*h2m.selection_step(by="ui", menu_id=menu))
+
+    @app.post("/api/selection/ack")
+    async def selection_ack(request: Request) -> dict[str, Any]:
+        """The UI rendered this highlighted card. With ``selection.require_ack`` the
+        reaction clock for accepting it starts at this request's arrival (no ack: every
+        accept of that card is refused). Never moves anything."""
+        card_id, menu = _pins(await _json_object(request), required=True)
+        return result(*h2m.selection_ack(card_id, menu))
+
+    @app.post("/api/selection/accept")
+    async def selection_accept(request: Request) -> dict[str, Any]:
+        """Accept the highlighted card. It must be pinned (card_id and menu), and the
+        click passes the same gates as a twitch (ack + reaction, after a veto). A motion
+        card's first accept only selects it ("confirm?"); the second confirms, and the
+        card's request then goes through the gate like any tool request (blocking:
+        worker thread)."""
+        card_id, menu = _pins(await _json_object(request), required=True)
+        return result(*await asyncio.to_thread(h2m.selection_accept, card_id, menu))
+
+    @app.post("/api/selection/dismiss")
+    async def selection_dismiss(request: Request) -> dict[str, Any]:
+        card_id, menu = _pins(await _json_object(request), required=False)
+        return result(*h2m.selection_dismiss(card_id, menu))
+
+    @app.post("/api/selection/mode")
+    async def selection_mode(request: Request) -> dict[str, Any]:
+        mode = (await _json_object(request)).get("mode")
+        if mode not in ("intent", "scanning"):
+            raise HTTPException(400, "mode must be intent or scanning")
+        return result(*h2m.selection_set_mode(mode))
 
     # arm
     @app.post("/api/arm/{action}")

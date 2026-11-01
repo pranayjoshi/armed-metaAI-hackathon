@@ -130,6 +130,7 @@ def scenario_config(cfg: dict[str, Any]) -> dict[str, Any]:
     out["speech"] = {**out.get("speech", {}), "source": "off", "voice_out": False}
     out["compiler"] = {**out.get("compiler", {}), "llm": "off"}
     out["safety"] = {**out.get("safety", {}), "operator_release": False}
+    out["selection"] = {**out.get("selection", {}), "enabled": False, "muse": False}
     return out
 
 

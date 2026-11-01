@@ -30,15 +30,32 @@ Interaction rules:
   confirm (``offer_release`` returns an id; ``release_gripper`` with that id commits,
   pinned to the arming, the pose, the request epoch and what is held). Brace, open hand,
   cancel, stop and the arm guards halt it.
+- Reflex cards (``selection.enabled``, off by default; h2m/selection.py,
+  docs/SELECTION_API.md): when the app is idle, up to three ranked cards (intent mode) or
+  the scanning menu go up. A twitch SELECTS the highlighted card (only ``reaction_s``
+  after the UI acknowledged rendering it, and ``after_veto_s`` after any brace or open
+  hand); a motion card is then announced and a second twitch ``reaction_s`` after the
+  announcement confirms it. A double twitch steps (or goes back from "confirm?"), and a
+  brace or open hand on an idle arm dismisses. Confirming runs the card's tool call
+  through Embodied, the gate and the pending confirm like any tool request, and the
+  twitch answers only the plain confirmation (a warning the card never showed, e.g.
+  gripper not proven empty, waits for a squeeze, "yes" or a click). A twitch never
+  confirms any other request and never approves a rule. The brace / open-hand freeze
+  runs first and unchanged; the card handling comes after the stop.
+- A twitch-band burst onset (``emg.burst_onset``) while the arm moves or a plan is in
+  flight freezes the arm through the same ``stop_if_active`` as a brace. On an idle arm
+  it does nothing (a twitch or squeeze may follow).
 """
 
 from __future__ import annotations
 
 import hmac
+import math
 import re
 import secrets
 import threading
 import time
+from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -57,6 +74,7 @@ from h2m.embodied import (
     plan_place_lower,
     plan_place_near_user,
 )
+from h2m.intent import IntentRanker, RankResult, SparkClient, scanning_candidates
 from h2m.learning import Learner
 from h2m.recorder import Recorder
 from h2m.robot import ArmState, build_arm
@@ -72,7 +90,8 @@ from h2m.routing import (
     tags_for,
 )
 from h2m.rules import RuleStore, RulesUnavailable
-from h2m.safety import Decision, Verdict, decide
+from h2m.safety import CONFIRM, Decision, Verdict, decide
+from h2m.selection import INTENT, SCANNING, SELECT, Selection, Ticket, announcement
 from h2m.sensors.emg import build_emg
 from h2m.sensors.speech import build_speech
 from h2m.sensors.vision import build_vision
@@ -101,6 +120,35 @@ RELEASE_DISABLED = (
 BRING_TO_TRAY = (
     "bring it to the tray first: I only open my gripper alone over the tray or a table slot"
 )
+# Ranker notes that switch intent selection to scanning for the rest of the run.
+DEGRADE_NOTES = frozenset({"no_key", "timeout_or_error", "error"})
+SELECTION_OFF = "selection is off (set selection.enabled: true in configs/h2m.yaml)"
+BURST_STOP = "twitch-band burst while moving"
+# Learner incident states during which no card is answered (the stop is being looked at).
+INCIDENT_BUSY = frozenset({"capturing", "explaining"})
+
+
+def _finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def twitch_onset(event: Event) -> float | None:
+    """When a twitch began: the earliest of the detector's sample-time onset
+    (``onset_t``, or ``onset``) and the event time minus ``detect_ms``, never later than
+    the event itself. Earlier only makes the reaction and after-veto gates stricter.
+    None (fails closed) when neither can be read."""
+    data = event.data
+    found: list[float] = []
+    detect = data.get("detect_ms")
+    if _finite_number(detect) and detect >= 0:
+        found.append(event.t - float(detect) / 1000)
+    for key in ("onset_t", "onset"):
+        value = data.get(key)
+        if _finite_number(value):
+            found.append(float(value))
+    if not found:
+        return None
+    return min(*found, event.t)
 
 
 @dataclass
@@ -111,6 +159,7 @@ class Pending:
     expires_at: float
     announced_at: float = field(default_factory=now)
     plan: Plan | None = None  # embodied plan to check against at execution (gesture / place)
+    popped: bool = False  # set (under the app lock) by the confirm that took it
 
 
 @dataclass(frozen=True)
@@ -194,6 +243,7 @@ class H2M:
         self.arm.gripper_empty = self._gripper_proven_empty
         if self.emg is not None:
             self.arm.guards.append(self._emg_problem)  # no motion without a live EMG stop
+        self._build_selection(cfg)
         # The stop handler subscribes before the Recorder so the freeze runs before
         # any disk I/O on the same event.
         self.log.subscribe(self._on_event)
@@ -802,6 +852,8 @@ class H2M:
             if pending.decision.clarify:
                 return False, "choose which object first"
             self.pending = None
+            pending.popped = True  # a card that raised it can tell another answer won
+            self._tls.popped = pending
             self._in_flight += 1  # same critical section as the pop: no gap for a brace
             self._tls.confirm_epoch = self._epoch  # a cancel after this pop drops the plan
         try:
@@ -869,6 +921,7 @@ class H2M:
         self._silence()
         self.log.emit("intent.cancelled", reason=reason, had_pending=had)
         self.learner.reject(by="cancel", reason=reason)  # "never mind" also declines a rule
+        self._selection_hide(f"cancel: {reason}")  # after the stop: the cards go too
 
     def stop(self, reason: str = "stop") -> None:
         with self._lock:
@@ -892,6 +945,7 @@ class H2M:
         self._silence()
         if had:
             self.log.emit("intent.cancelled", reason=reason, had_pending=True)
+        self._selection_hide(reason)
 
     # ── operator gripper release (SAFETY REVIEW: actuation outside a plan) ────
     def operator_release_enabled(self) -> bool:
@@ -1321,6 +1375,387 @@ class H2M:
 
         return check
 
+    # ── selection: Reflex cards (h2m/selection.py, docs/SELECTION_API.md) ────
+    # Lock order: app lock, then the Selection's own lock (it never calls out). Handlers
+    # that run under the arm lock (arm.*) only change state and queue their events; the
+    # loop (or the next non-arm caller) emits them, so no disk I/O sits under the arm lock.
+    def _build_selection(self, cfg: dict[str, Any]) -> None:
+        sel = cfg.get("selection") or {}
+        self.selection_cfg: dict[str, Any] = sel
+        # Only the literal true turns cards (and the twitch as their answer) on.
+        self.selection_enabled = sel.get("enabled") is True
+        # The Selection clamps these so the config can only make them stricter: reaction
+        # at least MIN_CONFIRM_REACTION_S, no accept within 3 s of a veto, and the UI
+        # render acknowledgement required unless require_ack is literally false
+        # (headless tests / scanning runs without a UI).
+        self.selection = Selection(
+            str(sel.get("mode", INTENT)),
+            k=int(sel.get("cards", 3)),
+            reshow_s=float(sel.get("reshow_s", 3.0)),
+            reaction_s=max(MIN_CONFIRM_REACTION_S, float(sel.get("reaction_s", 0.7))),
+            veto_refractory_s=float(sel.get("veto_refractory_s", 1.5)),
+            after_veto_s=float(sel.get("after_veto_s", 3.0)),
+            require_ack=sel.get("require_ack", True) is not False,
+            confirm_s=float(sel.get("confirm_s", 8.0)),
+        )
+        client = None
+        if self.selection_enabled and sel.get("muse", True) is not False:
+            base = (cfg.get("compiler") or {}).get("base_url")
+            client = SparkClient({**({"base_url": base} if base else {}), **(sel.get("spark") or {})})
+        # Muse only ranks a closed option list off-thread; it never touches the arm.
+        self.ranker = IntentRanker(client, self._on_ranked, on_fallback=self._on_rank_fallback)
+        self._selection_out: deque[tuple[str, dict[str, Any]]] = deque()
+
+    def _emit_selection(self, events: list[tuple[str, dict[str, Any]]]) -> None:
+        for kind, data in events:
+            self.log.emit(kind, **data)
+
+    def _drain_selection(self) -> None:
+        """Emit the events the arm handlers queued. Never call it under the arm lock."""
+        while True:
+            try:
+                kind, data = self._selection_out.popleft()
+            except IndexError:
+                return
+            self.log.emit(kind, **data)
+
+    def _selection_blocked(self) -> str | None:
+        """Under the app lock: why the cards cannot be answered now, or None."""
+        if self.pending is not None:
+            return "a request is waiting: squeeze, say yes or click to answer it"
+        if self.learner.proposal is not None:
+            return "a rule is waiting: squeeze, say yes or click to approve it"
+        arm = self.arm
+        if (
+            self._in_flight > 0
+            or self._handover_job is not None
+            or arm.state is ArmState.MOVING
+            or arm.releasing
+        ):
+            return "I'm busy moving"
+        if self._release_offer is not None:
+            return "an operator gripper release is open"
+        learner = self.learner
+        incident = learner.incident
+        # A stop just happened and is being captured or explained (or is still queued for
+        # the learner): nothing is answered from the cards until that is done.
+        if (isinstance(incident, dict) and incident.get("state") in INCIDENT_BUSY) or (
+            not learner._queue.empty()
+        ):
+            return "I'm still looking at what just happened"
+        return None
+
+    def _selection_tick(self) -> None:
+        """Loop thread: emit queued events; when the app is idle, end a task whose motion
+        is over and put up new cards. The ranker gets ``arm_stopped=True`` only with the
+        arm READY or STOPPED (nothing moving, nothing in flight)."""
+        self._drain_selection()
+        if not self.selection_enabled:
+            return
+        state = self.arm.state
+        if state in (ArmState.DISCONNECTED, ArmState.FAULT):
+            return
+        with self._lock:
+            t = now()
+            # Cards from an earlier arming go (rebuilt below); an unanswered "confirm?"
+            # lapses back to the menu. Both run even while blocked.
+            rearmed = self.selection.sync_arm(self.arm.arm_count, t)
+            events = rearmed + self.selection.expire(t)
+            blocked = self._selection_blocked()
+            if blocked is None:
+                events += self.selection.abandon_if_idle(t)
+        if rearmed:
+            self.ranker.cancel()
+        self._emit_selection(events)
+        if blocked is not None or not self.selection.wants_menu(now()):
+            return
+        cards, source, gen = self._selection_cards(state)
+        with self._lock:
+            still_idle = self._selection_blocked() is None and self.arm.state is state
+            events = (
+                self.selection.show(cards, source, now(), gen, self.arm.arm_count)
+                if still_idle
+                else []
+            )
+        if not events:
+            if gen is not None:
+                self.ranker.cancel()  # nothing went up: drop the Muse upgrade
+            self.selection.backoff(now() + 0.5)  # no re-ranking (or rules reads) at 10 Hz
+        self._emit_selection(events)
+
+    def _selection_cards(self, state: ArmState) -> tuple[list[Any], str, int | None]:
+        """Cards for a new menu: the scanning menu, or the ranker's deterministic first
+        ranking (a Muse upgrade may follow off-thread). Targets that are not visible or
+        not on a taught slot are dropped by h2m.intent before any display."""
+        scene = self.visible_objects()
+        held = self.gripper.state()
+        holding = held.object_id if held.holding and held.object_id else None
+        phrases = self.selection_cfg.get("phrases") or {}
+        if self.selection.mode == SCANNING:
+            cards = scanning_candidates(
+                scene, holding=holding, reachable=self._card_reachable, phrases=phrases
+            )
+            return cards, "scanning", None
+        try:
+            rules: Any = self.rules.list()
+        except RulesUnavailable:
+            rules = []  # context only; the gate still enforces whatever is stored
+        head = getattr(self.vision, "head_third", None)
+        table_x = self.selection_cfg.get("table_x")
+        gen, first = self.ranker.request(
+            scene,
+            self.selection.recent_history(),
+            rules,
+            head if isinstance(head, str) else None,
+            [],
+            self.selection.k,
+            arm_stopped=state in (ArmState.READY, ArmState.STOPPED),
+            holding=holding,
+            reachable=self._card_reachable,
+            phrases=phrases,
+            table_x=tuple(table_x) if isinstance(table_x, (list, tuple)) and len(table_x) == 2
+            else None,
+            deadline_s=float(self.selection_cfg.get("deadline_s", 2.5)),
+        )
+        return first.candidates, "fallback", gen
+
+    def _card_reachable(self, entry: Any) -> bool:
+        xy = entry.get("table_xy")
+        return self.arm.slot_for((float(xy[0]), float(xy[1]))) is not None
+
+    def _on_ranked(self, gen: int, result: RankResult) -> None:
+        """Ranker thread: a valid Muse ranking. Applied only before the first input."""
+        self._emit_selection(self.selection.upgrade(gen, result.candidates, now()))
+
+    def _on_rank_fallback(self, gen: int, result: RankResult) -> None:
+        """Ranker thread: Muse could not rank. No key, a timeout or an error switch to
+        scanning for the rest of the run; an invalid reply keeps the deterministic cards."""
+        del gen
+        if result.note in DEGRADE_NOTES:
+            self._emit_selection(self.selection.degrade(result.note, now()))
+
+    def _selection_arm_event(self, event: Event) -> None:
+        """Under the arm lock (control or caller thread): state changes and a queue
+        append only. The ranker is cancelled whenever the arm moves or stops."""
+        if not self.selection_enabled:
+            return
+        try:
+            data, t = event.data, event.t
+            if event.kind == "arm.started":
+                self.ranker.cancel()
+                events = self.selection.on_arm_started(data.get("contract_id"), t)
+            elif event.kind == "arm.completed":
+                events = self.selection.on_arm_completed(
+                    data.get("contract_id"), data.get("phase"), t
+                )
+            else:
+                self.ranker.cancel()
+                events = self.selection.on_arm_stopped(
+                    str(data.get("reason", "")), event.kind == "arm.fault", t
+                )
+            self._selection_out.extend(events)
+        except Exception:  # noqa: BLE001  # bookkeeping must never break an arm event
+            pass
+
+    def _selection_veto(self, name: str, stopped: bool, consumed: bool) -> None:
+        """A brace or open hand, AFTER the freeze logic ran. If it stopped the arm it was
+        counted from the stop reason; if it cancelled a waiting request or an in-flight
+        plan it only counts; on an idle arm it dismisses the highlighted card."""
+        if not self.selection_enabled:
+            return
+        try:
+            if consumed and not stopped:
+                self.selection.count(name, now())
+            elif not stopped:
+                self._emit_selection(self.selection.dismiss(name, now())[2])
+            self._drain_selection()
+        except Exception:  # noqa: BLE001  # the stop already happened; never raise past it
+            pass
+
+    def _selection_hide(self, reason: str) -> None:
+        if not self.selection_enabled:
+            return
+        self.ranker.cancel()
+        self._emit_selection(self.selection.hide(now(), reason))
+        self._drain_selection()
+
+    def _on_twitch(self, event: Event) -> None:
+        """EMG thread: a twitch selects (motion card) or confirms / takes (the card asking
+        "confirm?", a say card) the highlighted card, nothing else. Its onset is the
+        earliest of the detector's ``onset_t`` and the event time minus ``detect_ms``
+        (earlier only makes every gate stricter); a missing onset fails closed. The
+        announcement and the gate run on their own thread."""
+        if not self.selection_enabled:
+            return
+        ticket, _why, epoch = self._selection_take("twitch", twitch_onset(event))
+        if ticket is None:
+            return
+        if ticket.step == SELECT:
+            target, name = self._announce_card, "h2m-announce"
+        else:
+            target, name = self._accept_card, "h2m-select"
+        threading.Thread(target=target, args=(ticket, epoch), name=name, daemon=True).start()
+
+    def _selection_take(
+        self,
+        name: str,
+        onset: float | None,
+        card_id: str | None = None,
+        menu_id: int | None = None,
+    ) -> tuple[Ticket | None, str, int]:
+        """Take the highlighted card, atomically with the blocked check (app lock), the
+        arming the cards belong to and the request epoch it starts at: a later cancel,
+        stop, brace or open hand drops it."""
+        with self._lock:
+            epoch = self._epoch
+            blocked = self._selection_blocked()
+            if blocked is not None:
+                ticket, why = None, blocked
+                events = self.selection.refuse(name, "accept", blocked)
+            else:
+                ticket, why, events = self.selection.take(
+                    name, now(), onset, card_id, menu_id, self.arm.arm_count
+                )
+        self._emit_selection(events)
+        return ticket, why, epoch
+
+    def _announce_card(self, ticket: Ticket, epoch: int) -> tuple[bool, str]:
+        """A motion card was selected: say what it does and ask for the confirming twitch.
+        The confirm clock starts once the announcement went out. Nothing moves here."""
+        text = announcement(ticket.card)
+        if self._stale(epoch):
+            self.selection.unselect(ticket, now())
+            return False, "cancelled meanwhile"
+        self._say(text)
+        if self._stale(epoch):
+            self.selection.unselect(ticket, now())
+            return False, "cancelled meanwhile"
+        self._emit_selection(self.selection.announced(ticket, now(), text))
+        return True, text
+
+    def _accept_card(self, ticket: Ticket, epoch: int) -> tuple[bool, str]:
+        """Run a taken card through the same path as any tool request, then answer the
+        question it raised with this accept. Never on the EMG or event thread."""
+        by = "twitch" if ticket.by == "twitch" else "ui_card"
+        self._tls.epoch = epoch  # _set_pending drops the request if anything bumped since
+        try:
+            ok, why, motion, answered = self._run_card(ticket, epoch, by)
+        except Exception as exc:  # noqa: BLE001  # the card fails; nothing was confirmed
+            ok, why, motion, answered = False, f"that card failed ({type(exc).__name__})", False, False
+        finally:
+            self._tls.epoch = None
+        if not ok or not answered:
+            self.reply = why
+        self._emit_selection(self.selection.finish(ticket, ok, why, motion, now(), answered))
+        self._drain_selection()
+        return ok, why
+
+    def _run_card(self, ticket: Ticket, epoch: int, by: str) -> tuple[bool, str, bool, bool]:
+        """(ok, why, motion, answered). The gate decides: a card's motion is always asked
+        about (the tool path never auto-runs model-chosen motion), and this accept answers
+        exactly the request this card just raised, pinned by identity, and only when the
+        gate asks the plain confirmation the card stood for. A question with a warning the
+        card never showed (gripper not proven empty, ...) is left waiting for a squeeze,
+        "yes" or a click (``answered`` False); a twitch cannot answer it."""
+        card = ticket.card
+        if card.tool_call is None:
+            return False, f"I can't do {card.label!r} yet", False, False
+        name, args = card.tool_call
+        if self._stale(epoch):
+            return False, "cancelled meanwhile", False, False
+        results = self.run_tool_calls([(name, dict(args))])
+        if not results:
+            return False, "that card did not run", False, False
+        result = results[0]
+        contract = result.contract
+        if not result.ok or contract is None or result.decision is None:
+            return False, result.error or self.reply or "I couldn't do that", False, False
+        if contract.verb is Verb.SAY:
+            if result.spoken:
+                return True, contract.utterance, False, True
+            return False, self.reply or "I couldn't say that", False, False
+        if card.object_id is not None and contract.object_id != card.object_id:
+            return False, "that card no longer matches the request", False, False
+        self.selection.bind(ticket, contract.id)  # before the confirm: arm.started is ours
+        with self._lock:
+            pending = self.pending
+        if pending is None or pending.contract is not contract:
+            return False, self.reply or result.decision.reason, False, False
+        if pending.decision.reason != CONFIRM or pending.decision.clarify:
+            return True, pending.decision.reason, True, False  # waits for its own answer
+        self._tls.popped = None
+        ok, why = self.confirm(by=by, expected=pending)
+        if not ok and pending.popped and getattr(self._tls, "popped", None) is not pending:
+            # Another answer (squeeze, yes, click) took this card's request first: that
+            # confirm runs the card's contract, so the task keeps it and waits for it.
+            return True, "confirmed by another answer", True, True
+        return ok, why, True, True
+
+    # public selection API (server endpoints; the UI equivalents of the EMG inputs)
+    def selection_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            blocked = self._selection_blocked() if self.selection_enabled else SELECTION_OFF
+        return {"enabled": self.selection_enabled, "blocked": blocked,
+                **self.selection.snapshot(now())}
+
+    def selection_step(self, by: str = "ui", menu_id: int | None = None) -> tuple[bool, str]:
+        """Next card (wraps). ``by="emg"`` is a double twitch."""
+        if not self.selection_enabled:
+            return False, SELECTION_OFF
+        name = "double_twitch" if by == "emg" else "ui_step"
+        with self._lock:
+            blocked = self._selection_blocked()
+        if blocked is not None:
+            self._emit_selection(self.selection.refuse(name, "step", blocked))
+            return False, blocked
+        ok, why, events = self.selection.step(name, now(), menu_id)
+        self._emit_selection(events)
+        return ok, why
+
+    def selection_dismiss(
+        self, card_id: str | None = None, menu_id: int | None = None
+    ) -> tuple[bool, str]:
+        """UI refuse of the highlighted card (only removes a card; never moves anything)."""
+        if not self.selection_enabled:
+            return False, SELECTION_OFF
+        ok, why, events = self.selection.dismiss("ui_dismiss", now(), card_id, menu_id)
+        self._emit_selection(events)
+        return ok, why
+
+    def selection_ack(self, card_id: Any, menu_id: Any) -> tuple[bool, str]:
+        """The UI rendered ``card_id`` highlighted on ``menu_id``. With ``require_ack`` the
+        reaction clock of that highlight starts here (server arrival time)."""
+        if not self.selection_enabled:
+            return False, SELECTION_OFF
+        return self.selection.ack(card_id, now(), menu_id)
+
+    def selection_accept(self, card_id: Any, menu_id: Any) -> tuple[bool, str]:
+        """UI accept: same pins as a twitch plus the card and menu the person saw, and the
+        same gates on its arrival time (UI ack + reaction_s; after a veto; for a card asking
+        "confirm?", reaction_s after the announcement). The first accept of a motion card
+        only selects it. Blocking (speech, gate, rules on disk): call it off the event
+        loop."""
+        if not self.selection_enabled:
+            return False, SELECTION_OFF
+        if not isinstance(card_id, str) or isinstance(menu_id, bool) or not isinstance(
+            menu_id, int
+        ):
+            return False, "send the card id and the menu id you are accepting"
+        ticket, why, epoch = self._selection_take("ui_accept", now(), card_id, menu_id)
+        if ticket is None:
+            return False, why
+        if ticket.step == SELECT:
+            return self._announce_card(ticket, epoch)
+        return self._accept_card(ticket, epoch)
+
+    def selection_set_mode(self, mode: Any) -> tuple[bool, str]:
+        if mode not in (INTENT, SCANNING):
+            return False, f"mode must be {INTENT} or {SCANNING}"
+        self.ranker.cancel()
+        ok, why, events = self.selection.set_mode(mode, now())
+        self._emit_selection(events)
+        return ok, why
+
     # ── events and loop ──────────────────────────────────────────────────────
     def _on_event(self, event: Event) -> None:
         if event.kind == "emg.brace":
@@ -1341,6 +1776,7 @@ class H2M:
                 )
             if had_pending:
                 self.log.emit("intent.cancelled", reason="brace (EMG)", had_pending=True)
+            self._selection_veto("brace", stopped, had_pending or in_flight)  # after the stop
         elif event.kind == "emg.open_hand":
             # Same single critical section as the brace: no gap for a confirm to pop
             # the pending request between reading _in_flight and stopping.
@@ -1356,10 +1792,39 @@ class H2M:
                 self.log.emit("incident.triggered", source="open_hand")
             if had_pending:
                 self.log.emit("intent.cancelled", reason="open hand (EMG)", had_pending=True)
+            self._selection_veto("open_hand", stopped, had_pending or in_flight)
+        elif event.kind == "emg.burst_onset":
+            # A twitch-band burst began. With the arm moving (or a plan in flight) it
+            # freezes now, through the brace's check-and-stop, before any twitch is
+            # decided. Nothing runs before the stop but an int read (no lock wait, model,
+            # network or disk). Idle: nothing at all, so a squeeze or twitch that follows
+            # still answers what it answers.
+            in_flight = self._in_flight > 0
+            releasing = self.arm.releasing
+            stopped = self.arm.stop_if_active(BURST_STOP, plan_in_flight=in_flight)
+            if stopped:
+                with self._lock:  # after the stop: drop what waited on the old motion
+                    had_pending = self.pending is not None
+                    self.pending = None
+                    self._epoch += 1
+                self._silence()
+                if not releasing:  # the brace that follows finds the arm already stopped
+                    self.log.emit(
+                        "incident.triggered", source="burst", onset_t=event.data.get("onset_t")
+                    )
+                if had_pending:
+                    self.log.emit("intent.cancelled", reason=BURST_STOP, had_pending=True)
+        elif event.kind == "emg.twitch":
+            self._on_twitch(event)
+        elif event.kind == "emg.double_twitch":
+            if self.selection_enabled:
+                self.selection_step(by="emg")
         elif event.kind == "arm.started":
             self.gripper.started(event.data)
+            self._selection_arm_event(event)
         elif event.kind == "arm.completed":
             self.gripper.completed(event.data)
+            self._selection_arm_event(event)
             data = event.data
             if data.get("verb") == str(Verb.PLACE_NEAR_USER) and data.get("phase") == APPROACH:
                 # Emitted under the arm lock on the control thread: hand stage 2 to its
@@ -1380,6 +1845,7 @@ class H2M:
             self.gripper.interrupted(
                 event.data.get("stage"), event.kind == "arm.fault", str(event.data.get("reason"))
             )
+            self._selection_arm_event(event)  # after the freeze write: bookkeeping only
         elif event.kind == "incident.triggered":
             # The arm is already stopped (this event is emitted after the stop). Only a
             # non-blocking enqueue here: freeze, save and Muse run on the learner's worker.
@@ -1423,6 +1889,10 @@ class H2M:
     def _loop(self) -> None:
         while self._running:
             time.sleep(0.1)
+            try:
+                self._selection_tick()
+            except Exception as exc:  # noqa: BLE001  # cards must never stop expiry below
+                self.log.emit("selection.error", detail=type(exc).__name__)
             self.learner.expire()
             with self._lock:
                 pending = self.pending
@@ -1526,6 +1996,17 @@ class H2M:
                 "speech.error",
                 "vision.error",
                 "emg.error",
+                "emg.twitch",
+                "emg.double_twitch",
+                "selection.shown",
+                "selection.step",
+                "selection.accept",
+                "selection.dismiss",
+                "selection.degraded",
+                "selection.mode",
+                "selection.error",
+                "task.completed",
+                "task.abandoned",
             },
         )
         return {
@@ -1565,6 +2046,7 @@ class H2M:
             "reply": self.reply,
             "learning": {**self.learner.snapshot(), "routes_error": self.routes_error},
             "operator_release": self._release_snapshot(),
+            "selection": self.selection_snapshot(),
             "session": self.recorder.snapshot(),
             "objects": [
                 {"id": o["id"], "name": o["name"], "max_grip": o.get("max_grip", 1.0)}

@@ -11,16 +11,27 @@ channels (back of the forearm) measure opening the hand.
   firing together, reached from a calm baseline within ~150 ms and held for a couple
   of hops -> ``emg.brace``. Priority is brace > open hand > squeeze, and a squeeze
   never confirms while the extensors co-contract, so a flinch cannot approve anything.
+  ``brace_feature: flexor_spike`` adds a second trigger (OR): a flexor-only spike at the
+  higher ``brace_spike_effort``. ``cocontraction`` keeps the first trigger only.
+- an open hand, like a brace, locks out squeeze and twitch for ``brace_lockout_ms``
+  (the open hand itself is never locked out).
 - ``twitch`` = a short flexor-only burst from a calm baseline, over and done within
   ``twitch_max_ms`` -> ``emg.twitch`` (no effort payload: it selects, it never sets grip).
   Two within ``twitch_double_ms`` (onset to onset) -> ``emg.double_twitch`` instead.
+  A twitch lives in [``twitch_effort``, ``twitch_max_effort``): a burst reaching the spike
+  band is never a twitch. ``emg.burst_onset`` (payload ``onset_t`` only) is emitted on the
+  first hop of a calm-baseline rise above ``twitch_effort``, so a moving arm can freeze
+  before the twitch is decided. A twitch whose window spans a read gap longer than
+  ``twitch_max_gap_ms`` is refused silently.
   A twitch is decided on the falling edge of the burst. A first twitch is held back until
   the double window has passed (so it can still become a double): a single twitch is emitted
   ``twitch_double_ms`` after its onset, never earlier. Priority is brace > twitch: a brace
   candidate, a brace lockout, an open hand, a squeeze, quiet-extensor violations or a slow rise
   void the burst, and a brace or open hand also voids a first twitch still waiting.
 
-Every stage is causal: no future samples are used.
+Hops are stamped with SAMPLE time (the chunk's arrival time minus the samples after
+it), not with the time the hop happened to be processed. Every stage is causal: no
+future samples are used.
 """
 
 from __future__ import annotations
@@ -290,6 +301,7 @@ class EmgService:
         self.fast_window = min(self.window, int(rate * cfg.get("brace_window_ms", 100) / 1000))
         self.fast_alpha = float(cfg.get("brace_smoothing", 0.6))
         self.brace_thr = float(cfg.get("brace_effort", 0.35))
+        self.brace_spike_thr = float(cfg.get("brace_spike_effort", 0.6))
         self.brace_feature = str(cfg.get("brace_feature", "cocontraction"))
         if self.brace_feature not in ("flexor_spike", "cocontraction"):
             raise ValueError("emg.brace_feature must be flexor_spike or cocontraction")
@@ -299,6 +311,13 @@ class EmgService:
         self.brace_hold = max(1, int(cfg.get("brace_hold_hops", 2)))
         self.twitch_enabled = bool(cfg.get("twitch", True))
         self.twitch_thr = float(cfg.get("twitch_effort", 0.35))
+        self.twitch_max_effort = float(cfg.get("twitch_max_effort", 0.6))
+        if (
+            self.twitch_enabled
+            and self.brace_feature == "flexor_spike"
+            and self.twitch_max_effort > self.brace_spike_thr
+        ):
+            raise ValueError("emg.twitch_max_effort must not exceed brace_spike_effort")
         self.twitch_release = self.twitch_thr * float(cfg.get("twitch_release", 0.6))
         self.twitch_calm = float(cfg.get("twitch_calm", 0.12))
         self.twitch_rise_hops = max(1, round(cfg.get("twitch_rise_ms", 100) / hop_ms))
@@ -308,8 +327,11 @@ class EmgService:
         self.twitch_ext_max = float(cfg.get("twitch_extensor_max", 0.18))
         self.twitch_double_s = float(cfg.get("twitch_double_ms", 600)) / 1000
         self.twitch_refractory_s = float(cfg.get("twitch_refractory_ms", 300)) / 1000
+        self.twitch_max_gap_s = float(cfg.get("twitch_max_gap_ms", 150)) / 1000
         self.profile = Profile.load(str(cfg["profile"]))
         self._buf = np.zeros((4, 0))
+        self._buf_t = np.zeros(0)  # sample time of every sample in _buf
+        self._gaps: deque[float] = deque(maxlen=16)  # time of the first sample after each read gap
         self._since_hop = 0
         self.effort = 0.0
         self.extensor = 0.0
@@ -331,7 +353,8 @@ class EmgService:
         }
         self._twitch = _Twitch(deque(maxlen=self.twitch_rise_hops + self.twitch_base_hops))
         self._brace_by: str | None = None  # which detector fired the current lockout
-        self._brace_until = 0.0  # squeeze is suppressed until then (open hand never is)
+        self._brace_until = 0.0  # squeeze and twitch are suppressed until then (open hand never is)
+        self._open_until = 0.0  # likewise after an open hand
         self._squeeze_needs_release = False
         n_trace = int(self.TRACE_SECONDS * 1000 / hop_ms)
         self.trace: deque[tuple[float, float, float]] = deque(maxlen=n_trace)
@@ -368,26 +391,39 @@ class EmgService:
                 time.sleep(0.5)
                 continue
             if chunk is not None and chunk.size:
-                self.last_sample_t = now()
-                self._ingest(self.filter.process(chunk))
+                arrived = now()
+                self.last_sample_t = arrived
+                self._ingest(self.filter.process(chunk), arrived)
         self.source.stop()
 
     # processing
-    def _ingest(self, data: np.ndarray) -> None:
-        self._buf = np.concatenate([self._buf, data], axis=1)[:, -self.window * 2 :]
-        self._since_hop += data.shape[1]
-        while self._since_hop >= self.hop and self._buf.shape[1] >= self.window:
-            self._since_hop -= self.hop
-            self._window(self._buf[:, -self.window :])
+    def _ingest(self, data: np.ndarray, arrived: float | None = None) -> None:
+        """Take a chunk whose last sample arrived at ``arrived`` and run every hop in it,
+        each on its own window and stamped with its own sample time."""
+        n = data.shape[1]
+        arrived = now() if arrived is None else arrived
+        times = arrived - (n - 1 - np.arange(n)) / self.rate
+        if self._buf_t.size and times[0] - self._buf_t[-1] - 1 / self.rate > self.twitch_max_gap_s:
+            self._gaps.append(float(times[0]))  # the source skipped samples: a read gap
+        old = self._buf.shape[1]
+        buf = np.concatenate([self._buf, data], axis=1)
+        buf_t = np.concatenate([self._buf_t, times])
+        end = old + self.hop - self._since_hop - 1  # index of the sample that completes a hop
+        while end < buf.shape[1]:
+            if end + 1 >= self.window:
+                self._window(buf[:, end + 1 - self.window : end + 1], float(buf_t[end]))
+            end += self.hop
+        self._since_hop = (self._since_hop + n) % self.hop
+        keep = self.window * 2
+        self._buf, self._buf_t = buf[:, -keep:], buf_t[-keep:]
 
     def _norm(self, rms: np.ndarray, channels: list[int], maxima: list[float]) -> float:
         p = self.profile
         values = [(rms[c] - p.rest[c]) / max(1e-6, maxima[c] - p.rest[c]) for c in channels]
         return clamp(float(np.mean(values)))
 
-    def _window(self, window: np.ndarray) -> None:
+    def _window(self, window: np.ndarray, t: float) -> None:
         rms = np.sqrt(np.mean(window**2, axis=1))
-        t = now()
         with self._lock:
             self.rms = [round(float(v), 2) for v in rms]
             if self._calib is not None:
@@ -411,7 +447,10 @@ class EmgService:
             self.fast_spike = (1 - a) * self.fast_spike + a * spike_raw
             self.brace = min(self.fast_flexor, self.fast_extensor)
             if self.brace_feature == "flexor_spike":
-                self.brace = max(self.brace, self.fast_spike)
+                # Scaled so the meter's one threshold line (brace_effort) is where either
+                # trigger fires.
+                scaled = min(1.0, self.fast_spike * self.brace_thr / self.brace_spike_thr)
+                self.brace = max(self.brace, scaled)
             self._fast_trace.append(
                 (
                     round(t, 3),
@@ -455,13 +494,14 @@ class EmgService:
     def _detect_brace(self, t: float) -> None:
         # Co-contraction always runs, so flexor_spike only ever adds triggers: a flinch
         # from an already busy flexor still fires on the extensors joining in.
-        self._step_onset(t, "cocontraction", min(self.fast_flexor, self.fast_extensor))
+        co = min(self.fast_flexor, self.fast_extensor)
+        self._step_onset(t, "cocontraction", co, self.brace_thr)
         if self.brace_feature == "flexor_spike":
-            self._step_onset(t, "flexor_spike", self.fast_spike)
+            self._step_onset(t, "flexor_spike", self.fast_spike, self.brace_spike_thr)
 
-    def _step_onset(self, t: float, name: str, value: float) -> None:
+    def _step_onset(self, t: float, name: str, value: float, threshold: float) -> None:
         det = self._onsets[name]
-        if value < self.brace_thr:
+        if value < threshold:
             det.state = "idle"
         elif det.state == "idle":
             onset = self._fast_onset(det)
@@ -505,7 +545,6 @@ class EmgService:
         cfg = self.cfg
         # priority: brace > open hand > squeeze
         self._detect_brace(t)
-        braced = t < self._brace_until
         # open hand -> stop. Never suppressed, not even right after a brace: a stop
         # gesture must always be able to fire.
         if self.extensor >= cfg.get("stop_effort", 0.55):
@@ -514,9 +553,16 @@ class EmgService:
                 "stop_hold_ms", 80
             ):
                 self._open_fired = True
+                # Like a brace, a stop gesture is a reaction: nothing it leaves behind
+                # (squeeze, twitch) may approve anything for a while.
+                self._open_until = t + cfg.get("brace_lockout_ms", 1500) / 1000
+                self._squeeze_needs_release = True
+                self._squeeze_since, self._squeeze_fired = None, False
+                self._squeeze_samples.clear()
                 self.log.emit("emg.open_hand", extensor=round(self.extensor, 3))
         else:
             self._open_since, self._open_fired = None, False
+        braced = t < self._brace_until or t < self._open_until
         # squeeze -> confirm, carrying grip effort. Extensors must stay quiet relative to
         # the flexors: a co-contraction is a brace, never a confirmation. A hard fist
         # leaks into the extensor channel, so on a calibrated profile the limit scales
@@ -566,8 +612,10 @@ class EmgService:
             return
         v = self.fast_spike
         hop_ms = self.cfg.get("hop_ms", 50)
-        braced = t < self._brace_until or any(
-            d.state in ("candidate", "fired") for d in self._onsets.values()
+        braced = (
+            t < self._brace_until
+            or t < self._open_until
+            or any(d.state in ("candidate", "fired") for d in self._onsets.values())
         )
         vetoed = braced or self._open_fired
         quiet = max(self.extensor, self.fast_extensor) < self.twitch_ext_max
@@ -584,9 +632,14 @@ class EmgService:
                 if t < w.refractory_until or vetoed or not quiet or not self._calm_before(w.hist):
                     w.state = "blocked"  # busy, slow, braced or co-contracting
                 else:
+                    # Cheap and early: the app can freeze a moving arm now instead of
+                    # waiting for the falling edge (or the double window) to decide.
+                    self.log.emit("emg.burst_onset", onset_t=round(t, 3))
                     w.state, w.hops, w.onset = "burst", 1, t
+                    if v >= self.twitch_max_effort:  # the spike band: a brace's, not a twitch's
+                        w.state, w.pending = "blocked", None
         elif w.state == "burst":
-            if vetoed or not quiet or self._squeeze_fired:
+            if vetoed or not quiet or self._squeeze_fired or v >= self.twitch_max_effort:
                 w.state, w.pending = "blocked", None  # not a clean twitch: nothing pending either
             elif v >= self.twitch_release:
                 w.hops += 1
@@ -601,10 +654,19 @@ class EmgService:
             w.state = "idle"
         w.hist.append(v)
 
+    def _spans_gap(self, onset: float, t: float) -> bool:
+        """True if a read gap fell between the calm baseline before ``onset`` and ``t``:
+        the samples there are unknown, so the burst cannot be placed in time."""
+        hop_s = self.cfg.get("hop_ms", 50) / 1000
+        start = onset - (self.twitch_rise_hops + self.twitch_base_hops) * hop_s
+        return any(start <= g <= t for g in self._gaps)
+
     def _twitch_done(self, t: float, w: _Twitch, held: float) -> None:
         first = w.pending
         if first is not None and w.onset - first[0] <= self.twitch_double_s:
             w.pending = None
+            if self._spans_gap(first[0], t):
+                return  # refused: nothing is emitted, not even the first as a single
             w.refractory_until = t + self.twitch_refractory_s
             self.log.emit(
                 "emg.double_twitch",
@@ -612,16 +674,26 @@ class EmgService:
                 second_ms=round(held),
                 interval_ms=round((w.onset - first[0]) * 1000),
                 detect_ms=round((t - first[0]) * 1000),
+                onset_t=round(first[0], 3),
             )
-        else:
+        elif not self._spans_gap(w.onset, t):
             w.pending = (w.onset, held)
+        else:
+            w.pending = None
 
     def _emit_single(self, t: float, w: _Twitch) -> None:
         assert w.pending is not None
         onset, held = w.pending
         w.pending = None
+        if self._spans_gap(onset, t):
+            return
         w.refractory_until = t + self.twitch_refractory_s
-        self.log.emit("emg.twitch", held_ms=round(held), detect_ms=round((t - onset) * 1000))
+        self.log.emit(
+            "emg.twitch",
+            held_ms=round(held),
+            detect_ms=round((t - onset) * 1000),
+            onset_t=round(onset, 3),
+        )
 
     # calibration: rest -> squeeze -> open -> brace, a few seconds each
     def calibrate(self, phase: str, seconds: float = 3.0) -> dict[str, Any]:
