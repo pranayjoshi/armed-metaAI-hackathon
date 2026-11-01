@@ -141,6 +141,16 @@ class Arm:
             self._plan = None
             self.log.emit("arm.stopped", reason=reason, was_moving=was_moving, latency_ref=now())
 
+    def stop_if_active(self, reason: str = "stop", plan_in_flight: bool = False) -> bool:
+        """Check-and-stop under the arm lock. Stops if the arm is MOVING, or if a plan
+        is in flight (``plan_in_flight``) and the arm is READY, so the plan cannot
+        start afterwards. Returns True if it stopped the arm."""
+        with self._lock:
+            if self.state is ArmState.MOVING or (plan_in_flight and self.state is ArmState.READY):
+                self.stop(reason)
+                return True
+            return False
+
     def reset(self) -> tuple[bool, str]:
         with self._lock:
             if self.state not in (ArmState.STOPPED, ArmState.FAULT):

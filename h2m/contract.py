@@ -53,6 +53,8 @@ class StepContract:
     unresolved: list[str] = field(default_factory=list)
     utterance: str = ""
     source: str = "grammar"  # grammar | llm | ui
+    route: str | None = None  # taught route chosen by h2m.rules, if any
+    applied_rules: list[str] = field(default_factory=list)  # ids of rules that shaped it
     id: str = field(default_factory=lambda: f"c{next(_ids):05d}")
     created_at: float = field(default_factory=now)
 

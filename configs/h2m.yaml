@@ -61,6 +61,18 @@ emg:
   confirm_hold_ms: 350   # ... for this long confirms a pending request
   stop_effort: 0.55      # extensor effort above this vetoes motion
   stop_hold_ms: 80
+  # Brace (flinch): min(flexor, extensor) on a faster window, normalized per user.
+  # Priority is brace > open hand > squeeze.
+  brace_window_ms: 100   # parallel fast window, same hop as above
+  brace_smoothing: 0.6   # EMA on the fast flexor / extensor, 0..1
+  brace_effort: 0.35     # brace feature above this counts as co-contraction
+  brace_calm: 0.12       # "calm baseline": brace at or below this before the rise
+  brace_rise_ms: 150     # must be calm this long before crossing: slower ramps are ignored
+  brace_baseline_ms: 250 # ... and have stayed calm for this long before that
+  brace_hold_hops: 2     # hops (hop_ms each) above brace_effort before firing
+  brace_lockout_ms: 1500 # after a brace, squeeze events are suppressed (open hand never is)
+  brace_trace_ms: 1500   # recent fast trace carried by emg.brace
+  cocontraction_effort: 0.18  # squeeze needs extensors below this (well under brace_effort), so a brace never confirms
   profile: default       # calibration profile name in data/profiles/
 
 compiler:

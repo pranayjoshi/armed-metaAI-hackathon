@@ -1,0 +1,17 @@
+# Object tags and taught routes used by h2m/rules.py.
+# PLACEHOLDER: every polyline and zone below is a stand-in and MUST be
+# re-measured at teach time (table coordinates, same frame as poses.yaml slots).
+
+tags:            # object id -> tags; rules generalize through tags
+  cup: [liquid, fragile]
+  block: []
+  ball: []
+  bottle: [liquid]
+
+routes:          # name -> table polyline (x, y) from pick slot to drop zone
+  direct:   [[0.10, 0.20], [0.30, 0.20], [0.50, 0.20]]   # PLACEHOLDER, measure at teach time
+  via_left: [[0.10, 0.20], [0.20, 0.40], [0.50, 0.40]]   # PLACEHOLDER, measure at teach time
+  via_high: [[0.10, 0.20], [0.30, 0.00], [0.50, 0.00]]   # PLACEHOLDER, measure at teach time
+
+zones:           # named avoid zones, axis-aligned rectangles [xmin, ymin, xmax, ymax]
+  laptop: [0.25, 0.12, 0.35, 0.28]                        # PLACEHOLDER, measure at teach time

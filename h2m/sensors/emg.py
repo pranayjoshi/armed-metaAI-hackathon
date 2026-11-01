@@ -7,6 +7,10 @@ channels (back of the forearm) measure opening the hand.
 - squeeze held above ``confirm_effort`` for ``confirm_hold_ms`` -> ``emg.squeeze``
   carrying the effort, which becomes the robot's grip strength
 - extensor above ``stop_effort`` for ``stop_hold_ms`` -> ``emg.open_hand`` (veto)
+- ``brace`` = min(flexor, extensor) on a parallel 100 ms window: both muscle groups
+  firing together, reached from a calm baseline within ~150 ms and held for a couple
+  of hops -> ``emg.brace``. Priority is brace > open hand > squeeze, and a squeeze
+  never confirms while the extensors co-contract, so a flinch cannot approve anything.
 
 Every stage is causal: no future samples are used.
 """
@@ -69,6 +73,7 @@ class Profile:
     open_max: list[float] = field(default_factory=lambda: [60.0] * 4)
     calibrated: bool = False
     created_at: str = ""
+    brace_max: list[float] | None = None  # per-channel RMS at a full-forearm brace
 
     @classmethod
     def load(cls, name: str) -> Profile:
@@ -114,6 +119,10 @@ class SyntheticSource:
         t = now()
         n = max(1, int((t - self._last) * self.rate))
         self._last = t
+        return self.generate(n)
+
+    def generate(self, n: int) -> np.ndarray:
+        """``n`` samples per channel at the current drive levels (no waiting)."""
         amp = np.full(self.n, 4.0)
         for ch in self.flexor_ch:
             amp[ch] += 70.0 * self.flexor
@@ -192,6 +201,15 @@ class EmgService:
         self.window = int(rate * cfg.get("window_ms", 250) / 1000)
         self.hop = int(rate * cfg.get("hop_ms", 50) / 1000)
         self.alpha = float(cfg.get("smoothing", 0.35))
+        hop_ms = float(cfg.get("hop_ms", 50))
+        # Brace path: a shorter window on the same hop, lightly smoothed.
+        self.fast_window = min(self.window, int(rate * cfg.get("brace_window_ms", 100) / 1000))
+        self.fast_alpha = float(cfg.get("brace_smoothing", 0.6))
+        self.brace_thr = float(cfg.get("brace_effort", 0.35))
+        self.brace_calm = float(cfg.get("brace_calm", 0.12))
+        self.brace_rise_hops = max(1, round(cfg.get("brace_rise_ms", 150) / hop_ms))
+        self.brace_base_hops = max(1, round(cfg.get("brace_baseline_ms", 250) / hop_ms))
+        self.brace_hold = max(1, int(cfg.get("brace_hold_hops", 2)))
         self.profile = Profile.load(str(cfg.get("profile", "default")))
         self._buf = np.zeros((4, 0))
         self._since_hop = 0
@@ -204,9 +222,24 @@ class EmgService:
         self._squeeze_samples: deque[float] = deque(maxlen=12)
         self._open_since: float | None = None
         self._open_fired = False
-        n_trace = int(self.TRACE_SECONDS * 1000 / cfg.get("hop_ms", 50))
+        self.fast_flexor = 0.0
+        self.fast_extensor = 0.0
+        self.brace = 0.0
+        self._brace_hist: deque[tuple[float, float]] = deque(
+            maxlen=self.brace_rise_hops + self.brace_base_hops + 2
+        )
+        self._brace_state = "idle"  # idle | candidate | fired | blocked
+        self._brace_back = 0  # hops from the calm hop to the crossing hop
+        self._brace_hops = 0  # hops held above threshold so far
+        self._brace_onset = 0.0
+        self._brace_cross = 0.0
+        self._brace_until = 0.0  # squeeze is suppressed until then (open hand never is)
+        self._squeeze_needs_release = False
+        n_trace = int(self.TRACE_SECONDS * 1000 / hop_ms)
         self.trace: deque[tuple[float, float, float]] = deque(maxlen=n_trace)
+        self._fast_trace: deque[tuple[float, float, float, float]] = deque(maxlen=n_trace)
         self._calib: dict[str, Any] | None = None
+        self._pending: dict[str, list[float]] = {}
         self._lock = threading.Lock()
         self._running = False
         self.error: str | None = None
@@ -266,12 +299,97 @@ class EmgService:
             self.effort = (1 - self.alpha) * self.effort + self.alpha * effort
             self.extensor = (1 - self.alpha) * self.extensor + self.alpha * ext
             self.trace.append((round(t, 3), round(self.effort, 3), round(self.extensor, 3)))
+            # Fast path: last 100 ms only, normalized to the brace calibration if there is one.
+            fast_rms = np.sqrt(np.mean(window[:, -self.fast_window :] ** 2, axis=1))
+            maxima = self.profile.brace_max
+            flex_raw = self._norm(fast_rms, self.flexor_ch, maxima or self.profile.squeeze_max)
+            ext_raw = self._norm(fast_rms, self.extensor_ch, maxima or self.profile.open_max)
+            a = self.fast_alpha
+            self.fast_flexor = (1 - a) * self.fast_flexor + a * flex_raw
+            self.fast_extensor = (1 - a) * self.fast_extensor + a * ext_raw
+            self.brace = min(self.fast_flexor, self.fast_extensor)
+            self._fast_trace.append(
+                (
+                    round(t, 3),
+                    round(self.fast_flexor, 3),
+                    round(self.fast_extensor, 3),
+                    round(self.brace, 3),
+                )
+            )
         if self._calib is None:  # no gestures while recording calibration
             self._detect(t)
+        else:
+            self._brace_reset()
+
+    def _brace_reset(self) -> None:
+        self._brace_hist.clear()
+        self._brace_state = "idle"
+
+    def _fast_onset(self) -> tuple[int, float] | None:
+        """Called on the hop where brace first crosses the threshold. Returns
+        (hops back to the last calm hop, its time) if the rise was fast, else None.
+
+        Fast means: ``brace_rise_ms`` ago the signal was still calm, and it had been
+        calm for the ``brace_baseline_ms`` before that. A slow ramp, or a signal that
+        was already busy, fails this and never counts as a flinch.
+        """
+        hist = list(self._brace_hist)
+        need = self.brace_rise_hops + self.brace_base_hops
+        if len(hist) < need:  # not enough history to call anything calm
+            return None
+        calm = hist[len(hist) - need : len(hist) - self.brace_rise_hops + 1]
+        if any(v > self.brace_calm for _, v in calm):
+            return None
+        for back in range(1, self.brace_rise_hops + 1):
+            if hist[-back][1] <= self.brace_calm:
+                return back, hist[-back][0]
+        return None
+
+    def _detect_brace(self, t: float) -> None:
+        above = self.brace >= self.brace_thr
+        if not above:
+            self._brace_state = "idle"
+        elif self._brace_state == "idle":
+            onset = self._fast_onset()
+            if onset is None:
+                self._brace_state = "blocked"  # busy or slow: wait until it drops again
+            else:
+                self._brace_state = "candidate"
+                self._brace_back, self._brace_onset = onset
+                self._brace_cross, self._brace_hops = t, 1
+        elif self._brace_state == "candidate":
+            self._brace_hops += 1
+        if self._brace_state == "candidate" and self._brace_hops >= self.brace_hold:
+            self._brace_state = "fired"
+            self._fire_brace(t)
+        self._brace_hist.append((t, self.brace))
+
+    def _fire_brace(self, t: float) -> None:
+        span = self._brace_back + self._brace_hops
+        rise = list(self._fast_trace)[-span:]
+        n_trace = max(1, int(self.cfg.get("brace_trace_ms", 1500) / self.cfg.get("hop_ms", 50)))
+        self._brace_until = t + self.cfg.get("brace_lockout_ms", 1500) / 1000
+        self._squeeze_needs_release = True
+        self._squeeze_since, self._squeeze_fired = None, False
+        self._squeeze_samples.clear()
+        self.log.emit(
+            "emg.brace",
+            onset_t=round(self._brace_onset, 3),
+            cross_t=round(self._brace_cross, 3),
+            detect_ms=round((t - self._brace_onset) * 1000),
+            peak_flexor=round(max(r[1] for r in rise), 3),
+            peak_extensor=round(max(r[2] for r in rise), 3),
+            peak_brace=round(max(r[3] for r in rise), 3),
+            trace=[list(r) for r in list(self._fast_trace)[-n_trace:]],
+        )
 
     def _detect(self, t: float) -> None:
         cfg = self.cfg
-        # open hand -> stop (checked first: stopping beats confirming)
+        # priority: brace > open hand > squeeze
+        self._detect_brace(t)
+        braced = t < self._brace_until
+        # open hand -> stop. Never suppressed, not even right after a brace: a stop
+        # gesture must always be able to fire.
         if self.extensor >= cfg.get("stop_effort", 0.55):
             self._open_since = self._open_since or t
             if not self._open_fired and (t - self._open_since) * 1000 >= cfg.get(
@@ -281,9 +399,16 @@ class EmgService:
                 self.log.emit("emg.open_hand", extensor=round(self.extensor, 3))
         else:
             self._open_since, self._open_fired = None, False
-        # squeeze -> confirm, carrying grip effort
-        if self.effort >= cfg.get("confirm_effort", 0.3) and self.extensor < cfg.get(
-            "stop_effort", 0.55
+        # squeeze -> confirm, carrying grip effort. Extensors must stay quiet: a
+        # co-contraction is a brace, never a confirmation.
+        if self.effort < cfg.get("confirm_effort", 0.3):
+            self._squeeze_needs_release = False
+        cocontraction = cfg.get("cocontraction_effort", self.brace_thr)
+        if (
+            self.effort >= cfg.get("confirm_effort", 0.3)
+            and max(self.extensor, self.fast_extensor) < cocontraction
+            and not braced
+            and not self._squeeze_needs_release
         ):
             self._squeeze_since = self._squeeze_since or t
             self._squeeze_samples.append(self.effort)
@@ -296,13 +421,14 @@ class EmgService:
             self._squeeze_since, self._squeeze_fired = None, False
             self._squeeze_samples.clear()
 
-    # calibration: rest -> squeeze -> open, a few seconds each
+    # calibration: rest -> squeeze -> open -> brace, a few seconds each
     def calibrate(self, phase: str, seconds: float = 3.0) -> dict[str, Any]:
-        """Record ``phase`` for ``seconds`` (blocking). Call rest, squeeze, open, then finish."""
+        """Record ``phase`` for ``seconds`` (blocking). Call rest, squeeze, open, then
+        brace (tense the whole forearm; optional but recommended), then finish."""
         if phase == "finish":
             return self._finish_calibration()
-        if phase not in ("rest", "squeeze", "open"):
-            raise ValueError("phase must be rest, squeeze, open or finish")
+        if phase not in ("rest", "squeeze", "open", "brace"):
+            raise ValueError("phase must be rest, squeeze, open, brace or finish")
         with self._lock:
             self._calib = {"phase": phase, "windows": []}
         time.sleep(seconds)
@@ -311,12 +437,11 @@ class EmgService:
             self._calib = None
         if len(windows) < 5:
             return {"ok": False, "detail": "no EMG data during calibration"}
-        pending = getattr(self, "_pending", {})
+        pending = self._pending
         if phase == "rest":
             pending["rest"] = np.median(windows, axis=0).tolist()
         else:
             pending[phase] = np.percentile(windows, 90, axis=0).tolist()
-        self._pending = pending
         return {
             "ok": True,
             "phase": phase,
@@ -325,25 +450,33 @@ class EmgService:
         }
 
     def _finish_calibration(self) -> dict[str, Any]:
-        pending = getattr(self, "_pending", {})
-        if not {"rest", "squeeze", "open"} <= set(pending):
+        pending = self._pending
+        has_base = {"rest", "squeeze", "open"} <= set(pending)
+        if not has_base and not ("brace" in pending and self.profile.calibrated):
             return {"ok": False, "detail": "record rest, squeeze and open first"}
-        rest = pending["rest"]
-        squeeze, opened = pending["squeeze"], pending["open"]
+        old = self.profile
+        rest = pending["rest"] if has_base else old.rest
+        squeeze = pending["squeeze"] if has_base else old.squeeze_max
+        opened = pending["open"] if has_base else old.open_max
+        brace = pending.get("brace")
         problems = [c for c in self.flexor_ch if squeeze[c] < rest[c] * 1.5]
         problems += [c for c in self.extensor_ch if opened[c] < rest[c] * 1.5]
+        if brace is not None:
+            problems += [c for c in self.flexor_ch + self.extensor_ch if brace[c] < rest[c] * 1.5]
         if problems:
             return {
                 "ok": False,
                 "detail": f"weak contraction on channels {sorted(set(problems))}; "
-                "check electrode placement and squeeze/open harder",
+                "check electrode placement and squeeze/open/brace harder",
             }
+        if brace is None and not has_base:
+            brace = old.brace_max
         self.profile = Profile(
-            self.profile.name, rest, squeeze, opened, True, time.strftime("%Y-%m-%d %H:%M:%S")
+            old.name, rest, squeeze, opened, True, time.strftime("%Y-%m-%d %H:%M:%S"), brace
         )
         self.profile.save()
         self._pending = {}
-        self.log.emit("emg.calibrated", profile=self.profile.name)
+        self.log.emit("emg.calibrated", profile=self.profile.name, brace=brace is not None)
         return {"ok": True, "profile": asdict(self.profile)}
 
     def snapshot(self) -> dict[str, Any]:
@@ -362,6 +495,10 @@ class EmgService:
                 "error": self.error,
                 "confirm_effort": self.cfg.get("confirm_effort", 0.3),
                 "stop_effort": self.cfg.get("stop_effort", 0.55),
+                "brace": round(self.brace, 3),
+                "brace_effort": self.brace_thr,
+                "brace_calibrated": bool(self.profile.brace_max),
+                "brace_trace": [(r[0], r[3]) for r in list(self._fast_trace)[-100:]],
                 "trace": list(self.trace)[-100:],
             }
 

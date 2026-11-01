@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import Any
 
 from h2m.compiler.grammar import Parsed, build_vocabulary, parse
@@ -28,6 +30,8 @@ from h2m.sensors.emg import build_emg
 from h2m.sensors.speech import build_speech
 from h2m.sensors.vision import build_vision
 
+MIN_CONFIRM_REACTION_S = 0.3
+
 
 @dataclass
 class Pending:
@@ -35,6 +39,7 @@ class Pending:
     contract: StepContract
     decision: Decision
     expires_at: float
+    announced_at: float = field(default_factory=now)
 
 
 class H2M:
@@ -49,13 +54,16 @@ class H2M:
         self.vision = build_vision(cfg.get("vision", {}), cfg.get("objects", []), self.log)
         self.speech = build_speech(cfg.get("speech", {}), self.log, self.on_utterance)
         self.llm = build_llm(cfg.get("compiler", {}))
-        self.recorder = Recorder(self.log)
         self.pending: Pending | None = None
         self.last: dict[str, Any] | None = None
         self.reply = ""
         self._lock = threading.RLock()
         self._running = False
+        self._in_flight = 0  # plans being confirmed/built/started but not yet MOVING
+        # The stop handler subscribes before the Recorder so the freeze runs before
+        # any disk I/O on the same event.
         self.log.subscribe(self._on_event)
+        self.recorder = Recorder(self.log)
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -135,23 +143,26 @@ class H2M:
         if pending and pending.decision.clarify and parsed.object_id:
             self.choose(parsed.object_id, by=source)
             return
-        compiled_by = "grammar"
-        if self.llm and (
-            parsed.verb is Verb.UNKNOWN
-            or (parsed.reference == "none" and parsed.verb in (Verb.PICK_PLACE, Verb.POINT))
-        ):
-            jpeg = self.vision.scene.jpeg() if self.vision else None
-            result = self.llm.interpret(text, self.visible_objects(), self.pointing(), jpeg)
-            if result is not None:
-                parsed, self.reply = result
-                compiled_by = "muse"
-            self.log.emit(
-                "compiler.llm",
-                ok=result is not None,
-                ms=self.llm.last_ms,
-                error=self.llm.last_error,
-            )
-        self._evaluate(parsed, compiled_by, t0)
+        # In flight from here (compile, gate, auto-approve) so a brace while the
+        # request is being compiled latches a stop before the plan can start.
+        with self._plan_in_flight():
+            compiled_by = "grammar"
+            if self.llm and (
+                parsed.verb is Verb.UNKNOWN
+                or (parsed.reference == "none" and parsed.verb in (Verb.PICK_PLACE, Verb.POINT))
+            ):
+                jpeg = self.vision.scene.jpeg() if self.vision else None
+                result = self.llm.interpret(text, self.visible_objects(), self.pointing(), jpeg)
+                if result is not None:
+                    parsed, self.reply = result
+                    compiled_by = "muse"
+                self.log.emit(
+                    "compiler.llm",
+                    ok=result is not None,
+                    ms=self.llm.last_ms,
+                    error=self.llm.last_error,
+                )
+            self._evaluate(parsed, compiled_by, t0)
 
     def _evaluate(self, parsed: Parsed, source: str, t0: float) -> None:
         contract = compile_contract(
@@ -177,14 +188,29 @@ class H2M:
         self.log.emit("intent", contract=contract.as_dict(), decision=decision.as_dict(), **extra)
 
     # ── operator / gesture actions ───────────────────────────────────────────
-    def confirm(self, by: str = "ui", effort: float | None = None) -> tuple[bool, str]:
+    def confirm(
+        self, by: str = "ui", effort: float | None = None, expected: Pending | None = None
+    ) -> tuple[bool, str]:
+        """Confirm the pending request. ``expected`` pins the exact request the caller
+        gated on (e.g. the squeeze reaction-time check); if it was replaced since,
+        nothing is confirmed."""
         with self._lock:
             pending = self.pending
             if pending is None:
                 return False, "nothing to confirm"
+            if expected is not None and pending is not expected:
+                return False, "request changed"
             if pending.decision.clarify:
                 return False, "choose which object first"
             self.pending = None
+            self._in_flight += 1  # same critical section as the pop: no gap for a brace
+        try:
+            return self._confirm(pending, by, effort)
+        finally:
+            with self._lock:
+                self._in_flight -= 1
+
+    def _confirm(self, pending: Pending, by: str, effort: float | None) -> tuple[bool, str]:
         contract = pending.contract
         if effort is not None:
             contract.grip_effort = effort
@@ -208,13 +234,15 @@ class H2M:
             return False, "nothing pending"
         contract = resolve_choice(pending.contract, object_id, self.visible_objects())
         decision = decide(contract, self._world(contract), self.safety_cfg)
-        self._publish(contract, decision, chosen_by=by)
         with self._lock:
+            if self.pending is not pending:  # cancelled/replaced while resolving
+                return False, "request changed"
             self.pending = (
                 Pending(pending.parsed, contract, decision, pending.expires_at)
                 if decision.verdict is Verdict.ASK
                 else None
             )
+        self._publish(contract, decision, chosen_by=by)
         if decision.verdict is Verdict.APPROVE:
             return self._execute(contract, decision, confirmed_by=by)
         return True, decision.reason
@@ -236,7 +264,25 @@ class H2M:
         threading.Thread(target=self.on_utterance, args=(text, {}, "typed"), daemon=True).start()
 
     # ── execution ────────────────────────────────────────────────────────────
+    @contextmanager
+    def _plan_in_flight(self) -> Iterator[None]:
+        """Mark a plan as in flight: it counts as moving for a brace/stop even though
+        the arm is not yet in MOVING (the plan is still being built or started)."""
+        with self._lock:
+            self._in_flight += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._in_flight -= 1
+
     def _execute(
+        self, contract: StepContract, decision: Decision, confirmed_by: str
+    ) -> tuple[bool, str]:
+        with self._plan_in_flight():
+            return self._execute_plan(contract, decision, confirmed_by)
+
+    def _execute_plan(
         self, contract: StepContract, decision: Decision, confirmed_by: str
     ) -> tuple[bool, str]:
         arm = self.arm
@@ -270,15 +316,49 @@ class H2M:
 
     # ── events and loop ──────────────────────────────────────────────────────
     def _on_event(self, event: Event) -> None:
-        if event.kind == "emg.open_hand":
-            if self.arm.state is ArmState.MOVING:
-                self.stop("open hand (EMG)")
-            elif self.pending is not None:
-                self.cancel("open hand (EMG)")
-        elif event.kind == "emg.squeeze" and self.pending is not None:
+        if event.kind == "emg.brace":
+            # Freeze while moving or while a plan is in flight (check-and-stop is
+            # atomic under the arm lock); when idle the detector event is just
+            # logged, which is what false-positive counting needs.
+            with self._lock:
+                in_flight = self._in_flight > 0
+                had_pending = self.pending is not None
+                self.pending = None  # a brace cancels any request waiting for a squeeze
+            stopped = self.arm.stop_if_active("brace (EMG)", plan_in_flight=in_flight)
+            if stopped:
+                self.log.emit(
+                    "incident.triggered", source="brace", onset_t=event.data.get("onset_t")
+                )
+            if had_pending:
+                self.log.emit("intent.cancelled", reason="brace (EMG)", had_pending=True)
+        elif event.kind == "emg.open_hand":
+            # Same single critical section as the brace: no gap for a confirm to pop
+            # the pending request between reading _in_flight and stopping.
+            with self._lock:
+                in_flight = self._in_flight > 0
+                had_pending = self.pending is not None
+                self.pending = None
+            self.arm.stop_if_active("open hand (EMG)", plan_in_flight=in_flight)
+            if had_pending:
+                self.log.emit("intent.cancelled", reason="open hand (EMG)", had_pending=True)
+        elif event.kind == "emg.squeeze":
+            with self._lock:
+                pending = self.pending
+            if pending is None:
+                return
+            # A squeeze that began before (or within a human reaction time of) the
+            # request being announced is not an answer to it.
+            onset = event.t - float(event.data.get("held_ms", 0.0)) / 1000
+            if onset < pending.announced_at + MIN_CONFIRM_REACTION_S:
+                self.log.emit("emg.squeeze_rejected", reason="too soon after request")
+                return
             threading.Thread(
                 target=self.confirm,
-                kwargs={"by": "emg", "effort": float(event.data.get("effort", 0.5))},
+                kwargs={
+                    "by": "emg",
+                    "effort": float(event.data.get("effort", 0.5)),
+                    "expected": pending,
+                },
                 daemon=True,
             ).start()
 
@@ -291,6 +371,8 @@ class H2M:
                 continue
             if now() > pending.expires_at:
                 with self._lock:
+                    if self.pending is not pending:
+                        continue
                     self.pending = None
                 self.log.emit("intent.expired", contract_id=pending.contract.id)
                 continue
@@ -305,13 +387,15 @@ class H2M:
                 )
                 if contract.object_id:
                     decision = decide(contract, self._world(contract), self.safety_cfg)
-                    self._publish(contract, decision, resolved_by="pointing")
                     with self._lock:
+                        if self.pending is not pending:  # cancelled/replaced meanwhile
+                            continue
                         self.pending = (
                             Pending(pending.parsed, contract, decision, pending.expires_at)
                             if decision.verdict is Verdict.ASK
                             else None
                         )
+                    self._publish(contract, decision, resolved_by="pointing")
                     if decision.verdict is Verdict.APPROVE:
                         self._execute(contract, decision, confirmed_by="pointing")
 
@@ -332,7 +416,10 @@ class H2M:
                 "arm.fault",
                 "arm.state",
                 "emg.squeeze",
+                "emg.squeeze_rejected",
                 "emg.open_hand",
+                "emg.brace",
+                "incident.triggered",
                 "emg.calibrated",
                 "compiler.llm",
                 "trial.started",
