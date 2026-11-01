@@ -7,6 +7,7 @@ Everything in H2M runs in one process and stamps time with ``now()``
 from __future__ import annotations
 
 import itertools
+import os
 import threading
 import time
 from collections import deque
@@ -29,6 +30,17 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
     target = Path(path) if path else ROOT / "configs" / "h2m.yaml"
     with target.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle) or {}
+
+
+def load_env(path: Path | None = None) -> None:
+    """Load KEY=value lines from the git-ignored .env without overriding the shell."""
+    target = path or ROOT / ".env"
+    if not target.exists():
+        return
+    for line in target.read_text().splitlines():
+        key, sep, value = line.strip().partition("=")
+        if sep and key and not key.startswith("#"):
+            os.environ.setdefault(key.removeprefix("export ").strip(), value.strip().strip("\"'"))
 
 
 def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:

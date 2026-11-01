@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from h2m.core import ROOT, load_config
+from h2m.core import ROOT, load_config, load_env
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -174,6 +174,32 @@ def cmd_emg(args: argparse.Namespace) -> int:
         return 0
 
 
+def cmd_flinch(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from h2m import flinch
+
+    if args.action == "record":
+        run = flinch.record(
+            load_config(args.config)["emg"],
+            args.stimuli,
+            args.min_gap,
+            args.max_gap,
+            args.source,
+            args.participant,
+        )
+    else:
+        run = Path(args.run) if args.run else flinch.latest_run()
+    print(flinch.analyse(run))
+    return 0
+
+
+def cmd_muse_check(args: argparse.Namespace) -> int:
+    from h2m.compiler.muse_check import main as check
+
+    return check()
+
+
 def cmd_bench(args: argparse.Namespace) -> int:
     from h2m.bench import main as bench_main
 
@@ -208,11 +234,25 @@ def main(argv: list[str] | None = None) -> int:
     emg.add_argument("--source", choices=["ganglion", "synthetic"])
     emg.set_defaults(func=cmd_emg)
 
+    fl = sub.add_parser("flinch", help="gate G1: record and score real flinches")
+    fl.add_argument("action", choices=["record", "analyse"])
+    fl.add_argument("--run", help="recording dir for analyse (default: latest)")
+    fl.add_argument("--stimuli", type=int, default=20)
+    fl.add_argument("--min-gap", type=float, default=25.0)
+    fl.add_argument("--max-gap", type=float, default=75.0)
+    fl.add_argument("--source", choices=["ganglion", "synthetic"], default="ganglion")
+    fl.add_argument("--participant", default="p01")
+    fl.set_defaults(func=cmd_flinch)
+
+    muse = sub.add_parser("muse-check", help="verify MODEL_API_KEY with one image call")
+    muse.set_defaults(func=cmd_muse_check)
+
     bench = sub.add_parser("bench", help="benchmark report from recorded sessions")
     bench.add_argument("sessions", nargs="*", help="session dirs (default: all)")
     bench.add_argument("--out", default=str(ROOT / "data" / "report.md"))
     bench.set_defaults(func=cmd_bench)
 
+    load_env()
     args = parser.parse_args(argv)
     return int(args.func(args) or 0)
 
