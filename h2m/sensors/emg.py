@@ -11,6 +11,14 @@ channels (back of the forearm) measure opening the hand.
   firing together, reached from a calm baseline within ~150 ms and held for a couple
   of hops -> ``emg.brace``. Priority is brace > open hand > squeeze, and a squeeze
   never confirms while the extensors co-contract, so a flinch cannot approve anything.
+- ``twitch`` = a short flexor-only burst from a calm baseline, over and done within
+  ``twitch_max_ms`` -> ``emg.twitch`` (no effort payload: it selects, it never sets grip).
+  Two within ``twitch_double_ms`` (onset to onset) -> ``emg.double_twitch`` instead.
+  A twitch is decided on the falling edge of the burst. A first twitch is held back until
+  the double window has passed (so it can still become a double): a single twitch is emitted
+  ``twitch_double_ms`` after its onset, never earlier. Priority is brace > twitch: a brace
+  candidate, a brace lockout, an open hand, a squeeze, quiet-extensor violations or a slow rise
+  void the burst, and a brace or open hand also voids a first twitch still waiting.
 
 Every stage is causal: no future samples are used.
 """
@@ -20,6 +28,7 @@ from __future__ import annotations
 import atexit
 import json
 import queue
+import re
 import threading
 import time
 from collections import deque
@@ -86,6 +95,29 @@ class Profile:
     def save(self) -> None:
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         (PROFILE_DIR / f"{self.name}.json").write_text(json.dumps(asdict(self), indent=2))
+
+
+_PROFILE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def resolve_profile_cfg(cfg: dict[str, Any], name: str | None = None) -> dict[str, Any]:
+    """The emg config for calibration profile ``name`` (default: ``cfg["profile"]``).
+
+    ``cfg["profiles"][name]`` is a flat dict of overrides (channels, twitch thresholds, ...)
+    layered over the shared keys. A name without an entry just selects that saved calibration
+    (``data/profiles/<name>.json``). ``default`` is the forearm profile; ``jaw`` is added by
+    giving it an entry (and a calibration take). The ``profile`` and ``profiles`` keys
+    themselves cannot be overridden.
+    """
+    chosen = str(name if name is not None else cfg.get("profile", "default"))
+    if not _PROFILE_NAME.match(chosen):
+        raise ValueError(f"emg profile name {chosen!r} must be 1-32 letters, digits, - or _")
+    overrides = (cfg.get("profiles") or {}).get(chosen) or {}
+    if not isinstance(overrides, dict):
+        raise ValueError(f"emg.profiles.{chosen} must be a mapping")
+    merged = {**cfg, **{k: v for k, v in overrides.items() if k not in ("profile", "profiles")}}
+    merged["profile"] = chosen
+    return merged
 
 
 # ── sources ──────────────────────────────────────────────────────────────────
@@ -224,10 +256,24 @@ class _Onset:
     cross: float = 0.0
 
 
+@dataclass
+class _Twitch:
+    """State of the twitch detector: one burst at a time, plus a first twitch waiting
+    to learn whether a second follows."""
+
+    hist: deque[float]
+    state: str = "idle"  # idle | burst | blocked
+    hops: int = 0  # hops the current burst has been above the release level
+    onset: float = 0.0
+    pending: tuple[float, float] | None = None  # (onset, burst length ms) of a first twitch
+    refractory_until: float = 0.0
+
+
 class EmgService:
     TRACE_SECONDS = 10.0
 
     def __init__(self, cfg: dict[str, Any], source: Any, log: EventLog):
+        cfg = resolve_profile_cfg(cfg)
         self.cfg, self.source, self.log = cfg, source, log
         rate = float(cfg.get("sample_rate_hz", 200))
         self.rate = rate
@@ -251,7 +297,18 @@ class EmgService:
         self.brace_rise_hops = max(1, round(cfg.get("brace_rise_ms", 150) / hop_ms))
         self.brace_base_hops = max(1, round(cfg.get("brace_baseline_ms", 250) / hop_ms))
         self.brace_hold = max(1, int(cfg.get("brace_hold_hops", 2)))
-        self.profile = Profile.load(str(cfg.get("profile", "default")))
+        self.twitch_enabled = bool(cfg.get("twitch", True))
+        self.twitch_thr = float(cfg.get("twitch_effort", 0.35))
+        self.twitch_release = self.twitch_thr * float(cfg.get("twitch_release", 0.6))
+        self.twitch_calm = float(cfg.get("twitch_calm", 0.12))
+        self.twitch_rise_hops = max(1, round(cfg.get("twitch_rise_ms", 100) / hop_ms))
+        self.twitch_base_hops = max(1, round(cfg.get("twitch_baseline_ms", 100) / hop_ms))
+        self.twitch_min_ms = float(cfg.get("twitch_min_ms", 150))
+        self.twitch_max_ms = float(cfg.get("twitch_max_ms", 400))
+        self.twitch_ext_max = float(cfg.get("twitch_extensor_max", 0.18))
+        self.twitch_double_s = float(cfg.get("twitch_double_ms", 600)) / 1000
+        self.twitch_refractory_s = float(cfg.get("twitch_refractory_ms", 300)) / 1000
+        self.profile = Profile.load(str(cfg["profile"]))
         self._buf = np.zeros((4, 0))
         self._since_hop = 0
         self.effort = 0.0
@@ -272,6 +329,7 @@ class EmgService:
             "cocontraction": _Onset(deque(maxlen=history)),
             "flexor_spike": _Onset(deque(maxlen=history)),
         }
+        self._twitch = _Twitch(deque(maxlen=self.twitch_rise_hops + self.twitch_base_hops))
         self._brace_by: str | None = None  # which detector fired the current lockout
         self._brace_until = 0.0  # squeeze is suppressed until then (open hand never is)
         self._squeeze_needs_release = False
@@ -371,6 +429,8 @@ class EmgService:
         for det in self._onsets.values():
             det.hist.clear()
             det.state = "idle"
+        self._twitch.hist.clear()
+        self._twitch.state, self._twitch.pending = "idle", None
 
     def _fast_onset(self, det: _Onset) -> tuple[int, float] | None:
         """Called on the hop where brace first crosses the threshold. Returns
@@ -486,6 +546,82 @@ class EmgService:
         else:
             self._squeeze_since = None
             self._squeeze_samples.clear()
+        self._detect_twitch(t)
+
+    def _calm_before(self, hist: deque[float]) -> bool:
+        """True if the signal was calm ``twitch_rise_ms`` ago and just before that."""
+        values = list(hist)
+        rise, need = self.twitch_rise_hops, self.twitch_rise_hops + self.twitch_base_hops - 1
+        if len(values) < need:
+            return False
+        return all(
+            v <= self.twitch_calm for v in values[len(values) - need : len(values) - rise + 1]
+        )
+
+    def _detect_twitch(self, t: float) -> None:
+        """Flexor-only burst from calm, ended within ``twitch_max_ms``. Runs after the brace,
+        open-hand and squeeze logic and yields to all three (brace > open hand > twitch)."""
+        w = self._twitch
+        if not self.twitch_enabled:
+            return
+        v = self.fast_spike
+        hop_ms = self.cfg.get("hop_ms", 50)
+        braced = t < self._brace_until or any(
+            d.state in ("candidate", "fired") for d in self._onsets.values()
+        )
+        vetoed = braced or self._open_fired
+        quiet = max(self.extensor, self.fast_extensor) < self.twitch_ext_max
+        if w.pending and vetoed:
+            w.pending = None  # a brace or open hand after the first twitch voids it
+        if (
+            w.pending
+            and t - w.pending[0] >= self.twitch_double_s
+            and not (w.state == "burst" and w.onset - w.pending[0] <= self.twitch_double_s)
+        ):
+            self._emit_single(t, w)
+        if w.state == "idle":
+            if v >= self.twitch_thr:
+                if t < w.refractory_until or vetoed or not quiet or not self._calm_before(w.hist):
+                    w.state = "blocked"  # busy, slow, braced or co-contracting
+                else:
+                    w.state, w.hops, w.onset = "burst", 1, t
+        elif w.state == "burst":
+            if vetoed or not quiet or self._squeeze_fired:
+                w.state, w.pending = "blocked", None  # not a clean twitch: nothing pending either
+            elif v >= self.twitch_release:
+                w.hops += 1
+                if w.hops * hop_ms > self.twitch_max_ms:
+                    w.state, w.pending = "blocked", None  # a held squeeze, not a twitch
+            else:
+                held = w.hops * hop_ms
+                w.state = "idle"
+                if held >= self.twitch_min_ms:
+                    self._twitch_done(t, w, held)
+        elif v < self.twitch_calm:
+            w.state = "idle"
+        w.hist.append(v)
+
+    def _twitch_done(self, t: float, w: _Twitch, held: float) -> None:
+        first = w.pending
+        if first is not None and w.onset - first[0] <= self.twitch_double_s:
+            w.pending = None
+            w.refractory_until = t + self.twitch_refractory_s
+            self.log.emit(
+                "emg.double_twitch",
+                first_ms=round(first[1]),
+                second_ms=round(held),
+                interval_ms=round((w.onset - first[0]) * 1000),
+                detect_ms=round((t - first[0]) * 1000),
+            )
+        else:
+            w.pending = (w.onset, held)
+
+    def _emit_single(self, t: float, w: _Twitch) -> None:
+        assert w.pending is not None
+        onset, held = w.pending
+        w.pending = None
+        w.refractory_until = t + self.twitch_refractory_s
+        self.log.emit("emg.twitch", held_ms=round(held), detect_ms=round((t - onset) * 1000))
 
     # calibration: rest -> squeeze -> open -> brace, a few seconds each
     def calibrate(self, phase: str, seconds: float = 3.0) -> dict[str, Any]:
@@ -620,7 +756,9 @@ class EmgService:
             }
 
 
-def build_emg(cfg: dict[str, Any], log: EventLog) -> EmgService | None:
+def build_emg(cfg: dict[str, Any], log: EventLog, profile: str | None = None) -> EmgService | None:
+    """``profile`` (e.g. from a CLI flag) overrides ``cfg["profile"]``."""
+    cfg = resolve_profile_cfg(cfg, profile)
     source_name = cfg.get("source", "off")
     if source_name == "off":
         return None

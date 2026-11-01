@@ -83,7 +83,31 @@ emg:
   cocontraction_effort: 0.18  # squeeze needs extensors below this (well under brace_effort), so a brace never confirms
   cocontraction_ratio: 0.6    # ... or below this share of flexor effort: a hard fist leaks into the extensors (the limit is capped at brace_effort)
   cocontraction_ratio_min: 0.8  # the ratio applies only at this flexor effort or above, on a calibrated profile
-  profile: default       # calibration profile name in data/profiles/
+  # Twitch: a short flexor-only burst (fast window, normalized to the user's fist) from a calm
+  # baseline, over within twitch_max_ms. Decided on the falling edge. Two within
+  # twitch_double_ms (onset to onset) = emg.double_twitch. A lone twitch is emitted only once the
+  # double window has passed (twitch_double_ms after its onset). Brace > open hand > twitch:
+  # any brace/open hand/squeeze, a busy or slow rise, or extensors above twitch_extensor_max
+  # voids the burst. With brace_feature: flexor_spike a burst that reaches brace_effort is a
+  # brace, so twitches there must stay below it; use cocontraction for the cleanest split.
+  twitch: true
+  twitch_effort: 0.35    # fast flexor level that opens a burst
+  twitch_release: 0.6    # burst ends when it falls below this share of twitch_effort
+  twitch_calm: 0.12      # "calm baseline" before the rise (and before a re-arm)
+  twitch_rise_ms: 100    # must have been calm this long before crossing: slower ramps are ignored
+  twitch_baseline_ms: 100  # ... and calm for this long before that (two twitches need ~200 ms of quiet between)
+  twitch_min_ms: 150     # shorter than this is noise (the 100 ms window smears a burst by ~2 hops)
+  twitch_max_ms: 400     # longer than this is a squeeze, not a twitch
+  twitch_extensor_max: 0.18  # extensors must stay under this: a co-contraction is never a twitch
+  twitch_double_ms: 600  # second onset within this of the first = double twitch
+  twitch_refractory_ms: 300  # after an emitted twitch / double, bursts are ignored this long
+  # Calibration profile = data/profiles/<name>.json plus the optional overrides below.
+  # `default` is the forearm profile. Select another with `profile:` here or build_emg(profile=).
+  # Add `jaw` (item 4b) by filling in its overrides and recording a jaw calibration take.
+  profile: default
+  profiles:
+    default: {}          # forearm: the shared keys above
+    jaw: {}              # item 4b: channels / twitch_* overrides, e.g. {flexor_channels: [0], twitch_extensor_max: 1.0}
   # POST /api/emg/calibrate: seconds is clamped to this range, and the arm must be
   # disarmed or stopped (brace and open hand are not detected while a phase records).
   calibrate_min_s: 1.0
