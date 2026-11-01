@@ -200,8 +200,9 @@ def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
         """The UI rendered this highlighted card. With ``selection.require_ack`` the
         reaction clock for accepting it starts at this request's arrival (no ack: every
         accept of that card is refused). Never moves anything."""
-        card_id, menu = _pins(await _json_object(request), required=True)
-        return result(*h2m.selection_ack(card_id, menu))
+        body = await _json_object(request)
+        card_id, menu = _pins(body, required=True)
+        return result(*h2m.selection_ack(card_id, menu, body.get("highlight")))
 
     @app.post("/api/selection/accept")
     async def selection_accept(request: Request) -> dict[str, Any]:

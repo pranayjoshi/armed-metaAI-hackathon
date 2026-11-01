@@ -629,15 +629,20 @@ class EmgService:
             self._emit_single(t, w)
         if w.state == "idle":
             if v >= self.twitch_thr:
-                if t < w.refractory_until or vetoed or not quiet or not self._calm_before(w.hist):
+                if vetoed or not quiet or not self._calm_before(w.hist):
                     w.state = "blocked"  # busy, slow, braced or co-contracting
                 else:
                     # Cheap and early: the app can freeze a moving arm now instead of
-                    # waiting for the falling edge (or the double window) to decide.
+                    # waiting for the falling edge (or the double window) to decide. The
+                    # twitch refractory never holds this back (a re-twitch right after a
+                    # twitch is still a burst while moving); it only keeps the burst from
+                    # becoming a twitch below.
                     self.log.emit("emg.burst_onset", onset_t=round(t, 3))
                     w.state, w.hops, w.onset = "burst", 1, t
                     if v >= self.twitch_max_effort:  # the spike band: a brace's, not a twitch's
                         w.state, w.pending = "blocked", None
+                    elif t < w.refractory_until:  # too soon after the last twitch to be one
+                        w.state = "blocked"
         elif w.state == "burst":
             if vetoed or not quiet or self._squeeze_fired or v >= self.twitch_max_effort:
                 w.state, w.pending = "blocked", None  # not a clean twitch: nothing pending either

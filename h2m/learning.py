@@ -41,12 +41,16 @@ if TYPE_CHECKING:
 MIN_APPROVE_REACTION_S = 0.3  # same human reaction-time floor as the squeeze confirm
 APPROVERS = frozenset({"emg", "voice", "typed", "ui"})  # never "brace" or "auto"
 HOLD_STAGES = frozenset({"grasp", "carry", "release"})  # stages where the gripper holds it
+# A burst stop (a twitch-band rise while moving) may be voluntary (gripping a cup). Its
+# incident proposes a rule only if a brace or open hand follows within this.
+BURST_FOLLOW_S = 2.0
+NO_FOLLOW = "burst stop with no brace or open hand after it (possibly voluntary): no rule"
 
 
 @dataclass(frozen=True)
 class IncidentTrigger:
     t: float
-    source: str  # brace | open_hand
+    source: str  # brace | open_hand | burst
     onset_t: float | None = None
 
 
@@ -235,15 +239,22 @@ class Learner:
         self._status(
             id=None, state="capturing", source=trig.source, t=trig.t, path=None, explanation=None
         )
-        delay = trig.t + after - now()
+        burst = trig.source == "burst"
+        wait = max(after, BURST_FOLLOW_S) if burst else after
+        delay = trig.t + wait - now()
         if delay > 0:
             time.sleep(delay)  # the sampler keeps recording the after-window meanwhile
+        # A burst stop counts as a flinch only if a brace or open hand followed it.
+        followed = burst and self._flinch_followed(trig.t)
         inc: Incident | None
         try:
-            extra = {
-                "trigger": {"source": trig.source, "t": trig.t, "onset_t": trig.onset_t},
-                "provenance": self._provenance(),
+            trigger: dict[str, Any] = {
+                "source": trig.source, "t": trig.t, "onset_t": trig.onset_t
             }
+            if burst:
+                trigger["possibly_voluntary"] = True
+                trigger["followed_by_flinch"] = followed
+            extra = {"trigger": trigger, "provenance": self._provenance()}
             inc = self.buffer.save(
                 self.root, self._objects(), self._held(trig.t), reset=True, extra=extra
             )
@@ -257,7 +268,10 @@ class Learner:
             exp = explain(inc, self.muse)
         else:
             exp = fallback_explanation()
-        proposal, problems = self._propose(exp, inc)
+        if burst and not followed:
+            proposal, problems = None, [NO_FOLLOW]  # explained, never proposed
+        else:
+            proposal, problems = self._propose(exp, inc)
         say = exp.say if proposal is not None or exp.source == "fallback" else FALLBACK_SAY
         if inc is not None and inc.path is not None:
             try:
@@ -287,6 +301,16 @@ class Learner:
             proposal=proposal.as_dict() if proposal else None,
             problems=problems,
         )
+
+    def _flinch_followed(self, t: float) -> bool:
+        """A brace or open hand came within BURST_FOLLOW_S after ``t``. Unknown: no."""
+        check = getattr(self.app, "vetoed_between", None)
+        if check is None:
+            return False
+        try:
+            return bool(check(t, t + BURST_FOLLOW_S))
+        except Exception:  # noqa: BLE001  # cannot tell: no rule from it
+            return False
 
     def _propose(
         self, exp: Explanation, inc: Incident | None
@@ -323,11 +347,16 @@ class Learner:
         onset: float | None = None,
     ) -> tuple[bool, str]:
         """Save the pending rule. ``onset`` is when the person's answer began; it must be
-        at least MIN_APPROVE_REACTION_S after the question. ``expected``/``expected_id``
-        pin the proposal the answer was given to."""
+        at least MIN_APPROVE_REACTION_S after the question, and not within the app's
+        ``after_stop_s`` of a brace, open hand or burst stop (a startle is no answer).
+        ``expected``/``expected_id`` pin the proposal the answer was given to."""
         if by not in APPROVERS:
             return False, f"{by} cannot approve a rule"
         onset = now() if onset is None else onset
+        recent = getattr(self.app, "stopped_recently", None)
+        if recent is None or recent(onset):  # cannot tell: fail closed
+            self.log.emit("rule.approve_rejected", by=by, reason="too soon after a stop")
+            return False, "too soon after a stop; answer again in a moment"
         with self.lock:
             p = self.proposal
             if p is None:

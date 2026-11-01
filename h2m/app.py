@@ -35,16 +35,23 @@ Interaction rules:
   the scanning menu go up. A twitch SELECTS the highlighted card (only ``reaction_s``
   after the UI acknowledged rendering it, and ``after_veto_s`` after any brace or open
   hand); a motion card is then announced and a second twitch ``reaction_s`` after the
-  announcement confirms it. A double twitch steps (or goes back from "confirm?"), and a
+  announcement finished playing (and, with ``require_ack``, after the UI acknowledged the
+  "confirm?" rendering) confirms it. An announcement that was not spoken, was cut off or
+  failed undoes the select. A double twitch steps (or goes back from "confirm?"), and a
   brace or open hand on an idle arm dismisses. Confirming runs the card's tool call
   through Embodied, the gate and the pending confirm like any tool request, and the
   twitch answers only the plain confirmation (a warning the card never showed, e.g.
   gripper not proven empty, waits for a squeeze, "yes" or a click). A twitch never
   confirms any other request and never approves a rule. The brace / open-hand freeze
   runs first and unchanged; the card handling comes after the stop.
-- A twitch-band burst onset (``emg.burst_onset``) while the arm moves or a plan is in
-  flight freezes the arm through the same ``stop_if_active`` as a brace. On an idle arm
-  it does nothing (a twitch or squeeze may follow).
+- A twitch-band burst onset (``emg.burst_onset``) acts only with ``emg.burst_freeze``
+  literally true (off by default; enable after a bench session; ``selection.enabled``
+  does not enable it). Then, with the arm MOVING it freezes the arm through the same
+  ``stop_if_active`` as a brace (latched); with a plan in flight on a READY arm it drops
+  the plan through the request epoch (no latch). On an idle arm it does nothing. A burst
+  stop's incident proposes no rule unless a brace or open hand follows within 2 s.
+- A squeeze, and any rule approval, that began within ``safety.after_stop_s`` (3 s, floor
+  3) of the last brace, open hand or burst stop is refused.
 """
 
 from __future__ import annotations
@@ -124,6 +131,16 @@ BRING_TO_TRAY = (
 DEGRADE_NOTES = frozenset({"no_key", "timeout_or_error", "error"})
 SELECTION_OFF = "selection is off (set selection.enabled: true in configs/h2m.yaml)"
 BURST_STOP = "twitch-band burst while moving"
+BURST_DROP = "twitch-band burst while a plan was in flight"
+# No squeeze answer and no rule approval begins this soon after a brace, an open hand or
+# a burst stop (safety.after_stop_s may only raise it): what a startle leaves behind in
+# the flexors is not an answer.
+AFTER_STOP_S = 3.0
+# A selected card's question must finish playing within this (selection.announce_max_s,
+# capped below); otherwise the select is undone and nothing confirms.
+ANNOUNCE_MAX_S = 10.0
+MAX_ANNOUNCE_S = 30.0
+ANNOUNCE_POLL_S = 0.02
 # Learner incident states during which no card is answered (the stop is being looked at).
 INCIDENT_BUSY = frozenset({"capturing", "explaining"})
 
@@ -230,6 +247,17 @@ class H2M:
         # Bumped by cancel, stop, brace and open hand. Work that began at an older epoch
         # (a Muse reply, a confirmed plan, the handover's second stage) is dropped.
         self._epoch = 0
+        # Event time of the last brace or open hand (moving or not) or burst stop, and the
+        # recent brace / open-hand times (does a burst stop have a flinch after it?).
+        # Plain float / deque writes after the stop; read by the squeeze and rule gates.
+        self._last_stop_t = -math.inf
+        self._veto_times: deque[float] = deque(maxlen=32)
+        self.after_stop_s = max(
+            AFTER_STOP_S, float(self.safety_cfg.get("after_stop_s", AFTER_STOP_S))
+        )
+        # The burst-onset freeze is its own switch, off unless literally true (a bench
+        # session first); selection.enabled does not turn it on.
+        self.burst_freeze = (cfg.get("emg") or {}).get("burst_freeze") is True
         self._tls = threading.local()  # .epoch: the epoch the current request began at
         # place_near_user stage 2 waiting for stage 1 to arrive: (contract, epoch, the
         # arm's arm_count at stage 1: any re-arming since, however it came, drops it)
@@ -787,11 +815,14 @@ class H2M:
             self._say(f"I won't take it to the spot: {decision.reason}.")
         return False, False
 
-    def _say(self, text: str) -> None:
-        """Speak ``text`` through the say tool (gated, speech only) and show it."""
+    def _say(self, text: str) -> ToolResult:
+        """Speak ``text`` through the say tool (gated, speech only) and show it. The
+        result's ``spoken`` says whether speech actually started (voice off, ``say``
+        missing or a refused say leave it False)."""
         result = self.embodied.handle_tool_call("say", {"text": text[:280]})
         self.log.emit("embodied.tool", **result.as_dict())
         self.reply = text
+        return result
 
     def _run_gesture(self, contract: StepContract, plan: Plan) -> None:
         """Embodied's run_plan: called only on an APPROVE verdict for a gesture. The gate
@@ -1111,6 +1142,23 @@ class H2M:
         if self.gripper.state() != offer.held:
             return "what I hold changed since the offer; ask again"
         return self._release_state_problem()
+
+    def _mark_veto(self, t: float) -> None:
+        """A brace or open hand at ``t`` (moving or not). Called after the stop."""
+        self._last_stop_t = max(self._last_stop_t, t)
+        self._veto_times.append(t)
+
+    def stopped_recently(self, onset: float) -> bool:
+        """An answer that began at ``onset`` is within ``after_stop_s`` of the last brace,
+        open hand or burst stop (or began before it). A non-finite onset counts as recent
+        (fails closed)."""
+        if not _finite_number(onset):
+            return True
+        return onset - self._last_stop_t < self.after_stop_s
+
+    def vetoed_between(self, start: float, end: float) -> bool:
+        """A brace or open hand was seen in [start, end] (event times)."""
+        return any(start <= t <= end for t in list(self._veto_times))
 
     def _silence(self) -> None:
         """Cut speech off. Never raises; only ever called after the arm stop."""
@@ -1621,16 +1669,58 @@ class H2M:
 
     def _announce_card(self, ticket: Ticket, epoch: int) -> tuple[bool, str]:
         """A motion card was selected: say what it does and ask for the confirming twitch.
-        The confirm clock starts once the announcement went out. Nothing moves here."""
+        The confirm clock starts only once the question has finished playing. If it was
+        not spoken (voice off, ``say`` missing), was cut off or replaced, took too long, or
+        anything here failed, the select is undone (back to the menu, the card highlighted
+        afresh) and nothing can confirm it. Blocks until the speech ends: never call it on
+        the EMG or event thread. Nothing moves here."""
+        try:
+            ok, why = self._announce(ticket, epoch)
+        except Exception as exc:  # noqa: BLE001  # never leave a card asking "confirm?"
+            ok, why = False, f"I couldn't ask about that card ({type(exc).__name__})"
+        if not ok:
+            try:
+                self._emit_selection(self.selection.unselect(ticket, now(), why))
+            except Exception:  # noqa: BLE001  # the expiry still lapses it from select_t
+                pass
+            self.reply = why
+        return ok, why
+
+    def _announce(self, ticket: Ticket, epoch: int) -> tuple[bool, str]:
         text = announcement(ticket.card)
         if self._stale(epoch):
-            self.selection.unselect(ticket, now())
             return False, "cancelled meanwhile"
-        self._say(text)
+        result = self._say(text)
+        if not getattr(result, "spoken", False):
+            return False, "I couldn't say the question aloud, so a twitch can't confirm it"
+        speech = self.embodied.speech
+        said = getattr(speech, "last_text", None)
+        cap = min(MAX_ANNOUNCE_S, float(self.selection_cfg.get("announce_max_s", ANNOUNCE_MAX_S)))
+        deadline = time.monotonic() + cap
+        while True:
+            if self._stale(epoch):
+                return False, "cancelled meanwhile"
+            if not self.selection.selected(ticket):
+                return False, "that question was closed"
+            try:
+                playing = bool(speech.speaking())
+            except Exception:  # noqa: BLE001  # cannot tell: keep waiting, up to the cap
+                playing = True
+            if not playing:
+                break
+            if time.monotonic() >= deadline:
+                return False, "the question took too long to say"
+            time.sleep(ANNOUNCE_POLL_S)
+        end = now()
         if self._stale(epoch):
-            self.selection.unselect(ticket, now())
             return False, "cancelled meanwhile"
-        self._emit_selection(self.selection.announced(ticket, now(), text))
+        if getattr(speech, "last_text", None) != said:
+            return False, "the question was cut off"  # something else spoke over it
+        events = self.selection.announced(ticket, end, text)
+        if not events:
+            return False, "that question was closed"
+        self._emit_selection(events)
+        self.reply = text
         return True, text
 
     def _accept_card(self, ticket: Ticket, epoch: int) -> tuple[bool, str]:
@@ -1722,12 +1812,15 @@ class H2M:
         self._emit_selection(events)
         return ok, why
 
-    def selection_ack(self, card_id: Any, menu_id: Any) -> tuple[bool, str]:
+    def selection_ack(
+        self, card_id: Any, menu_id: Any, highlight: Any = None
+    ) -> tuple[bool, str]:
         """The UI rendered ``card_id`` highlighted on ``menu_id``. With ``require_ack`` the
-        reaction clock of that highlight starts here (server arrival time)."""
+        reaction clock of that highlight starts here (server arrival time). ``highlight``
+        (the snapshot's ``highlight``) pins the generation that was drawn."""
         if not self.selection_enabled:
             return False, SELECTION_OFF
-        return self.selection.ack(card_id, now(), menu_id)
+        return self.selection.ack(card_id, now(), menu_id, highlight)
 
     def selection_accept(self, card_id: Any, menu_id: Any) -> tuple[bool, str]:
         """UI accept: same pins as a twitch plus the card and menu the person saw, and the
@@ -1769,6 +1862,7 @@ class H2M:
                 self._epoch += 1  # and drops any reply or plan that began before it
             releasing = self.arm.releasing  # bookkeeping only: a release is no incident
             stopped = self.arm.stop_if_active("brace (EMG)", plan_in_flight=in_flight)
+            self._mark_veto(event.t)  # after the stop: plain writes, no lock, no I/O
             self._silence()  # after the stop, and on any brace (moving or not)
             if stopped and not releasing:
                 self.log.emit(
@@ -1787,6 +1881,7 @@ class H2M:
                 self._epoch += 1
             releasing = self.arm.releasing
             stopped = self.arm.stop_if_active("open hand (EMG)", plan_in_flight=in_flight)
+            self._mark_veto(event.t)
             self._silence()
             if stopped and not releasing:  # "that bothered me" learns the same as a flinch
                 self.log.emit("incident.triggered", source="open_hand")
@@ -1794,15 +1889,29 @@ class H2M:
                 self.log.emit("intent.cancelled", reason="open hand (EMG)", had_pending=True)
             self._selection_veto("open_hand", stopped, had_pending or in_flight)
         elif event.kind == "emg.burst_onset":
-            # A twitch-band burst began. With the arm moving (or a plan in flight) it
-            # freezes now, through the brace's check-and-stop, before any twitch is
-            # decided. Nothing runs before the stop but an int read (no lock wait, model,
-            # network or disk). Idle: nothing at all, so a squeeze or twitch that follows
-            # still answers what it answers.
-            in_flight = self._in_flight > 0
+            # A twitch-band burst began. Off unless emg.burst_freeze is literally true
+            # (selection.enabled does not turn it on). With the arm MOVING (or an
+            # operator release running) it freezes now, through the brace's
+            # check-and-stop, before any twitch is decided; nothing runs before the stop
+            # but attribute reads (no lock wait, model, network or disk). A plan in
+            # flight on a READY arm (compile, gate, handover recheck) is dropped through
+            # the request epoch instead of latching a stop: a "did it register?" re-twitch
+            # must not need reset + arm. The arm checks the epoch under its lock right
+            # before a start, so a plan that started between the check and the bump is
+            # MOVING and the second check-and-stop freezes it. Idle: nothing at all, so a
+            # squeeze or twitch that follows still answers what it answers.
+            if not self.burst_freeze:
+                return
             releasing = self.arm.releasing
-            stopped = self.arm.stop_if_active(BURST_STOP, plan_in_flight=in_flight)
+            stopped = self.arm.stop_if_active(BURST_STOP)
+            dropped = False
+            if not stopped and self._in_flight > 0:
+                with self._lock:
+                    self._epoch += 1
+                dropped = True
+                stopped = self.arm.stop_if_active(BURST_STOP)  # it started meanwhile
             if stopped:
+                self._last_stop_t = max(self._last_stop_t, event.t)  # a burst stop
                 with self._lock:  # after the stop: drop what waited on the old motion
                     had_pending = self.pending is not None
                     self.pending = None
@@ -1814,6 +1923,8 @@ class H2M:
                     )
                 if had_pending:
                     self.log.emit("intent.cancelled", reason=BURST_STOP, had_pending=True)
+            elif dropped:
+                self.log.emit("intent.cancelled", reason=BURST_DROP, had_pending=False)
         elif event.kind == "emg.twitch":
             self._on_twitch(event)
         elif event.kind == "emg.double_twitch":
@@ -1864,6 +1975,11 @@ class H2M:
             # A squeeze that began before (or within a human reaction time of) the
             # request or question being announced is not an answer to it.
             onset = event.t - float(event.data.get("held_ms", 0.0)) / 1000
+            # A squeeze that began within after_stop_s of a brace, an open hand or a burst
+            # stop is what the startle left in the flexors, not an answer (nor a grip).
+            if self.stopped_recently(onset):
+                self.log.emit("emg.squeeze_rejected", reason="too soon after a stop")
+                return
             announced = pending.announced_at if pending is not None else proposal.announced_at
             if onset < announced + MIN_CONFIRM_REACTION_S:
                 self.log.emit("emg.squeeze_rejected", reason="too soon after request")

@@ -86,7 +86,10 @@ def record(
         source.extensor_ch = tuple(cfg.get("extensor_channels", [2, 3]))
     else:
         source = GanglionSource(
-            cfg.get("transport", "ble"), cfg.get("serial_port"), cfg.get("mac_address")
+            cfg.get("transport", "ble"),
+            cfg.get("serial_port"),
+            cfg.get("mac_address"),
+            firmware=cfg.get("firmware", "auto"),
         )
     source.start()
     capture = _Capture(source)
@@ -243,69 +246,76 @@ def _score(hits: np.ndarray, stimuli: list[float], span: tuple[float, float]) ->
     }
 
 
-def analyse(run: Path) -> str:
-    t, flexor, extensor, meta = _features(run)
-    brace = np.minimum(flexor, extensor)
-    stim = list(meta["stimuli"])
-    start, end = meta["started"], meta["ended"]
+def _score_feature(
+    t: np.ndarray, feature: np.ndarray, stim: list[float], span: tuple[float, float]
+) -> tuple[list[str], bool]:
+    """Tune on odd stimuli and the first half of the time, report on the rest."""
+    start, end = span
     mid = (start + end) / 2
     tune, test = stim[0::2], stim[1::2]
-    tune_span, test_span = (start, mid), (mid, end)
-
     best: tuple[float, float, dict] | None = None
     for threshold in np.arange(0.05, 0.85, 0.025):
         for calm in (0.05, 0.1, 0.2, 0.3):
-            hits = _detect(t, brace, float(threshold), calm)
-            rate = _score(hits, tune, (start, end))["caught"] / max(len(tune), 1)
-            false = _score(hits, [s for s in stim if s < mid], tune_span)["false_per_10"]
+            hits = _detect(t, feature, float(threshold), calm)
+            rate = _score(hits, tune, span)["caught"] / max(len(tune), 1)
+            false = _score(hits, [s for s in stim if s < mid], (start, mid))["false_per_10"]
             if false <= PASS_FALSE_PER_10MIN and (best is None or rate >= best[2]["rate"]):
                 best = (float(threshold), calm, {"rate": rate})
 
     aligned = np.array(
-        [brace[(t >= s + RESPONSE[0]) & (t <= s + RESPONSE[1])].max(initial=0) for s in stim]
+        [feature[(t >= s + RESPONSE[0]) & (t <= s + RESPONSE[1])].max(initial=0) for s in stim]
     )
-    before = np.array([brace[(t >= s - 1.0) & (t < s)].max(initial=0) for s in stim])
+    before = np.array([feature[(t >= s - 1.0) & (t < s)].max(initial=0) for s in stim])
+    lines = [
+        f"- Peak after stimulus: median {np.median(aligned):.2f}; in the second before: median {np.median(before):.2f}",
+        f"- Stimuli where the response beat the prior second: {(aligned > before).sum()}/{len(stim)}",
+    ]
+    if best is None:
+        lines.append(
+            f"- No threshold kept tuning false stops at or under {PASS_FALSE_PER_10MIN}/10 min."
+        )
+        return lines, False
+    threshold, calm, _ = best
+    hits = _detect(t, feature, threshold, calm)
+    held = _score(hits, test, span)
+    false = _score(hits, [s for s in stim if s >= mid], (mid, end))
+    rate = held["caught"] / max(held["n"], 1)
+    half = len(stim) // 2
+    early = _score(hits, stim[:half], span)
+    late = _score(hits, stim[half:], span)
+    lines += [
+        f"- Tuned threshold {threshold:.3f}, calm level {calm}",
+        f"- Caught: {held['caught']}/{held['n']} ({rate:.0%}), target {PASS_DETECT:.0%}",
+        f"- False stops: {false['false']} in {false['minutes']:.1f} min = {false['false_per_10']:.1f}/10 min, target \u2264 {PASS_FALSE_PER_10MIN:.0f}",
+        f"- Median detection delay after stimulus: {held['latency_ms']:.0f} ms (includes audio playback delay)",
+        f"- Habituation, all stimuli: first half {early['caught']}/{early['n']}, second half {late['caught']}/{late['n']}",
+    ]
+    return lines, rate >= PASS_DETECT and false["false_per_10"] <= PASS_FALSE_PER_10MIN
+
+
+def analyse(run: Path) -> str:
+    t, flexor, extensor, meta = _features(run)
+    stim = list(meta["stimuli"])
+    span = (meta["started"], meta["ended"])
     lines = [f"# Flinch test: {run.name}", ""]
     if meta["simulated"]:
         lines += [
             "**SIMULATED DATA: verifies the tooling only, says nothing about real flinches.**",
             "",
         ]
-    lines += [
-        f"Stimuli: {len(stim)} · recording: {(end - start) / 60:.1f} min",
-        "",
-        "## Is there a signal?",
-        f"- Peak brace after stimulus: median {np.median(aligned):.2f}; in the second before: median {np.median(before):.2f}",
-        f"- Stimuli where the response beat the prior second: {(aligned > before).sum()}/{len(stim)}",
-        "",
-        "## Detector on held-out data",
-    ]
-    verdict = "FAIL"
-    if best is None:
-        lines.append(
-            f"No threshold kept tuning false stops at or under {PASS_FALSE_PER_10MIN}/10 min."
-        )
-    else:
-        threshold, calm, _ = best
-        hits = _detect(t, brace, threshold, calm)
-        held = _score(hits, test, (start, end))
-        false = _score(hits, [s for s in stim if s >= mid], test_span)
-        rate = held["caught"] / max(held["n"], 1)
-        half = len(stim) // 2
-        early = _score(hits, stim[:half], (start, end))
-        late = _score(hits, stim[half:], (start, end))
-        if rate >= PASS_DETECT and false["false_per_10"] <= PASS_FALSE_PER_10MIN:
-            verdict = "PASS"
-        lines += [
-            f"- Tuned threshold {threshold:.3f}, calm level {calm}",
-            f"- Caught: {held['caught']}/{held['n']} ({rate:.0%}), target {PASS_DETECT:.0%}",
-            f"- False stops: {false['false']} in {false['minutes']:.1f} min = {false['false_per_10']:.1f}/10 min, target ≤ {PASS_FALSE_PER_10MIN:.0f}",
-            f"- Median detection delay after stimulus: {held['latency_ms']:.0f} ms (includes audio playback delay)",
-            f"- Habituation, all stimuli: first half {early['caught']}/{early['n']}, second half {late['caught']}/{late['n']}",
-        ]
+    lines += [f"Stimuli: {len(stim)} \u00b7 recording: {(span[1] - span[0]) / 60:.1f} min"]
+    passed = []
+    for title, feature in (
+        ("Fast flexor spike (fast squeeze or brace)", flexor),
+        ("Co-contraction (both muscles)", np.minimum(flexor, extensor)),
+    ):
+        section, ok = _score_feature(t, feature, stim, span)
+        lines += ["", f"## {title}: **{'PASS' if ok else 'FAIL'}**", *section]
+        if ok:
+            passed.append(title)
     lines += [
         "",
-        f"## Verdict: **{verdict}**",
+        f"## Verdict: **{'PASS: ' + '; '.join(passed) if passed else 'FAIL'}**",
         "",
         "Small sample from one person. Self-paced runs measure an acoustic startle, which may differ "
         "from reacting to the arm itself.",

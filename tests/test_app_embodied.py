@@ -44,11 +44,16 @@ from h2m.world import (
 
 
 class FakeProc:
-    def __init__(self):
+    """A `say` process that plays for ``duration`` seconds (None: until killed)."""
+
+    def __init__(self, duration=None):
         self.killed = False
+        self.ends = None if duration is None else time.monotonic() + duration
 
     def poll(self):
-        return 1 if self.killed else None
+        if self.killed or (self.ends is not None and time.monotonic() >= self.ends):
+            return 1
+        return None
 
     def kill(self):
         self.killed = True
@@ -109,10 +114,11 @@ def h2m(monkeypatch, tmp_path):
     h = H2M(cfg)
     h.rules = RuleStore("t", root=tmp_path / "rules")
     h.spoken, h.procs = [], []
+    h.say_s = None  # how long each fake `say` plays (None: until cut off)
 
     def spawn(argv):
         h.spoken.append(argv[-1])
-        h.procs.append(FakeProc())
+        h.procs.append(FakeProc(h.say_s))
         return h.procs[-1]
 
     h.embodied.speech = SpeechOut(spawn=spawn)

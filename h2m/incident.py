@@ -434,6 +434,27 @@ def _jpeg_url(img: np.ndarray) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
 
 
+POSSIBLY_VOLUNTARY = (
+    "Trigger: a short twitch-band flexor burst stopped the arm, not a brace or an open "
+    "hand. This stop is POSSIBLY VOLUNTARY: the person may have moved on purpose (for "
+    "example gripping something) rather than flinched. {follow} If nothing in the frames "
+    "shows a reason to flinch, set confidence low and rule to null.\n"
+)
+
+
+def trigger_note(incident: Incident) -> str:
+    """Prompt line for what stopped the arm. A burst stop is labelled possibly voluntary
+    (fixed text; only the booleans saved with the clip choose the sentence)."""
+    trigger = incident.extra.get("trigger") if isinstance(incident.extra, dict) else None
+    if not isinstance(trigger, dict) or trigger.get("source") != "burst":
+        return ""
+    if trigger.get("followed_by_flinch") is True:
+        follow = "A brace or open hand followed within 2 s."
+    else:
+        follow = "No brace or open hand followed it."
+    return POSSIBLY_VOLUNTARY.format(follow=follow)
+
+
 def build_messages(incident: Incident) -> list[dict[str, Any]]:
     keys = select_keyframes(incident.frames, incident.t_freeze)
     emg_peak = float(np.abs(incident.emg).max()) if incident.emg.size else 0.0
@@ -447,6 +468,7 @@ def build_messages(incident: Incident) -> list[dict[str, Any]]:
         f"Detected objects with table positions: {json.dumps(incident.objects, default=str)}\n"
         f"Arm joints over time (seconds relative to the flinch): {json.dumps(arm)}\n"
         f"Peak EMG during reaction: {emg_peak:.2f}\n"
+        f"{trigger_note(incident)}"
         "The labeled frames follow in time order; the last is the moment of the flinch."
     )
     content: list[dict[str, Any]] = [{"type": "text", "text": text}]

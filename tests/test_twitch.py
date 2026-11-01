@@ -371,16 +371,24 @@ def test_burst_onset_is_not_emitted_for_slow_busy_or_vetoed_rises(rig):
     assert rig.events("emg.burst_onset") == []
 
 
-def test_burst_onset_is_rate_limited_by_the_refractory(rig):
+def test_refractory_holds_back_the_twitch_but_never_the_burst_onset(rig):
+    """Review item 5: the 300 ms refractory applies to the twitch decision only. A
+    re-twitch right after a twitch (did it register?) still emits emg.burst_onset, so a
+    moving arm can still freeze on it, but it never becomes a second twitch."""
     rig.burst(0.15)
-    rig.run(0.6, 0.0, 0.0)  # the single is emitted about here
-    assert rig.twitches() == ["emg.twitch"]
+    while not rig.events("emg.twitch"):  # until the single is emitted
+        rig.run(HOP_S, 0.0, 0.0)
+    w = rig.svc._twitch
+    assert rig.clock < w.refractory_until
     n = len(rig.events("emg.burst_onset"))
-    rig.burst(0.15)  # inside twitch_refractory_ms of the emission
-    assert len(rig.events("emg.burst_onset")) == n
-    rig.run(1.5, 0.0, 0.0)
-    rig.burst(0.15)
+    rig.burst(0.15)  # starts inside twitch_refractory_ms of the emission
     assert len(rig.events("emg.burst_onset")) == n + 1
+    rig.run(1.5, 0.0, 0.0)
+    assert rig.twitches() == ["emg.twitch"]  # no second twitch, no double
+    rig.burst(0.15)  # past the refractory: an onset and a twitch again
+    rig.run(1.5, 0.0, 0.0)
+    assert len(rig.events("emg.burst_onset")) == n + 2
+    assert rig.twitches() == ["emg.twitch", "emg.twitch"]
 
 
 # ── sample-time stamps and read gaps ─────────────────────────────────────────

@@ -17,18 +17,21 @@ this origin, and every `POST` needs `X-H2M-Token`. There is no tokenless selecti
 | double twitch (`emg.double_twitch`) | `POST /api/selection/step` | Next card (wraps); while asking "confirm?", back to the menu |
 | brace / open hand on an idle arm | `POST /api/selection/dismiss` | Refuse the highlighted card |
 | brace / open hand while moving | (`POST /api/stop`) | Freeze, exactly as before; the task ends |
-| twitch-band burst onset (`emg.burst_onset`) while moving or a plan is in flight | | Freeze (stop reason `twitch-band burst while moving`); idle arm: nothing |
+| twitch-band burst onset (`emg.burst_onset`), only with `emg.burst_freeze: true` | | Moving: freeze (stop reason `twitch-band burst while moving`, latched); plan in flight on a READY arm: dropped through the request epoch (no latch); idle arm: nothing. Shipped off |
 
 - **Off by default.** `selection.enabled` ships `false`. Only the literal `true` turns
   the cards and the twitch-as-answer on.
 - **Render acknowledgement.** With `require_ack: true` (shipped) the reaction clock for
   a highlight starts when the UI says it drew that exact card: `POST
-  /api/selection/ack {"menu", "card_id"}`, timed by its arrival on the server. A select
-  with no ack for the highlighted card is refused ("the screen has not shown that card
-  yet"). Every new highlight (shown, stepped to, dismissed onto, a refused accept, back
-  from "confirm?") clears the ack: the UI acks again when `acked` is false. Headless
-  tests and scanning runs without a UI set `require_ack: false`; then the clock starts
-  at the server-side highlight.
+  /api/selection/ack {"menu", "card_id", "highlight"}`, timed by its arrival on the
+  server. A select with no ack for the highlighted card is refused ("the screen has not
+  shown that card yet"). Every new highlight (shown, stepped to, dismissed onto, a
+  refused accept, back from "confirm?", and the select itself) bumps `highlight` and
+  clears the ack: the UI acks again when `acked` is false. `highlight` (optional, the
+  snapshot's integer) pins the generation that was drawn: an ack for an older generation
+  of the same card (a late duplicate) is refused. Headless tests and scanning runs
+  without a UI set `require_ack: false`; then the clock starts at the server-side
+  highlight.
 - **Reaction gate.** A select counts only if the input began at least `reaction_s`
   (0.7 s, floor 0.3) after the later of the highlight and its ack. A twitch's onset is the
   earliest of the detector's `onset_t` and the event time minus `detect_ms` (an earlier
@@ -41,11 +44,20 @@ this origin, and every `POST` needs `X-H2M-Token`. There is no tokenless selecti
   recorded startle refused a card with an open hand and then twitched 0.9 s later.
 - **Two steps for a motion card.** The first twitch selects: the arm says
   "<label>? Twitch again to confirm, or double twitch to go back." (spoken and in
-  `reply`), and the card shows `confirm: true`. The confirm clock starts when that
-  announcement went out (`selection.announced`); a second twitch at least `reaction_s`
-  after it confirms. A double twitch (or `ui_step`) goes back to the menu, a brace or
-  open hand refuses the card, and an unanswered question lapses back to the menu after
-  `confirm_s` (8 s, cap 30; `selection.lapsed`). A `say` card is one step.
+  `reply`), and the card shows `confirm: true`. `say` does not block, so the app waits
+  for the speech to finish playing (up to `announce_max_s`, 10 s) and only then starts
+  the confirm clock (`selection.announced`). With `require_ack` the select is a new
+  highlight, so the UI must ack the "confirm?" rendering too, and a second twitch
+  confirms only if it began at least `reaction_s` after the later of the announcement's
+  end and that ack. Until the announcement ends nothing confirms ("I'm still asking").
+  If the question was not spoken (voice output off, `say` missing), was cut off or
+  replaced by other speech, did not finish within `announce_max_s`, or the announcement
+  failed, the select is undone (`selection.unselected` with the `reason`, back to the
+  menu, the card highlighted afresh): with voice output off no motion card can be
+  confirmed. A double twitch (or `ui_step`) goes back to the menu, a brace or open hand
+  refuses the card, and an unanswered question lapses back to the menu `confirm_s` (8 s,
+  cap 30) after the announcement, or after the select if it was never announced
+  (`selection.lapsed`). A `say` card is one step.
 - **Confirming goes through the normal path.** The card's tool call goes to
   `Embodied.handle_tool_call`, then contract, safety gate, pending confirm (with its
   compare-and-set and request epoch). The card's motion always asks; the confirming
@@ -79,13 +91,25 @@ this origin, and every `POST` needs `X-H2M-Token`. There is no tokenless selecti
   open hand that neither stopped the arm nor cancelled a waiting request or in-flight plan
   dismisses a card. One flinch often fires both events: within `veto_refractory_s`
   (1.5 s) the second is counted but refuses no second card.
-- **Burst onset.** `emg.burst_onset` (payload `onset_t`) comes on the first hop of a
-  calm rise above the twitch level, long before a twitch is decided. With the arm moving
-  or a plan in flight the app calls the brace's `stop_if_active` first, with nothing
-  (no lock wait, model, network or disk) ahead of it; then it drops the request epoch and
-  any pending request, cuts speech and starts an incident (`source: burst`). The stop
-  latches until reset + arm. On an idle arm it does nothing (a squeeze or twitch may
-  follow).
+- **Burst onset (`emg.burst_freeze`, shipped `false`).** `emg.burst_onset` (payload
+  `onset_t`) comes on the first hop of a calm rise above the twitch level, long before a
+  twitch is decided (the twitch refractory never holds it back; it only keeps a burst
+  from becoming a twitch). The app acts on it only with `emg.burst_freeze: true`;
+  `selection.enabled` does not turn it on. Enable it after a bench session has measured
+  how often real moving-arm sessions fire bursts. Then, with the arm MOVING the app calls
+  the brace's `stop_if_active` first, with nothing (no lock wait, model, network or disk)
+  ahead of it; then it drops the request epoch and any pending request, cuts speech and
+  starts an incident (`source: burst`). The stop latches until reset + arm. With a plan
+  in flight on a READY arm (compile, gate, handover recheck) it bumps the request epoch
+  instead of latching a stop (`intent.cancelled`, reason `twitch-band burst while a plan
+  was in flight`); a plan that started in between is MOVING and is frozen by a second
+  check-and-stop. On an idle arm it does nothing. A burst stop's incident is labelled
+  possibly voluntary in the Muse prompt and proposes no rule unless a brace or open hand
+  follows within 2 s.
+- **After a stop.** No squeeze (for a request or a rule) and no rule approval (squeeze,
+  yes, click) counts if it began within `safety.after_stop_s` (3 s, floor 3) of the last
+  brace or open hand (moving or not) or burst stop (`emg.squeeze_rejected` /
+  `rule.approve_rejected`, reason "too soon after a stop").
 - Cards go away whenever the arm moves or stops, and on cancel or disarm. The Muse ranker
   is cancelled then too.
 
@@ -149,10 +173,12 @@ visible, reachable scene and taught phrases, never from model text.
 
 ### `POST /api/selection/ack`
 
-Body (both required): `{"card_id": "pick_place:cup", "menu": 4}`. The UI drew this
-highlighted card. Refused if the menu changed or the card is not the highlighted one.
-Only the first ack of a highlight counts. Never moves anything and is not a selection
-input.
+Body: `{"card_id": "pick_place:cup", "menu": 4, "highlight": 7}` (`card_id` and `menu`
+required; `highlight` is the snapshot's `highlight` the UI drew). The UI drew this
+highlighted card. Refused if the menu changed, the card is not the highlighted one, or
+`highlight` is given and is not the current generation. Only the first ack of a
+highlight counts. Never moves anything and is not a selection input. (`h2m/server.py`
+does not forward `highlight` yet: see Not verified.)
 
 ### `POST /api/selection/accept`
 
@@ -161,8 +187,10 @@ Body (both required): `{"card_id": "pick_place:cup", "menu": 4}`, from the
 highlighted one, no ack was given (`require_ack`), the reaction time has not passed, a
 veto was too recent, the arm was re-armed, inputs are blocked, or the gate does not
 approve the request. On a motion card the first accept selects it and answers with the
-announcement; the second (same pins, `reaction_s` after the announcement) confirms it,
-runs the gate in a worker thread and answers with its result.
+announcement once it finished playing (409 if it could not be said); the second (same
+pins, a fresh ack of the "confirm?" rendering, `reaction_s` after the later of the
+announcement's end and that ack) confirms it, runs the gate in a worker thread and
+answers with its result.
 
 ### `POST /api/selection/step`
 
@@ -195,7 +223,8 @@ curl -s -X POST -H "X-H2M-Token: $TOKEN" -H "Content-Type: application/json" \
 | `selection.shown` | `menu`, `task`, `mode`, `source`, `cards` (ids), `labels`, `cursor`, `upgraded` (Muse reordered the cards behind the highlighted one, `kept`) |
 | `selection.step` | `menu`, `task`, `by`, `ok`, `cursor`, `card`, `label`, `back` (true: back from "confirm?") (or `ok: false`, `detail`) |
 | `selection.select` | `menu`, `task`, `by`, `ok`, `card`, `label` (a motion card selected; refusals are `selection.accept` with `ok: false`) |
-| `selection.announced` | `menu`, `task`, `card`, `text` (the confirm clock starts here) |
+| `selection.announced` | `menu`, `task`, `card`, `text` (the question finished playing; the confirm clock starts here) |
+| `selection.unselected` | `menu`, `task`, `card`, `reason` (the select was undone: not spoken, cut off, too long, failed, cancelled) |
 | `selection.lapsed` | `menu`, `task`, `card` (an unanswered "confirm?" went back to the menu) |
 | `selection.accept` | `menu`, `task`, `by`, `ok`, `answered` (false: the request waits for a squeeze / yes / click), `detail`, `card`, `card_kind` (refusals: `ok: false`, `detail`) |
 | `selection.dismiss` | `menu`, `task`, `by`, `ok`, `card`, `remaining` (or `ok: false`, `detail`) |
@@ -219,10 +248,11 @@ last `arm.completed` (for `place_near_user`, the second stage), or to the speech
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` (shipped; absent = off) | Only the literal `true` turns cards and the twitch-as-answer on |
-| `reaction_s` | `0.7` | Select: this long after the highlight and its UI ack. Confirm: this long after the announcement. Floor 0.3 |
+| `reaction_s` | `0.7` | Select: this long after the highlight and its UI ack. Confirm: this long after the announcement finished playing (and, with `require_ack`, its ack). Floor 0.3 |
+| `announce_max_s` | `10.0` | The "confirm?" question must finish playing within this, else the select is undone. Cap 30 |
 | `require_ack` | `true` | The reaction clock starts at `POST /api/selection/ack` for that exact card; no ack refuses. Only the literal `false` turns it off (headless tests, scanning runs without a UI) |
 | `after_veto_s` | `3.0` | No select or confirm begins this soon after any brace or open hand (swallowed ones too). Floor 3.0 |
-| `confirm_s` | `8.0` | An unanswered "confirm?" goes back to the menu. Cap 30 |
+| `confirm_s` | `8.0` | An unanswered "confirm?" goes back to the menu this long after the announcement (after the select if never announced). Cap 30 |
 | `mode` | `intent` | `intent` or `scanning` |
 | `cards` | `3` | Intent cards shown (at most 3) |
 | `muse` | `true` | Ask Muse Spark to rank (needs `MODEL_API_KEY`); `false` = deterministic ranking only |
@@ -242,6 +272,9 @@ synthetic EMG detector) and a mocked Muse. The Spark wire format has not been ex
 against the live API, no real twitch has been recorded against a card, the web UI does
 not send `POST /api/selection/ack` yet (so with `require_ack: true` a UI run refuses every
 select until it does), and `reaction_s`, `after_veto_s`, `confirm_s` and the veto
-refractory are untuned. The burst-onset freeze has only seen synthetic `emg.burst_onset`
-events and the synthetic detector; how often a real moving-arm session fires one (false
-stops) is unmeasured.
+refractory are untuned. `h2m/server.py` does not forward the ack's `highlight` yet, so
+acks through the endpoint are not pinned to a generation (the app and state machine
+accept and check it). The announcement wait has only run against a fake `say` process;
+real `say` timing is untested. The burst-onset freeze (`emg.burst_freeze`, off) has only
+seen synthetic `emg.burst_onset` events and the synthetic detector; how often a real
+moving-arm session fires one (false stops) is unmeasured.

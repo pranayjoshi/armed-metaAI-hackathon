@@ -132,7 +132,7 @@ class LeRobotArm(ArmBackend):
 
     def _build(self) -> Any:
         try:
-            from lerobot.robots.so101_follower import SO101Follower, SO101FollowerConfig
+            from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
         except ImportError as exc:
             raise BackendError("LeRobot missing: pip install 'lerobot[feetech]'") from exc
         if not self._port:

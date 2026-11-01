@@ -95,7 +95,14 @@ def flinch_and_explain(h):
     h.log.emit("emg.brace", onset_t=now())
     assert h.arm.state is ArmState.STOPPED
     assert h.learner.run_once(timeout=1.0)
+    stop_was_long_ago(h)  # answers below come after the after-stop hold-off
     return kinds(h, "incident.explained")[-1].data
+
+
+def stop_was_long_ago(h, s=10.0):
+    """Pretend the last brace / open hand / burst stop was ``s`` seconds ago (past the
+    app's after_stop_s hold-off; that hold-off has its own tests)."""
+    h._last_stop_t = now() - s
 
 
 def took_it_back(h):
@@ -289,6 +296,137 @@ def test_approval_fails_closed_on_corrupt_store(h2m):
     ok, why = h2m.learner.approve(by="ui")
     assert not ok and "could not save" in why
     assert h2m.rules.path.read_text() == "{not json"  # never overwritten
+
+
+# ── review 2, item 2: no squeeze answer or rule approval right after a stop ────
+def wait_for(pred, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and not pred():
+        time.sleep(0.01)
+    return bool(pred())
+
+
+def test_after_stop_hold_off_ships_at_three_seconds_and_only_rises(h2m):
+    from h2m.app import H2M
+
+    assert load_config()["safety"]["after_stop_s"] == 3.0 and h2m.after_stop_s == 3.0
+    cfg = {**h2m.cfg, "safety": {**h2m.cfg["safety"], "after_stop_s": 0.5}}
+    assert H2M(cfg).after_stop_s == 3.0  # floor
+    assert h2m.stopped_recently(float("nan")) and h2m.stopped_recently(float("inf"))
+
+
+@pytest.mark.parametrize("veto", ["emg.brace", "emg.open_hand"])
+def test_N5_a_startle_squeeze_after_an_idle_brace_confirms_nothing(h2m, veto):
+    """R8 / N5: a startle on an idle arm (brace or open hand), a request waiting, and the
+    startle's squeeze ~2 s later. The squeeze passes the request's own reaction gate but
+    began within 3 s of the brace: rejected. 3 s later a squeeze confirms."""
+    h2m.log.emit(veto, onset_t=now(), extensor=0.9)
+    assert h2m.arm.state is ArmState.READY  # idle: the brace stopped nothing
+    h2m.on_utterance("hand me the cup", source="typed")
+    pending = h2m.pending
+    assert pending is not None
+    pending.announced_at = now() - 2.5
+    h2m.log.emit("emg.squeeze", effort=0.78, held_ms=405)
+    time.sleep(0.2)
+    assert h2m.pending is pending and not kinds(h2m, "arm.started")
+    assert kinds(h2m, "emg.squeeze_rejected")[-1].data["reason"] == "too soon after a stop"
+    stop_was_long_ago(h2m, 3.5)
+    h2m.log.emit("emg.squeeze", effort=0.78, held_ms=405)
+    assert wait_for(lambda: kinds(h2m, "arm.started"))
+
+
+def test_a_squeeze_right_after_a_burst_stop_confirms_nothing(h2m):
+    h2m.burst_freeze = True
+    start_carry(h2m)
+    h2m.log.emit("emg.burst_onset", onset_t=now())
+    assert h2m.arm.state is ArmState.STOPPED
+    h2m.learner._queue.get_nowait()  # the incident worker is not running here
+    assert h2m.arm.reset()[0] and h2m.arm.arm()[0]
+    took_it_back(h2m)
+    h2m.on_utterance("hand me the block", source="typed")
+    pending = h2m.pending
+    assert pending is not None
+    pending.announced_at = now() - 2
+    n = len(kinds(h2m, "arm.started"))
+    h2m.log.emit("emg.squeeze", effort=0.6, held_ms=350)
+    time.sleep(0.2)
+    assert h2m.pending is pending and len(kinds(h2m, "arm.started")) == n
+    assert kinds(h2m, "emg.squeeze_rejected")[-1].data["reason"] == "too soon after a stop"
+
+
+@pytest.mark.parametrize("how", ["ui", "yes", "squeeze"])
+def test_no_rule_is_approved_within_three_seconds_of_a_stop(h2m, how):
+    flinch_and_explain(h2m)
+    p = h2m.learner.proposal
+    answer_later(p, 5)
+    h2m.log.emit("emg.open_hand", extensor=0.9)  # another startle while the card is up
+    if how == "ui":
+        ok, why = h2m.learner.approve(by="ui", expected_id=p.rule.id)
+        assert not ok and "too soon after a stop" in why
+    elif how == "yes":
+        h2m.on_utterance("yes", source="typed")
+        assert "too soon after a stop" in h2m.reply
+    else:
+        h2m.log.emit("emg.squeeze", effort=0.6, held_ms=350)
+        time.sleep(0.2)
+    assert h2m.rules.list() == [] and h2m.learner.proposal is p
+    stop_was_long_ago(h2m, 3.5)
+    assert h2m.learner.approve(by="ui", expected_id=p.rule.id)[0]
+
+
+# ── review 2, item 3: a burst stop is possibly voluntary ──────────────────────
+def burst_stop(h):
+    h.burst_freeze = True
+    start_carry(h)
+    h.log.emit("emg.burst_onset", onset_t=now())
+    assert h.arm.state is ArmState.STOPPED and kinds(h, "incident.triggered")
+
+
+def prompt_text(h):
+    return h.learner.muse.calls[-1][1][1]["content"][0]["text"]
+
+
+def test_burst_stop_with_no_flinch_after_it_proposes_no_rule(h2m, monkeypatch):
+    monkeypatch.setattr(learning_mod, "BURST_FOLLOW_S", 0.3)
+    burst_stop(h2m)
+    assert h2m.learner.run_once(timeout=1.0)
+    data = kinds(h2m, "incident.explained")[-1].data
+    assert data["source"] == "burst" and data["proposal"] is None
+    assert learning_mod.NO_FOLLOW in data["problems"] and h2m.learner.proposal is None
+    assert data["say"] == FALLBACK_SAY  # no yes/no question it could not act on
+    text = prompt_text(h2m)
+    assert "POSSIBLY VOLUNTARY" in text and "No brace or open hand followed" in text
+    meta = json.loads((h2m.learner.root / data["incident_id"] / "meta.json").read_text())
+    assert meta["trigger"]["possibly_voluntary"] is True
+    assert meta["trigger"]["followed_by_flinch"] is False
+
+
+def test_burst_stop_with_a_brace_too_late_after_it_proposes_no_rule(h2m, monkeypatch):
+    monkeypatch.setattr(learning_mod, "BURST_FOLLOW_S", 0.3)
+    burst_stop(h2m)
+    time.sleep(0.4)
+    h2m.log.emit("emg.brace", onset_t=now())  # after the follow window
+    assert h2m.learner.run_once(timeout=1.0)
+    assert kinds(h2m, "incident.explained")[-1].data["proposal"] is None
+
+
+@pytest.mark.parametrize("veto", ["emg.brace", "emg.open_hand"])
+def test_burst_stop_followed_by_a_flinch_proposes_as_usual(h2m, monkeypatch, veto):
+    monkeypatch.setattr(learning_mod, "BURST_FOLLOW_S", 0.5)
+    burst_stop(h2m)
+    time.sleep(0.05)
+    h2m.log.emit(veto, onset_t=now(), extensor=0.9)  # the arm is already stopped
+    assert len(kinds(h2m, "incident.triggered")) == 1  # still one incident
+    assert h2m.learner.run_once(timeout=1.0)
+    data = kinds(h2m, "incident.explained")[-1].data
+    assert data["proposal"] is not None and data["proposal"]["rule"]["approved"] is False
+    text = prompt_text(h2m)
+    assert "POSSIBLY VOLUNTARY" in text and "A brace or open hand followed" in text
+
+
+def test_a_brace_incident_is_not_labelled_possibly_voluntary(h2m):
+    flinch_and_explain(h2m)
+    assert "VOLUNTARY" not in prompt_text(h2m)
 
 
 # ── route choice and modifiers ───────────────────────────────────────────────

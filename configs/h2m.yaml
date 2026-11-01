@@ -76,8 +76,10 @@ emg:
   # variant stopped the arm (brace or open hand) on 10/12, with no squeeze or twitch after any
   # flinch; the 2 misses peak at ~0.3, under every threshold. 10 of the 12 reach fast flexor
   # >= 0.9, so they sit in the spike band whatever the extensors do. The spike threshold is
-  # above the twitch band, so a flexor-only twitch never freezes and a flexor-only flinch
-  # always does. (An earlier "both features scored identically" held for one run only.)
+  # above the twitch band, so a flexor-only twitch is never a brace, and a flexor-only flinch
+  # that reaches brace_spike_effort always is one. A twitch-band burst can still freeze a
+  # MOVING arm, but only through emg.burst_onset with burst_freeze: true (below; off by
+  # default). (An earlier "both features scored identically" held for one run only.)
   brace_feature: flexor_spike  # flexor_spike (the OR) | cocontraction (co-contraction only)
   brace_window_ms: 100   # parallel fast window, same hop as above
   brace_smoothing: 0.6   # EMA on the fast flexor / extensor, 0..1
@@ -87,7 +89,11 @@ emg:
   brace_rise_ms: 150     # must be calm this long before crossing: slower ramps are ignored
   brace_baseline_ms: 250 # ... and have stayed calm for this long before that
   brace_hold_hops: 2     # hops (hop_ms each) above brace_effort before firing
-  brace_lockout_ms: 1500 # after a brace or an open hand, squeeze and twitch are suppressed (open hand never is)
+  # After a brace or an open hand, squeeze and twitch are suppressed (open hand never is).
+  # 3000 was tried: the flinch replays stay clean, but the detector tests are written to the
+  # 1.5 s lockout, so it stays; the app refuses any squeeze or rule approval within
+  # safety.after_stop_s (3 s) of a brace, open hand or burst stop instead.
+  brace_lockout_ms: 1500
   brace_trace_ms: 1500   # recent fast trace carried by emg.brace
   cocontraction_effort: 0.18  # squeeze needs extensors below this (well under brace_effort), so a brace never confirms
   cocontraction_ratio: 0.6    # ... or below this share of flexor effort: a hard fist leaks into the extensors (the limit is capped at brace_effort)
@@ -102,6 +108,13 @@ emg:
   # onset_t only) fires on the first hop of a calm rise above twitch_effort, so a MOVING arm can
   # freeze at once instead of after the 0.6 s the lone twitch is held back.
   twitch: true
+  # SAFETY REVIEW. burst_freeze: true makes the app act on emg.burst_onset: a MOVING arm stops
+  # (latched until reset + arm) and a plan in flight on a READY arm is dropped (request epoch,
+  # no latch). A burst stop proposes no rule unless a brace or open hand follows within 2 s.
+  # Off by default: enable it only after a bench session has measured how often real
+  # moving-arm sessions fire bursts (false stops). selection.enabled alone does not enable it.
+  # Only the literal true turns it on.
+  burst_freeze: false
   twitch_effort: 0.35    # fast flexor level that opens a burst
   twitch_max_effort: 0.6 # at or above this fast flexor level the burst is not a twitch (same value as brace_spike_effort)
   twitch_release: 0.6    # burst ends when it falls below this share of twitch_effort
@@ -113,7 +126,7 @@ emg:
   twitch_extensor_max: 0.18  # extensors must stay under this: a co-contraction is never a twitch
   twitch_max_gap_ms: 150 # a twitch / double twitch whose window spans a read gap longer than this is refused (nothing emitted)
   twitch_double_ms: 600  # second onset within this of the first = double twitch
-  twitch_refractory_ms: 300  # after an emitted twitch / double, bursts are ignored this long
+  twitch_refractory_ms: 300  # after an emitted twitch / double, no burst becomes a twitch this long (emg.burst_onset still fires)
   # Calibration profile = data/profiles/<name>.json plus the optional overrides below.
   # `default` is the forearm profile. Select another with `profile:` here or build_emg(profile=).
   # Add `jaw` (item 4b) by filling in its overrides and recording a jaw calibration take.
@@ -167,6 +180,9 @@ safety:
   # With EMG configured, no motion starts (and a moving arm stops) unless the newest EMG
   # sample is younger than this: the brace / open-hand stop must be live to move.
   emg_max_age_ms: 300
+  # No squeeze answer (request or rule) and no rule approval of any kind begins within this
+  # of the last brace, open hand (moving or not) or burst stop. Floor 3.0: only raise it.
+  after_stop_s: 3.0
   # Operator gripper release (SAFETY REVIEW, h2m/app.py::release_gripper): opens the
   # gripper alone, outside any plan. OFF by default: POST /api/gripper/release answers
   # 403 and the app refuses. When on: only with the arm READY, at one of these taught
@@ -191,10 +207,11 @@ selection:
   # a rule. Off until the bench shows twitches do not come out of startles.
   # Only the literal true enables it.
   enabled: false
-  reaction_s: 0.7        # a select begins >= this after the UI ack of the card; a confirm >= this after the announcement (floor 0.3)
-  require_ack: true      # the reaction clock starts at POST /api/selection/ack for that exact card; no ack = refused. false only for headless tests / scanning runs
+  reaction_s: 0.7        # a select begins >= this after the UI ack of the card; a confirm >= this after the announcement finished playing (and its ack) (floor 0.3)
+  require_ack: true      # the reaction clock starts at POST /api/selection/ack for that exact card (the select needs a fresh ack of "confirm?"); no ack = refused. false only for headless tests / scanning runs
+  announce_max_s: 10.0   # the "confirm?" question must finish playing within this (cap 30), else the select is undone; voice off = no motion card can be confirmed
   after_veto_s: 3.0      # no select or confirm begins within this of any brace or open hand, swallowed ones too (floor 3.0); a refusal re-highlights
-  confirm_s: 8.0         # an unanswered "confirm?" goes back to the menu after this (cap 30)
+  confirm_s: 8.0         # an unanswered "confirm?" goes back to the menu this long after the announcement (or after the select if it was never announced) (cap 30)
   mode: intent           # intent (ranked cards, Muse upgrade) | scanning (fixed scene order, every option: the baseline)
   cards: 3               # intent mode shows this many (at most 3)
   muse: true             # intent mode asks Muse Spark to rank (needs MODEL_API_KEY); false = deterministic ranking only
@@ -268,7 +285,7 @@ demo:
   sample_dir: data/demo  # bundled synthetic incidents served by `h2m demo`
   request: hand me the cup
   beat_s: 1.2            # pause between beats so a viewer can follow
-  approve_after_s: 2.0   # scripted operator reads the rule card (never under 0.5 s)
+  approve_after_s: 3.0   # scripted operator reads the rule card (never under 0.5 s; an approval within safety.after_stop_s of the brace is refused)
   brace_zone: laptop     # the synthetic brace fires as the carried cup reaches this zone ...
   brace_margin: 0.0      # ... within this table distance of it (schematic estimate) ...
   brace_fallback_s: 4.0  # ... or this long into the carry, whichever is first

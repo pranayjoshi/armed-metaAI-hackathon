@@ -26,12 +26,12 @@ from fastapi.testclient import TestClient
 
 import h2m.app as app_mod
 from h2m.core import load_config, now
-from h2m.intent import SparkClient
+from h2m.intent import Candidate, SparkClient
 from h2m.learning import RuleProposal
 from h2m.robot import ArmState
 from h2m.robot.skills import plan_home
 from h2m.rules import Rule
-from h2m.selection import INPUTS, MODES, Selection
+from h2m.selection import INPUTS, INTENT, MODES, Selection
 from h2m.sensors import emg
 from h2m.server import create_app
 from tests import test_app_embodied as base
@@ -71,6 +71,7 @@ def enable(h, **over):
     sel = {**h.cfg["selection"], "enabled": True, "require_ack": False, **over}
     h._build_selection({**h.cfg, "selection": sel})
     h.ranker.client = None  # no Muse unless a test mocks it
+    h.say_s = 0.05  # each fake `say` plays briefly, so an announcement finishes
     return h
 
 
@@ -313,6 +314,169 @@ def test_a_brace_while_asking_refuses_the_card(h):
     h.log.emit("emg.brace", onset_t=now())
     assert menu.confirming is None and ids(menu) == PICKS[1:]
     assert h.arm.state is ArmState.READY and not started(h)
+
+
+# ── review 2, item 1: the confirm clock starts when the question finished ──────
+def unselected(h):
+    return kinds(h, "selection.unselected")
+
+
+def test_N1_nothing_confirms_while_the_question_is_still_playing(h):
+    """`say` is non-blocking: the confirm clock must start when the question finished
+    playing, not when it was spawned. A burst 0.7 s after the select, with the question
+    still playing, is refused; the clock starts at the end of the speech."""
+    h.say_s = 1.0
+    menu = show(h)
+    t_select = now()
+    assert twitch(h)["kind"] == "selection.select"
+    assert wait(lambda: h.embodied.speech.speaking())
+    time.sleep(0.75)
+    assert h.embodied.speech.speaking() and math.isinf(menu.announce_t)
+    n = len(answers(h))
+    h.log.emit("emg.twitch", held_ms=200, detect_ms=0)  # onset select + 0.75: question on
+    assert wait(lambda: len(answers(h)) > n)
+    assert not answers(h)[-1]["ok"] and "still asking" in answers(h)[-1]["detail"]
+    assert announced(menu)
+    assert not h.embodied.speech.speaking()
+    assert menu.announce_t - t_select >= 0.95  # the end of the speech, not its start
+    assert not started(h) and h.pending is None
+    assert twitch(h)["ok"] and started(h)  # reaction_s after the end: confirms
+
+
+@pytest.mark.parametrize("how", ["voice_off", "say_missing"])
+def test_N2_an_unspoken_announcement_undoes_the_select(h, how):
+    """Voice output off, or `say` missing: the question is never heard, so the select is
+    undone and no twitch can confirm the card."""
+    if how == "voice_off":
+        h.embodied.speech.enabled = False
+    else:
+        def missing(argv):
+            raise OSError("no say")
+        h.embodied.speech._spawn = missing
+    menu = show(h)
+    assert twitch(h)["kind"] == "selection.select"
+    assert wait(lambda: unselected(h))
+    assert menu.confirming is None and math.isinf(menu.announce_t)
+    assert "aloud" in unselected(h)[-1]["reason"] and "aloud" in h.reply
+    assert not kinds(h, "selection.announced") and h.spoken == []
+    acc = twitch(h)  # the next twitch is a fresh select, never a confirm
+    assert acc["kind"] == "selection.select"
+    time.sleep(0.2)
+    assert not started(h) and h.pending is None and h.arm.state is ArmState.READY
+
+
+def test_N3_a_failing_announcement_unselects_instead_of_pinning_confirm(h, monkeypatch):
+    def boom(text):
+        raise RuntimeError("say failed")
+
+    monkeypatch.setattr(h, "_say", boom)
+    menu = show(h)
+    assert twitch(h)["kind"] == "selection.select"
+    assert wait(lambda: unselected(h))
+    assert menu.confirming is None and "RuntimeError" in unselected(h)[-1]["reason"]
+    assert h.selection.menu is menu and not started(h)
+
+
+def test_a_question_cut_off_by_other_speech_undoes_the_select(h):
+    h.say_s = 0.4
+    menu = show(h)
+    assert twitch(h)["kind"] == "selection.select"
+    assert wait(lambda: h.embodied.speech.speaking())
+    h._say("Something else entirely.")  # replaces the question mid-sentence
+    assert wait(lambda: unselected(h))
+    assert "cut off" in unselected(h)[-1]["reason"] and menu.confirming is None
+    assert not kinds(h, "selection.announced") and not started(h)
+
+
+def test_a_question_that_never_finishes_is_undone_at_the_cap(h):
+    h.say_s = None  # plays until cut off
+    h.selection_cfg = {**h.selection_cfg, "announce_max_s": 0.3}
+    menu = show(h)
+    assert twitch(h)["kind"] == "selection.select"
+    assert wait(lambda: unselected(h))
+    assert "too long" in unselected(h)[-1]["reason"] and menu.confirming is None
+    assert math.isinf(menu.announce_t) and not started(h)
+
+
+def test_a_stop_while_the_question_plays_never_announces_it(h):
+    h.say_s = 1.0
+    menu = show(h)
+    assert twitch(h)["kind"] == "selection.select"
+    assert wait(lambda: h.embodied.speech.speaking())
+    h.stop("stop")  # cuts the speech off and bumps the epoch
+    time.sleep(0.2)
+    assert not kinds(h, "selection.announced") and math.isinf(menu.announce_t)
+    assert not started(h)
+
+
+def base_card(card_id):
+    kind, target = card_id.split(":")
+    return Candidate(card_id, kind, f"Bring {target}", "maybe", "fallback",
+                     {"verb": kind, "object_id": target}, (kind, {"object": target}), target)
+
+
+def test_review4_a_confirm_never_announced_lapses_confirm_s_after_the_select():
+    """Item 4: a "confirm?" whose announcement never finished still lapses."""
+    sel = Selection(INTENT, require_ack=False, confirm_s=8.0)
+    cards = [base_card("pick_place:cup")]
+    sel.show(cards, "fallback", 0.0)
+    ticket, _, _ = sel.take("twitch", 1.0, 1.0)
+    assert ticket is not None and sel.menu.confirming is not None
+    assert math.isinf(sel.menu.announce_t) and sel.menu.select_t == 1.0
+    assert sel.expire(8.9) == []
+    [(kind, data)] = sel.expire(9.1)
+    assert kind == "selection.lapsed" and sel.menu.confirming is None
+
+
+def test_require_ack_the_confirm_needs_a_fresh_ack_and_counts_from_it(h):
+    """With require_ack the select is a new highlight: the UI must ack the "confirm?"
+    rendering, and the confirm clock is max(announcement end, ack) + reaction_s."""
+    enable(h, require_ack=True)
+    menu = show(h)
+    assert h.selection_ack(menu.highlighted.id, menu.id, menu.hl)[0]
+    menu.highlighted_t -= 5
+    menu.ack_t -= 5
+    hl = menu.hl
+    h.log.emit("emg.twitch", held_ms=200, detect_ms=650)
+    assert wait(lambda: answers(h)) and answers(h)[-1]["kind"] == "selection.select"
+    assert announced(menu)
+    assert menu.hl == hl + 1 and menu.ack_t is None  # the select cleared the ack
+    menu.announce_t -= 5  # the question ended long ago ...
+    n = len(answers(h))
+    h.log.emit("emg.twitch", held_ms=200, detect_ms=650)
+    assert wait(lambda: len(answers(h)) > n)
+    assert "has not shown the question" in answers(h)[-1]["detail"]  # ... but no ack
+    assert h.selection_ack(menu.highlighted.id, menu.id, menu.hl)[0]
+    n = len(answers(h))
+    h.log.emit("emg.twitch", held_ms=200, detect_ms=650)  # began before the ack
+    assert wait(lambda: len(answers(h)) > n)
+    assert "too soon after I asked" in answers(h)[-1]["detail"]
+    assert h.selection_snapshot()["accept_in_s"] > 0
+    menu.ack_t -= 2
+    n = len(answers(h))
+    h.log.emit("emg.twitch", held_ms=200, detect_ms=650)
+    assert wait(lambda: len(answers(h)) > n)
+    assert answers(h)[-1]["ok"] and started(h)
+
+
+def test_H1_an_ack_is_pinned_to_the_highlight_generation(h):
+    """A late ack of the menu rendering (same card id) must not ack the "confirm?"
+    rendering that replaced it."""
+    enable(h, require_ack=True)
+    menu = show(h)
+    drawn = menu.hl  # the UI drew this generation and sent its ack ...
+    assert h.selection_ack(menu.highlighted.id, menu.id, drawn)[0]
+    menu.highlighted_t -= 5
+    menu.ack_t -= 5
+    h.log.emit("emg.twitch", held_ms=200, detect_ms=650)
+    assert wait(lambda: answers(h)) and announced(menu)
+    # ... and a duplicate of it arrives after the select bumped the generation.
+    ok, why = h.selection_ack(menu.highlighted.id, menu.id, drawn)
+    assert not ok and "highlight changed" in why and menu.ack_t is None
+    for bad in (True, "2", 2.0):
+        assert not h.selection_ack(menu.highlighted.id, menu.id, bad)[0]
+    assert h.selection_ack(menu.highlighted.id, menu.id, menu.hl)[0]
+    assert menu.ack_t is not None
 
 
 # ── accept ─────────────────────────────────────────────────────────────────────
@@ -667,8 +831,44 @@ def test_open_hand_during_a_card_motion_freezes(h):
     assert ab["outcome"] == "stopped" and ab["counts"]["open_hand"] == 1
 
 
-# ── fix 6: a twitch-band burst onset freezes a moving arm ──────────────────────
+# ── fix 6: a twitch-band burst onset freezes a moving arm (emg.burst_freeze) ───
+def burst_freeze_on(h):
+    h.burst_freeze = True  # what emg.burst_freeze: true sets (after a bench session)
+    return h
+
+
+def test_burst_freeze_ships_off_and_selection_alone_does_not_enable_it(h):
+    """Review item 3 (and test_review4): with the shipped config a burst onset (the
+    person grips their cup) neither stops a moving arm nor feeds the learner, with
+    selection on or off."""
+    assert load_config()["emg"]["burst_freeze"] is False
+    assert h.selection_enabled and h.burst_freeze is False
+    assert h.arm.execute(plan_home(h.arm.poses))[0] and h.arm.state is ArmState.MOVING
+    h.log.emit("emg.burst_onset", onset_t=now())
+    assert h.arm.state is ArmState.MOVING
+    assert not kinds(h, "incident.triggered") and h.learner._queue.empty()
+
+
+@pytest.mark.parametrize("value", ["true", 1, "yes"])
+def test_only_the_literal_true_enables_the_burst_freeze(h2m, value):
+    cfg = {**h2m.cfg, "emg": {**h2m.cfg["emg"], "source": "off", "burst_freeze": value}}
+    assert app_mod.H2M(cfg).burst_freeze is False
+    cfg["emg"]["burst_freeze"] = True
+    assert app_mod.H2M(cfg).burst_freeze is True
+
+
+def test_a_retwitch_after_a_card_carry_starts_does_not_latch_a_stop(h):
+    """N4: a "did it register?" re-twitch while the confirmed carry moves. Shipped
+    config: the burst onset is ignored, the carry continues."""
+    show(h)
+    assert accept(h)["ok"] and h.arm.state is ArmState.MOVING
+    h.log.emit("emg.burst_onset", onset_t=now())
+    assert h.arm.state is ArmState.MOVING
+    assert not kinds(h, "incident.triggered")
+
+
 def test_burst_onset_while_moving_freezes_first_and_latches(h, monkeypatch):
+    burst_freeze_on(h)
     assert h.arm.execute(plan_home(h.arm.poses))[0] and h.arm.state is ArmState.MOVING
     order = []
     real_stop = h.arm.stop_if_active
@@ -697,14 +897,45 @@ def test_burst_onset_while_moving_freezes_first_and_latches(h, monkeypatch):
     assert h.arm.execute(plan_home(h.arm.poses))[0]
 
 
-def test_burst_onset_with_a_plan_in_flight_latches_a_stop(h):
+def test_burst_onset_with_a_plan_in_flight_drops_it_without_latching(h):
+    """Review item 3: a plan in flight on a READY arm (compile, gate, handover recheck)
+    is dropped through the request epoch; no stop is latched."""
+    burst_freeze_on(h)
+    epoch = h._epoch
     with h._plan_in_flight():
         h.log.emit("emg.burst_onset", onset_t=now())
-        assert h.arm.state is ArmState.STOPPED
-        assert not h.arm.execute(plan_home(h.arm.poses))[0]
+        assert h.arm.state is ArmState.READY and h._epoch > epoch
+        ok, why = h.arm.execute(plan_home(h.arm.poses), still_wanted=lambda: not h._stale(epoch))
+        assert not ok and "cancelled" in why  # the in-flight plan never starts
+    assert kinds(h, "intent.cancelled")[-1]["reason"] == app_mod.BURST_DROP
+    assert not kinds(h, "incident.triggered")
+    assert h.arm.execute(plan_home(h.arm.poses))[0]  # no reset + arm needed
+
+
+def test_burst_onset_stops_a_plan_that_starts_between_its_check_and_the_drop(h, monkeypatch):
+    """The in-flight plan passes its epoch check and starts right after the burst's first
+    check-and-stop: the second check-and-stop finds it MOVING and freezes it (latched)."""
+    burst_freeze_on(h)
+    real_stop = h.arm.stop_if_active
+    calls = []
+
+    def stop_if_active(reason, plan_in_flight=False):
+        stopped = real_stop(reason, plan_in_flight=plan_in_flight)
+        calls.append((reason, plan_in_flight, stopped))
+        if len(calls) == 1:
+            assert h.arm.execute(plan_home(h.arm.poses))[0]  # lands in the gap
+        return stopped
+
+    monkeypatch.setattr(h.arm, "stop_if_active", stop_if_active)
+    with h._plan_in_flight():
+        h.log.emit("emg.burst_onset", onset_t=now())
+    assert [c[1:] for c in calls] == [(False, False), (False, True)]  # never a READY latch
+    assert h.arm.state is ArmState.STOPPED and h.arm.reason == app_mod.BURST_STOP
+    assert not h.arm.execute(plan_home(h.arm.poses))[0]  # latched until reset + arm
 
 
 def test_burst_onset_on_an_idle_arm_changes_nothing(h):
+    burst_freeze_on(h)
     menu = show(h)
     h.on_utterance("hand me the block", source="typed")
     pending, epoch = h.pending, h._epoch
@@ -715,6 +946,7 @@ def test_burst_onset_on_an_idle_arm_changes_nothing(h):
 
 
 def test_burst_onset_during_a_card_motion_freezes_and_ends_the_task(h):
+    burst_freeze_on(h)
     show(h)
     assert accept(h)["ok"] and h.arm.state is ArmState.MOVING
     run(h, 0.5)
@@ -944,15 +1176,20 @@ def test_ui_selection_endpoints_are_tokened_pinned_acked_and_two_step(h):
     assert r.status_code == 200 and "confirm" in r.json()["detail"], r.json()
     sel = c.get("/api/selection").json()
     assert sel["confirming"] == "pick_place:ball" and not started(h)
+    assert not sel["acked"] and sel["accept_in_s"] is None  # "confirm?" is a new highlight
+    r = c.post(url, headers=GOOD, json=ball)
+    assert r.status_code == 409 and "has not shown the question" in r.json()["detail"]
+    assert c.post(ack, headers=GOOD, json=ball).status_code == 200
     r = c.post(url, headers=GOOD, json=ball)
     assert r.status_code == 409 and "too soon after I asked" in r.json()["detail"]
     h.selection.menu.announce_t -= 1.0
+    h.selection.menu.ack_t -= 1.0
     r = c.post(url, headers=GOOD, json=ball)
     assert r.status_code == 200, r.json()
     [s] = started(h)
     assert s["object_id"] == "ball" and s["confirmed_by"] == "ui_card"
     counts = h.selection.task.counts
-    assert counts["ui_step"] == 1 and counts["ui_dismiss"] == 2 and counts["ui_accept"] == 7
+    assert counts["ui_step"] == 1 and counts["ui_dismiss"] == 2 and counts["ui_accept"] == 8
     assert c.post("/api/selection/mode", headers=GOOD, json={"mode": "x"}).status_code == 400
     assert c.post("/api/selection/mode", json={"mode": "scanning"}).status_code == 403
     assert c.post("/api/selection/mode", headers=GOOD, json={"mode": "scanning"}).status_code == 200

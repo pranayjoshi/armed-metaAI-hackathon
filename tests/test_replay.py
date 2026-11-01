@@ -60,7 +60,8 @@ def fast_cfg() -> dict:
     return cfg
 
 
-FAST = ScenarioSettings(beat_s=0.05, approve_after_s=0.5, step_timeout_s=20.0)
+# approve_after_s past the app's 3 s after-stop hold-off: no rule approval within 3 s of a stop.
+FAST = ScenarioSettings(beat_s=0.05, approve_after_s=3.1, step_timeout_s=20.0)
 
 
 def client(library: ReplayLibrary, scenario=None, base=LOCAL) -> TestClient:

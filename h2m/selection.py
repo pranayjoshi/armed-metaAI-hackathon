@@ -10,16 +10,22 @@ Inputs (``INPUTS``), each counted on the open task whatever it does:
 
 - ``twitch`` / ``ui_accept`` on the menu: SELECT the highlighted card. Only if the input
   began at least ``reaction_s`` after that card was highlighted and (``require_ack``) after
-  the UI acknowledged rendering that exact card (``ack``; no ack refuses), at least
-  ``after_veto_s`` after the last brace or open hand (including the ones swallowed by the
-  refractory; a refusal re-highlights), and only if the caller's pins (menu id, card id,
-  arming) still match. A motion card is only selected: the app announces it and the card
-  shows "confirm?". A ``say`` card is taken at once (it never moves the arm).
+  the UI acknowledged rendering that exact card in that highlight generation (``ack``;
+  no ack refuses), at least ``after_veto_s`` after the last brace or open hand (including
+  the ones swallowed by the refractory; a refusal re-highlights), and only if the caller's
+  pins (menu id, card id, arming) still match. A motion card is only selected: the app
+  announces it and the card shows "confirm?". With ``require_ack`` the select is a new
+  highlight (the ack clears: the UI acks the "confirm?" rendering). A ``say`` card is
+  taken at once (it never moves the arm).
 - ``twitch`` / ``ui_accept`` while a card asks "confirm?": take it, only if the input began
-  at least ``reaction_s`` after the announcement finished and within ``confirm_s`` of it.
-  One card at a time: while a card is being checked nothing else is taken. (The app
-  answers the gate's question with it only when that question is the plain
-  confirmation; ``finish(answered=False)`` records a request left for its own answer.)
+  at least ``reaction_s`` after the later of the announcement's end (``announced``: the
+  app calls it once the speech has finished playing, never when it was started) and
+  (``require_ack``) the UI's ack of the "confirm?" rendering, and within ``confirm_s`` of
+  the announcement's end. Before ``announced`` nothing confirms; a question never
+  announced lapses ``confirm_s`` after the select. One card at a time: while a card is
+  being checked nothing else is taken. (The app answers the gate's question with it only
+  when that question is the plain confirmation; ``finish(answered=False)`` records a
+  request left for its own answer.)
 - ``double_twitch`` / ``ui_step``: move the cursor to the next card (wraps); while a card
   asks "confirm?", go back to the menu instead (same card, highlighted afresh).
 - ``brace`` / ``open_hand`` (idle arm only) / ``ui_dismiss``: remove the highlighted card.
@@ -28,8 +34,11 @@ Inputs (``INPUTS``), each counted on the open task whatever it does:
   an open hand together: within ``veto_refractory_s`` of the last one, a second veto is
   counted but never refuses a second card.
 
-Every new highlight (shown, stepped to, dismissed onto, refused, back from "confirm?")
-clears the UI acknowledgement: the reaction clock restarts from the next ``ack``.
+Every new highlight (shown, stepped to, dismissed onto, refused, back from "confirm?",
+and with ``require_ack`` the select itself) bumps the highlight generation (``hl``) and
+clears the UI acknowledgement: the reaction clock restarts from the next ``ack``. An ack
+that names a generation (``highlight``) counts only for that generation, so a late ack
+of an earlier rendering of the same card never acks the current one.
 
 Modes: ``intent`` (up to three ranked cards; a Muse upgrade may reorder them only before
 the person's first input on the menu, and never changes the highlighted card) and
@@ -91,7 +100,8 @@ class Menu:
     ack_t: float | None = None  # when the UI acknowledged rendering the highlighted card
     ack_card: str | None = None
     confirming: Candidate | None = None  # selected motion card asking "confirm?"
-    announce_t: float = math.inf  # when its announcement finished (inf: not yet)
+    announce_t: float = math.inf  # when its announcement finished playing (inf: not yet)
+    select_t: float = math.inf  # when it was selected (lapses from here if never announced)
 
     @property
     def highlighted(self) -> Candidate | None:
@@ -288,18 +298,28 @@ class Selection:
         return out[: self.k] if self.mode == INTENT else out
 
     # ── inputs ───────────────────────────────────────────────────────────────
-    def ack(self, card_id: Any, t: float, menu_id: Any) -> tuple[bool, str]:
+    def ack(
+        self, card_id: Any, t: float, menu_id: Any, highlight: Any = None
+    ) -> tuple[bool, str]:
         """The UI rendered ``card_id`` (highlighted) on ``menu_id``; ``t`` is when the
-        acknowledgement arrived. Only the first ack of a highlight counts. Not an input."""
+        acknowledgement arrived. ``highlight`` (the snapshot's ``highlight``, when sent)
+        pins the highlight generation that was drawn: an ack for an earlier generation is
+        refused. Only the first ack of a highlight counts. Not an input."""
         with self._lock:
             menu = self.menu
             if not isinstance(card_id, str) or isinstance(menu_id, bool) or not isinstance(
                 menu_id, int
             ):
                 return False, "send the card id and the menu id you rendered"
+            if highlight is not None and (
+                isinstance(highlight, bool) or not isinstance(highlight, int)
+            ):
+                return False, "highlight must be the integer from the selection snapshot"
             why = self._menu_problem(menu, menu_id, card_id)
             if why is not None or menu is None:
                 return False, str(why)
+            if highlight is not None and highlight != menu.hl:
+                return False, "that highlight changed; render the cards again"
             if menu.ack_t is None or menu.ack_card != card_id:
                 menu.ack_t, menu.ack_card = float(t), card_id
             return True, "acknowledged"
@@ -365,13 +385,21 @@ class Selection:
                     why = "too soon after a refusal; look at the card again"
                     reset = True
                 elif menu.confirming is not None:
-                    if not math.isfinite(menu.announce_t):
+                    clock = menu.announce_t
+                    if not math.isfinite(clock):
                         why = "I'm still asking; wait for the question"
-                    elif onset > menu.announce_t + self.confirm_s:  # type: ignore[operator]
+                    elif onset > clock + self.confirm_s:  # type: ignore[operator]
                         why = "that question lapsed; look at the card again"
                         reset = True
-                    elif onset < menu.announce_t + self.reaction_s:  # type: ignore[operator]
-                        why = "too soon after I asked; twitch again to confirm"
+                    elif self.require_ack and (
+                        menu.ack_t is None or menu.ack_card != card.id
+                    ):
+                        why = "the screen has not shown the question yet"
+                    else:
+                        if self.require_ack and menu.ack_t is not None:
+                            clock = max(clock, menu.ack_t)
+                        if onset < clock + self.reaction_s:  # type: ignore[operator]
+                            why = "too soon after I asked; twitch again to confirm"
                 else:
                     clock = menu.highlighted_t
                     if self.require_ack:
@@ -388,7 +416,9 @@ class Selection:
                     self._unselect(menu, t)
                 return None, str(why), self._refused("accept", name, str(why))
             if menu.confirming is None and card.kind not in ONE_STEP:
-                menu.confirming, menu.announce_t = card, math.inf
+                if self.require_ack:  # "confirm?" is a new rendering: the UI acks it again
+                    self._highlight(menu, t)
+                menu.confirming, menu.announce_t, menu.select_t = card, math.inf, float(t)
                 data = {**self._ids(menu), "by": name, "ok": True, "card": card.id,
                         "label": card.label}
                 ticket = Ticket(menu.id, menu.task_id, card, name, SELECT)
@@ -396,32 +426,51 @@ class Selection:
             menu.taken = card
             return Ticket(menu.id, menu.task_id, card, name, ACCEPT), "taken", []
 
+    def selected(self, ticket: Ticket) -> bool:
+        """``ticket``'s card still asks "confirm?" and has not been announced yet."""
+        with self._lock:
+            menu = self.menu
+            return (
+                menu is not None
+                and menu.id == ticket.menu_id
+                and menu.confirming is ticket.card
+                and not math.isfinite(menu.announce_t)
+            )
+
     def announced(self, ticket: Ticket, t: float, text: str) -> Events:
-        """The selected card's question was said: the confirm clock starts at ``t``."""
+        """The selected card's question finished playing at ``t``: the confirm clock
+        starts there (the app calls this after the speech ended, never when it began)."""
         with self._lock:
             menu = self.menu
             if menu is None or menu.id != ticket.menu_id or menu.confirming is not ticket.card:
                 return []
+            if math.isfinite(menu.announce_t):
+                return []  # announced once; a second call never moves the clock
             menu.announce_t = float(t)
             return [("selection.announced", {**self._ids(menu), "card": ticket.card.id,
                                              "text": text})]
 
-    def unselect(self, ticket: Ticket, t: float) -> Events:
-        """The selection could not be announced (cancelled meanwhile): back to the menu."""
+    def unselect(self, ticket: Ticket, t: float, reason: str = "") -> Events:
+        """The selection could not be announced (not spoken, failed, cancelled meanwhile):
+        back to the menu, the card highlighted afresh."""
         with self._lock:
             menu = self.menu
             if menu is None or menu.id != ticket.menu_id or menu.confirming is not ticket.card:
                 return []
             self._unselect(menu, t)
-            return []
+            return [("selection.unselected", {**self._ids(menu), "card": ticket.card.id,
+                                              "reason": reason})]
 
     def expire(self, t: float) -> Events:
-        """A "confirm?" left unanswered for ``confirm_s`` goes back to the menu."""
+        """A "confirm?" left unanswered for ``confirm_s`` after its announcement goes back
+        to the menu; one never announced lapses ``confirm_s`` after the select."""
         with self._lock:
             menu = self.menu
             if menu is None or menu.confirming is None or menu.taken is not None:
                 return []
-            if not t > menu.announce_t + self.confirm_s:
+            start = menu.announce_t if math.isfinite(menu.announce_t) else menu.select_t
+            # Neither time set cannot happen through take(); if it does, lapse now.
+            if math.isfinite(start) and not t > start + self.confirm_s:
                 return []
             card = menu.confirming
             self._unselect(menu, t)
@@ -486,7 +535,7 @@ class Selection:
                 self._last_veto_t = t
             if why is not None or menu is None:
                 return False, str(why), self._refused("dismiss", name, str(why))
-            menu.confirming, menu.announce_t = None, math.inf
+            menu.confirming, menu.announce_t, menu.select_t = None, math.inf, math.inf
             card = menu.cards.pop(menu.cursor)
             data = {**self._ids(menu), "by": name, "ok": True, "card": card.id,
                     "remaining": len(menu.cards)}
@@ -596,8 +645,11 @@ class Selection:
             )
             accept_in: float | None = None
             if menu is not None and confirming is not None:
-                if math.isfinite(menu.announce_t):
-                    accept_in = round(max(0.0, menu.announce_t + self.reaction_s - t), 3)
+                if math.isfinite(menu.announce_t) and (acked or not self.require_ack):
+                    clock = menu.announce_t
+                    if self.require_ack and menu.ack_t is not None:
+                        clock = max(clock, menu.ack_t)
+                    accept_in = round(max(0.0, clock + self.reaction_s - t), 3)
             elif menu is not None and (acked or not self.require_ack):
                 ack = menu.ack_t if menu.ack_t is not None else -math.inf
                 clock = max(menu.highlighted_t, ack)
@@ -632,7 +684,7 @@ class Selection:
         menu.ack_t, menu.ack_card = None, None
 
     def _unselect(self, menu: Menu, t: float) -> None:
-        menu.confirming, menu.announce_t = None, math.inf
+        menu.confirming, menu.announce_t, menu.select_t = None, math.inf, math.inf
         self._highlight(menu, t)
 
     def _count(self, name: str) -> None:
