@@ -8,4 +8,5 @@
 | `Control loop is running slower than target FPS (60 Hz)` | Cameras deliver 30 fps. Use `--fps=30` and `--display_compressed_images=true`, or drop `--display_data`. |
 | Frames are black | Lens cap on, hub out of power or bandwidth, or camera still warming up. |
 | `conda: no such file` after reinstalling conda | Open a new shell (`exec zsh`) so it loads the current `conda init` block. |
+| `'datasets' is required but not installed` | Recording needs the dataset extra: `pip install -e "/path/to/lerobot[dataset,viz,feetech]"`. |
 | `hf: command not found` | Activate the env first: `conda activate lerobot`. |
