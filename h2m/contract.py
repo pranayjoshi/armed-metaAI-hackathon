@@ -19,14 +19,20 @@ class Verb(StrEnum):
     PICK_PLACE = "pick_place"  # pick the object and put it in the tray
     POINT = "point"  # point at the object
     HOME = "home"
+    GESTURE = "gesture"  # small taught motion near home, empty gripper (nod, tilt, ...)
+    PLACE_NEAR_USER = "place_near_user"  # put the held object on the marked spot near the user
+    SAY = "say"  # speak; no motion
     STOP = "stop"
     CANCEL = "cancel"
     CONFIRM = "confirm"
     UNKNOWN = "unknown"
 
 
-MOTION_VERBS = frozenset({Verb.PICK_PLACE, Verb.POINT, Verb.HOME})
+MOTION_VERBS = frozenset(
+    {Verb.PICK_PLACE, Verb.POINT, Verb.HOME, Verb.GESTURE, Verb.PLACE_NEAR_USER}
+)
 TARGETED_VERBS = frozenset({Verb.PICK_PLACE, Verb.POINT})
+CARRY_VERBS = frozenset({Verb.PICK_PLACE, Verb.PLACE_NEAR_USER})  # move a held or grasped object
 
 _ids = itertools.count(1)
 

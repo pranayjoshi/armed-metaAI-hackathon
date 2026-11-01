@@ -7,10 +7,15 @@ import json
 import numpy as np
 import pytest
 
+import h2m.incident as incident_mod
 from h2m.incident import (
     FALLBACK_SAY,
+    SAM_MODEL,
     IncidentBuffer,
+    MuseClient,
     explain,
+    parse_sam_box,
+    sam_label,
     select_keyframes,
     validate_explanation,
 )
@@ -188,3 +193,171 @@ def test_buffer_is_thread_safe():
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert not errors
+
+
+# --- SAM segment() against a fake HTTP layer (no network) -------------------------------
+
+MASK = "<|mask;x=0;y=0;c=0.9;data=4,4,!a|b~<>c|>"  # payload with awkward characters
+IMG = np.zeros((100, 200, 3), np.uint8)  # h=100, w=200
+
+
+def sam_reply(text):
+    return {
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        ]
+    }
+
+
+class FakeResp:
+    def __init__(self, data, status=200):
+        self.data, self.status = data, status
+
+    def raise_for_status(self):
+        if self.status >= 400:
+            raise RuntimeError(f"HTTP {self.status}")
+
+    def json(self):
+        return self.data
+
+
+@pytest.fixture
+def sam_http(monkeypatch):
+    monkeypatch.setenv("MODEL_API_KEY", "sk-secret-123")
+    monkeypatch.delenv("H2M_SAM_MODEL", raising=False)
+    calls = []
+    state = {"resp": FakeResp(sam_reply("")), "exc": None}
+
+    def post(url, json=None, timeout=None, headers=None):
+        calls.append({"url": url, "json": json, "timeout": timeout, "headers": headers})
+        if state["exc"]:
+            raise state["exc"]
+        return state["resp"]
+
+    monkeypatch.setattr(incident_mod.httpx, "post", post)
+    return calls, state
+
+
+def test_segment_request_shape_and_box(sam_http):
+    calls, state = sam_http
+    state["resp"] = FakeResp(
+        sam_reply(f"<0f>0<|box;x1=10;y1=20;x2=59;y2=69;w=200;h=100;c=0.7|>{MASK}")
+    )
+    client = MuseClient({"base_url": "https://example.test/v1/", "sam_timeout_s": 3})
+    assert client.segment(SAM_MODEL, IMG, "laptop") == (10.0, 20.0, 60.0, 70.0)
+    (call,) = calls
+    assert call["url"] == "https://example.test/v1/responses" and call["timeout"] == 3.0
+    assert call["headers"] == {"Authorization": "Bearer sk-secret-123"}
+    body = call["json"]
+    assert body["model"] == "sam-3.1"
+    parts = body["input"][0]["content"]
+    assert parts[0] == {"type": "input_text", "text": "laptop"}
+    assert parts[1]["type"] == "input_image"
+    assert parts[1]["image_url"].startswith("data:image/jpeg;base64,")
+
+
+def test_segment_picks_most_confident_and_rescales(sam_http):
+    _, state = sam_http
+    # SAM saw a 400x200 image; ours is 200x100, so coordinates halve
+    text = (
+        "<0f>0<|box;x1=0;y1=0;x2=39;y2=39;w=400;h=200;c=0.4|>"
+        + MASK
+        + ",1<|box;x1=100;y1=40;x2=199;y2=139;w=400;h=200;c=0.9|>"
+        + MASK
+    )
+    state["resp"] = FakeResp(sam_reply(text))
+    assert MuseClient().segment(SAM_MODEL, IMG, "cup") == (50.0, 20.0, 100.0, 70.0)
+
+
+def test_segment_model_comes_from_config_or_env(sam_http, monkeypatch):
+    assert MuseClient().sam_model == "sam-3.1"
+    assert MuseClient({"sam_model": "sam-x"}).sam_model == "sam-x"
+    monkeypatch.setenv("H2M_SAM_MODEL", "sam-env")
+    assert MuseClient().sam_model == "sam-env"
+    assert MuseClient({"sam_model": "sam-x"}).sam_model == "sam-x"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "",  # no match is a valid empty result
+        "garbage",
+        "<0f>0<|box;x1=50;y1=50;x2=10;y2=10;w=200;h=100|>",  # inverted
+        "<0f>0<|box;x1=500;y1=500;x2=600;y2=600;w=200;h=100|>",  # outside the image
+        "<0f>0<|box;x1=1;y1=1;x2=9;y2=9;w=0;h=0|>",
+        "<0f>0<|box;x1=1;y1=1;x2=9;y2=9;w=200;h=100;c=7|>",  # confidence out of range
+    ],
+)
+def test_segment_rejects_bad_replies(sam_http, reply):
+    _, state = sam_http
+    state["resp"] = FakeResp(sam_reply(reply))
+    assert MuseClient().segment(SAM_MODEL, IMG, "laptop") is None
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        {"exc": TimeoutError("slow")},
+        {"exc": ConnectionError("down")},
+        {"resp": FakeResp({}, status=500)},
+        {"resp": FakeResp("not a dict")},
+        {"resp": FakeResp({"output": "bad"})},
+    ],
+)
+def test_segment_never_raises(sam_http, failure):
+    _, state = sam_http
+    state.update(failure)
+    assert MuseClient().segment(SAM_MODEL, IMG, "laptop") is None
+
+
+def test_segment_without_key_or_bad_input_makes_no_call(sam_http, monkeypatch):
+    calls, _ = sam_http
+    c = MuseClient()
+    assert c.segment(SAM_MODEL, IMG, None) is None
+    assert c.segment(SAM_MODEL, IMG, "") is None
+    assert c.segment(SAM_MODEL, IMG, "<0f>1<|box;1|>") is None  # would switch SAM prompt mode
+    assert c.segment(SAM_MODEL, None, "laptop") is None
+    assert c.segment(SAM_MODEL, np.zeros((0, 0, 3), np.uint8), "laptop") is None
+    monkeypatch.delenv("MODEL_API_KEY")
+    assert MuseClient().segment(SAM_MODEL, IMG, "laptop") is None
+    assert calls == []
+
+
+def test_segment_error_state_does_not_leak_key(sam_http):
+    _, state = sam_http
+    state["exc"] = RuntimeError("Bearer sk-secret-123 rejected")
+    c = MuseClient()
+    assert c.segment(SAM_MODEL, IMG, "laptop") is None
+    assert "sk-secret-123" not in (c.last_error or "")
+
+
+def test_sam_helpers():
+    assert sam_label("  red   cup ") == "red cup"
+    assert sam_label("a" * 200) is None and sam_label(5) is None
+    assert parse_sam_box("", (10, 10)) is None
+
+
+class RealClientWithFakeHttp(MuseClient):
+    """MuseClient whose chat and segment are real code paths except the HTTP layer."""
+
+    def chat(self, model, messages):
+        return json.dumps(GOOD)
+
+
+def test_explain_uses_segment_then_falls_back_to_detector_box(tmp_path, sam_http):
+    calls, state = sam_http
+    inc = make_incident(tmp_path).save(tmp_path, objects=[{"id": "laptop", "box": [1, 2, 3, 4]}])
+    state["resp"] = FakeResp(sam_reply(f"<0f>0<|box;x1=10;y1=20;x2=59;y2=69;w=320;h=240|>{MASK}"))
+    client = RealClientWithFakeHttp({"sam_model": "sam-cfg"})
+    exp = explain(inc, client)
+    assert exp.mask_source == "sam" and exp.source == "wonder"
+    assert calls[0]["json"]["model"] == "sam-cfg"  # model id comes from the client config
+    assert calls[0]["json"]["input"][0]["content"][0]["text"] == "laptop"
+    # SAM times out: the arm still gets an explanation and the detector box
+    state["exc"] = TimeoutError("slow")
+    exp = explain(inc, client)
+    assert exp.source == "wonder" and exp.mask_source == "box" and exp.mask_box == (1, 2, 3, 4)

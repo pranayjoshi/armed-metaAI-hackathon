@@ -3,6 +3,16 @@
 ASR runs locally: NVIDIA Parakeet TDT 0.6B v3 on MLX (200-320 ms per 1-2 s
 command on an M1 Pro), with mlx-whisper as the fallback. Audio never leaves
 the machine.
+
+Echo window: while the robot is speaking (``is_speaking``) and for ``echo_tail_ms``
+after, the mic hears the robot. Any utterance with audio from that window is tagged
+``echo: True`` in its metadata; the app acts on nothing from it except stop and cancel
+(so a spoken "stop" over the robot's voice still freezes the arm). Each frame carries
+its own capture-time tag, so an utterance is echo exactly when any of its audio is.
+An utterance in progress when the window closes is never discarded: it finishes
+naturally, tagged echo, so a "stop" overlapping the end of the robot's voice still
+reaches the app. Between utterances, the quiet echo pre-roll is dropped at the window
+edge so the person's next words start a clean (untagged) utterance.
 """
 
 from __future__ import annotations
@@ -57,7 +67,9 @@ def make_whisper() -> Transcriber:
 
 
 class EnergyVad:
-    """Adaptive-noise-floor voice activity detection with pre-roll."""
+    """Adaptive-noise-floor voice activity detection with pre-roll. Each frame may be
+    tagged (``echo``); ``echo`` on the VAD is the tag of the last finished utterance:
+    True when any of its frames, pre-roll included, was tagged."""
 
     def __init__(
         self,
@@ -72,31 +84,45 @@ class EnergyVad:
         self.start_ratio = start_ratio
         self.silence_frames = silence_end_ms // frame_ms
         self.max_frames = max_ms // frame_ms
-        self.preroll: deque[np.ndarray] = deque(maxlen=max(1, preroll_ms // frame_ms))
+        self.preroll: deque[tuple[np.ndarray, bool]] = deque(maxlen=max(1, preroll_ms // frame_ms))
         self.noise = 0.003
         self.active: list[np.ndarray] = []
+        self.active_echo = False  # a frame of the utterance being built was tagged
+        self.echo = False  # tag of the last finished utterance
         self.quiet = 0
         self.loud = 0
         self.level = 0.0
 
-    def push(self, frame: np.ndarray) -> np.ndarray | None:
+    def drop_idle_preroll(self) -> bool:
+        """Between utterances with no speech starting (``loud == 0``), drop the pre-roll:
+        it holds no speech, only quiet audio. Never touches an utterance in progress or
+        one about to start. Returns True if it dropped anything."""
+        if self.active or self.loud or not self.preroll:
+            return False
+        self.preroll.clear()
+        return True
+
+    def push(self, frame: np.ndarray, echo: bool = False) -> np.ndarray | None:
         """Feed one frame; returns a finished utterance when speech ends."""
         rms = float(np.sqrt(np.mean(frame**2)))
         self.level = rms
         speaking = rms > self.noise * self.start_ratio
         if not self.active:
-            self.preroll.append(frame)
+            self.preroll.append((frame, echo))
             self.loud = self.loud + 1 if speaking else 0
             if not speaking:
                 self.noise = 0.97 * self.noise + 0.03 * max(rms, 1e-4)
             if self.loud >= 3:  # ~90 ms of speech starts an utterance
-                self.active = list(self.preroll)
+                self.active = [f for f, _ in self.preroll]
+                self.active_echo = any(e for _, e in self.preroll)
                 self.quiet = 0
             return None
         self.active.append(frame)
+        self.active_echo = self.active_echo or echo
         self.quiet = 0 if speaking else self.quiet + 1
         if self.quiet >= self.silence_frames or len(self.active) >= self.max_frames:
             audio = np.concatenate(self.active)
+            self.echo, self.active_echo = self.active_echo, False
             self.active, self.loud = [], 0
             self.preroll.clear()
             return audio
@@ -105,9 +131,17 @@ class EnergyVad:
 
 class SpeechService:
     def __init__(
-        self, cfg: dict[str, Any], log: EventLog, on_utterance: Callable[[str, dict], None]
+        self,
+        cfg: dict[str, Any],
+        log: EventLog,
+        on_utterance: Callable[[str, dict], None],
+        is_speaking: Callable[[], bool] | None = None,
     ):
         self.cfg, self.log, self.on_utterance = cfg, log, on_utterance
+        self.is_speaking = is_speaking or (lambda: False)
+        self.echo_tail_s = float(cfg.get("echo_tail_ms", 500)) / 1000
+        self._echo_until = float("-inf")  # end of the current echo window
+        self._prev_echo = False
         self.rate = int(cfg.get("sample_rate_hz", 16000))
         self.vad = EnergyVad(
             self.rate,
@@ -118,7 +152,7 @@ class SpeechService:
         )
         self.transcriber: Transcriber | None = None
         self.backend: str | None = None
-        self._audio: queue.Queue[np.ndarray] = queue.Queue(maxsize=200)
+        self._audio: queue.Queue[tuple[np.ndarray, bool]] = queue.Queue(maxsize=200)
         self._stream: Any = None
         self.listening = False
         self.last_text = ""
@@ -167,33 +201,68 @@ class SpeechService:
         self.listening = True
         self.log.emit("speech.started", asr=self.backend)
         while self.listening:
-            frame = self._audio.get()
+            frame, frame_echo = self._audio.get()
             if self.muted:
                 continue
-            audio = self.vad.push(frame)
-            if audio is None:
-                continue
-            started = now()
-            try:
-                text = self.transcriber(audio, self.rate)
-            except Exception as exc:
-                self.log.emit("speech.error", detail=f"ASR failed: {exc}")
-                continue
-            self.last_latency_ms = round((now() - started) * 1000)
-            if text:
-                self.last_text = text
-                self.on_utterance(
-                    text,
-                    {
-                        "asr": self.backend,
-                        "asr_ms": self.last_latency_ms,
-                        "audio_s": round(len(audio) / self.rate, 2),
-                    },
-                )
+            self.handle_frame(frame, frame_echo)
+
+    def handle_frame(self, frame: np.ndarray, frame_echo: bool) -> None:
+        """One captured frame: VAD, then ASR and ``on_utterance`` when an utterance ends."""
+        audio, echo = self.push_frame(frame, frame_echo)
+        if audio is None or self.transcriber is None:
+            return
+        started = now()
+        try:
+            text = self.transcriber(audio, self.rate)
+        except Exception as exc:
+            self.log.emit("speech.error", detail=f"ASR failed: {exc}")
+            return
+        self.last_latency_ms = round((now() - started) * 1000)
+        if text:
+            self.last_text = text
+            self.on_utterance(
+                text,
+                {
+                    "asr": self.backend,
+                    "asr_ms": self.last_latency_ms,
+                    "audio_s": round(len(audio) / self.rate, 2),
+                    "echo": bool(echo),  # the app drops anything not tagged literally False
+                },
+            )
+
+    def in_echo_window(self, t: float) -> bool:
+        """True while the robot speaks and for echo_tail_s after. A failing check counts
+        as speaking (the utterance can then only stop or cancel, never confirm)."""
+        try:
+            speaking = bool(self.is_speaking())
+        except Exception:  # noqa: BLE001
+            speaking = True
+        if speaking:
+            self._echo_until = t + self.echo_tail_s
+            return True
+        return t < self._echo_until
+
+    def push_frame(self, frame: np.ndarray, echo: bool) -> tuple[np.ndarray | None, bool]:
+        """Feed one frame; ``echo`` is whether it was captured in the echo window.
+        Returns (finished utterance or None, whether any of its audio was echo).
+
+        Nothing heard is ever discarded at the window edge: an utterance in progress
+        finishes naturally and comes back tagged echo (the app then acts only on stop or
+        cancel in it). Only a quiet, echo-only pre-roll between utterances is dropped."""
+        if self._prev_echo and not echo:
+            self.vad.drop_idle_preroll()
+        self._prev_echo = echo
+        audio = self.vad.push(frame, echo)
+        if audio is None:
+            return None, False
+        return audio, self.vad.echo
 
     def _callback(self, indata, frames, time_info, status) -> None:  # noqa: ARG002
+        # Judged at capture time (a lock and a non-blocking poll), so a backlog in the
+        # queue can never make robot speech look like the person's.
+        echo = self.in_echo_window(now())
         try:
-            self._audio.put_nowait(indata[:, 0].copy())
+            self._audio.put_nowait((indata[:, 0].copy(), echo))
         except queue.Full:
             pass
 
@@ -215,7 +284,12 @@ class SpeechService:
         }
 
 
-def build_speech(cfg: dict[str, Any], log: EventLog, on_utterance) -> SpeechService | None:
+def build_speech(
+    cfg: dict[str, Any],
+    log: EventLog,
+    on_utterance,
+    is_speaking: Callable[[], bool] | None = None,
+) -> SpeechService | None:
     if cfg.get("source", "mic") == "off":
         return None
-    return SpeechService(cfg, log, on_utterance)
+    return SpeechService(cfg, log, on_utterance, is_speaking)

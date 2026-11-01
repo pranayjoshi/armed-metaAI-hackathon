@@ -18,6 +18,28 @@ poses:
   tray_release:
     taught: false
     joints: {shoulder_pan: 70, shoulder_lift: -10, elbow_flex: 30, wrist_flex: 65, wrist_roll: 0, gripper: 5}
+  # Marked spot near the user for place_near_user (never into the hand). PLACEHOLDERS.
+  handover_above:
+    taught: false
+    joints: {shoulder_pan: -60, shoulder_lift: -30, elbow_flex: 40, wrist_flex: 60, wrist_roll: 0, gripper: 5}
+  handover_release:
+    taught: false
+    joints: {shoulder_pan: -60, shoulder_lift: -10, elbow_flex: 30, wrist_flex: 65, wrist_roll: 0, gripper: 5}
+  # Carry-route via poses (see `routes:` below and configs/routes.yaml). PLACEHOLDERS.
+  via_left:
+    taught: false
+    joints: {shoulder_pan: 40, shoulder_lift: -35, elbow_flex: 45, wrist_flex: 65, wrist_roll: 0, gripper: 5}
+  via_high:
+    taught: false
+    joints: {shoulder_pan: 40, shoulder_lift: -60, elbow_flex: 70, wrist_flex: 55, wrist_roll: 0, gripper: 5}
+
+# Carry routes: taught via poses visited between the lift and the tray, in order.
+# Names match configs/routes.yaml; a route listed there but not here is never used.
+# `direct` is the plain plan (no via poses). Teach via poses with `h2m arm teach via_left`.
+routes:
+  direct: []
+  via_left: [via_left]
+  via_high: [via_high]
 
 slots:
   slot_1:
@@ -35,3 +57,28 @@ slots:
     above: {taught: false, joints: {shoulder_pan: 30, shoulder_lift: -20, elbow_flex: 30, wrist_flex: 70, wrist_roll: 0, gripper: 60}}
     grasp: {taught: false, joints: {shoulder_pan: 30, shoulder_lift: 0, elbow_flex: 20, wrist_flex: 75, wrist_roll: 0, gripper: 60}}
     point: {taught: false, joints: {shoulder_pan: 30, shoulder_lift: -40, elbow_flex: 45, wrist_flex: 70, wrist_roll: 0, gripper: 5}}
+
+# Gestures: short sequences of taught poses within a small envelope around `home`
+# (default 15 deg per joint, gripper unchanged). Run at low speed with an empty
+# gripper. EVERY STEP IS A PLACEHOLDER (taught: false): capture each by hand-guiding
+# the follower at teach time. The values below only show the intended shape.
+# Joint keys must be exactly the six arm joints; names are free-form labels.
+gestures:
+  nod:
+    - {name: nod_down, taught: false, joints: {shoulder_pan: 0, shoulder_lift: -90, elbow_flex: 90, wrist_flex: 72, wrist_roll: 0, gripper: 5}}
+    - {name: nod_up, taught: false, joints: {shoulder_pan: 0, shoulder_lift: -90, elbow_flex: 90, wrist_flex: 52, wrist_roll: 0, gripper: 5}}
+    - {name: nod_home, taught: false, joints: {shoulder_pan: 0, shoulder_lift: -90, elbow_flex: 90, wrist_flex: 60, wrist_roll: 0, gripper: 5}}
+  tilt:
+    - {name: tilt_left, taught: false, joints: {shoulder_pan: 0, shoulder_lift: -90, elbow_flex: 90, wrist_flex: 60, wrist_roll: 12, gripper: 5}}
+    - {name: tilt_home, taught: false, joints: {shoulder_pan: 0, shoulder_lift: -90, elbow_flex: 90, wrist_flex: 60, wrist_roll: 0, gripper: 5}}
+  shake:
+    - {name: shake_left, taught: false, joints: {shoulder_pan: 12, shoulder_lift: -90, elbow_flex: 90, wrist_flex: 60, wrist_roll: 0, gripper: 5}}
+    - {name: shake_right, taught: false, joints: {shoulder_pan: -12, shoulder_lift: -90, elbow_flex: 90, wrist_flex: 60, wrist_roll: 0, gripper: 5}}
+    - {name: shake_home, taught: false, joints: {shoulder_pan: 0, shoulder_lift: -90, elbow_flex: 90, wrist_flex: 60, wrist_roll: 0, gripper: 5}}
+  look_at_user:
+    - {name: look_user, taught: false, joints: {shoulder_pan: 0, shoulder_lift: -80, elbow_flex: 85, wrist_flex: 70, wrist_roll: 0, gripper: 5}}
+    - {name: look_user_home, taught: false, joints: {shoulder_pan: 0, shoulder_lift: -90, elbow_flex: 90, wrist_flex: 60, wrist_roll: 0, gripper: 5}}
+  thinking:
+    - {name: think_a, taught: false, joints: {shoulder_pan: 8, shoulder_lift: -84, elbow_flex: 90, wrist_flex: 66, wrist_roll: 8, gripper: 5}}
+    - {name: think_b, taught: false, joints: {shoulder_pan: -8, shoulder_lift: -84, elbow_flex: 90, wrist_flex: 66, wrist_roll: -8, gripper: 5}}
+    - {name: think_home, taught: false, joints: {shoulder_pan: 0, shoulder_lift: -90, elbow_flex: 90, wrist_flex: 60, wrist_roll: 0, gripper: 5}}

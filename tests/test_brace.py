@@ -21,10 +21,13 @@ class Rig:
     def __init__(self, monkeypatch):
         cfg = dict(load_config()["emg"])
         cfg["source"] = "synthetic"
+        cfg["brace_feature"] = "cocontraction"  # flexor_spike has its own test below
         self.clock = 1000.0
         monkeypatch.setattr(emg, "now", lambda: self.clock)
         self.log = EventLog()
         self.src = emg.SyntheticSource()
+        self.src.flexor_ch = tuple(cfg["flexor_channels"])  # same wiring as build_emg
+        self.src.extensor_ch = tuple(cfg["extensor_channels"])
         self.svc = emg.EmgService(cfg, self.src, self.log)
         self.svc.profile = emg.Profile()  # defaults, never the user's saved profile
         self.run(1.5)  # settle the filters and fill the history with calm
@@ -144,6 +147,85 @@ def test_squeeze_needs_quiet_extensors(rig):
     assert "emg.squeeze" not in rig.kinds()
 
 
+def test_hard_fist_with_extensor_crosstalk_still_squeezes(rig):
+    # Extensors above the absolute co-contraction level but well under the flexors.
+    rig.svc.profile.calibrated = True
+    rig.run(1.0, 0.9, 0.25)
+    assert rig.svc.extensor > rig.svc.cfg["cocontraction_effort"]
+    assert "emg.brace" not in rig.kinds()
+    assert "emg.squeeze" in rig.kinds()
+
+
+def _spike_rig(rig):
+    rig.svc.brace_feature = "flexor_spike"
+    rig.run(1.0)  # settle the brace history on the new feature
+    return rig
+
+
+def test_flexor_spike_fires_on_a_sudden_squeeze(rig):
+    _spike_rig(rig).run(0.5, 0.9, 0.0)
+    assert len(rig.events("emg.brace")) == 1
+
+
+def test_flexor_spike_ignores_a_slow_squeeze_which_can_still_confirm(rig):
+    _spike_rig(rig)
+    steps = 40
+    for i in range(1, steps + 1):
+        rig.run(0.1, 0.9 * i / steps, 0.0)
+    rig.run(1.0, 0.9, 0.0)
+    assert not rig.events("emg.brace")
+    assert "emg.squeeze" in rig.kinds()
+
+
+def test_flexor_spike_never_confirms(rig):
+    _spike_rig(rig).run(1.5, 0.9, 0.0)
+    assert rig.events("emg.brace")
+    assert "emg.squeeze" not in rig.kinds()
+
+
+def test_flexor_spike_mode_keeps_cocontraction_from_a_busy_flexor(rig):
+    _spike_rig(rig).run(1.0, 0.3, 0.0)  # flexor already busy: no spike possible
+    rig.run(0.5, 0.7, 0.45)
+    assert [e.data["trigger"] for e in rig.events("emg.brace")] == ["cocontraction"]
+    assert "emg.squeeze" not in rig.kinds()
+
+
+def test_flinch_from_a_light_grip_does_not_confirm(rig):
+    _spike_rig(rig).svc.profile.calibrated = True
+    rig.run(1.0, 0.25, 0.0)
+    rig.log._tail.clear()
+    rig.run(1.0, 0.95, 0.4)
+    assert rig.events("emg.brace")
+    assert "emg.squeeze" not in rig.kinds()
+
+
+def test_one_reaction_fires_one_brace(rig):
+    _spike_rig(rig).run(0.5, 0.9, 0.9)
+    rig.run(0.5, 0.0, 0.0)
+    assert len(rig.events("emg.brace")) == 1
+
+
+def test_flexor_spike_ignores_an_open_hand(rig):
+    _spike_rig(rig).run(0.5, 0.0, 0.9)
+    assert not rig.events("emg.brace")
+    assert "emg.open_hand" in rig.kinds()
+
+
+def test_uncalibrated_profile_gets_no_crosstalk_allowance(rig):
+    rig.run(1.0, 0.9, 0.25)
+    assert rig.svc.extensor > rig.svc.cfg["cocontraction_effort"]
+    assert "emg.squeeze" not in rig.kinds()
+
+
+def test_extensor_flicker_does_not_rearm_a_held_squeeze(rig):
+    rig.svc.profile.calibrated = True
+    rig.run(1.0, 0.9, 0.1)
+    assert rig.kinds().count("emg.squeeze") == 1
+    rig.run(0.5, 0.9, 0.9)  # extensors jump while the flexors never release
+    rig.run(1.0, 0.9, 0.1)
+    assert rig.kinds().count("emg.squeeze") == 1
+
+
 def test_squeeze_after_brace_waits_for_release(rig):
     rig.run(0.5, 0.0, 0.0)
     rig.run(0.5, 0.9, 0.9)
@@ -203,6 +285,47 @@ def test_brace_calibration_phase(rig, monkeypatch, tmp_path):
     assert rig.svc.snapshot()["brace_calibrated"] is True
 
 
+def _recorded(rig, **phases):
+    rig.svc._pending = {k: [*v, 2.0, 2.0] for k, v in phases.items()}
+    return rig.svc
+
+
+def test_good_calibration_steps_have_no_problems(rig):
+    svc = _recorded(
+        rig, rest=[5.0, 6.0], squeeze=[180.0, 70.0], open=[50.0, 110.0], brace=[150.0, 90.0]
+    )
+    for phase in ("rest", "squeeze", "open", "brace"):
+        assert svc.phase_problems(phase) == []
+
+
+def test_tense_rest_is_flagged(rig):
+    assert _recorded(rig, rest=[60.0, 6.0]).phase_problems("rest")
+
+
+def test_swapped_wires_are_flagged(rig):
+    svc = _recorded(rig, rest=[5.0, 5.0], squeeze=[60.0, 180.0], open=[110.0, 50.0])
+    assert "swapped" in svc.phase_problems("squeeze")[0]
+    assert "swapped" in svc.phase_problems("open")[0]
+
+
+def test_weak_brace_is_flagged(rig):
+    svc = _recorded(
+        rig, rest=[3.0, 3.0], squeeze=[177.0, 71.0], open=[55.0, 111.0], brace=[48.0, 47.0]
+    )
+    assert any("under half" in p for p in svc.phase_problems("brace"))
+
+
+def test_weak_brace_cannot_shrink_the_scale_below_a_fist(rig, monkeypatch, tmp_path):
+    monkeypatch.setattr(emg, "PROFILE_DIR", tmp_path)
+    svc = _recorded(
+        rig, rest=[3.0, 3.0], squeeze=[177.0, 71.0], open=[55.0, 111.0], brace=[48.0, 47.0]
+    )
+    svc.flexor_ch, svc.extensor_ch = [0], [1]
+    result = svc.calibrate("finish")
+    assert result["ok"]
+    assert result["profile"]["brace_max"][:2] == [177.0, 111.0]
+
+
 def test_calibration_without_brace_still_finishes(rig, monkeypatch, tmp_path):
     monkeypatch.setattr(emg, "PROFILE_DIR", tmp_path)
     rig.svc._pending = {
@@ -220,8 +343,11 @@ def test_service_thread_with_synthetic_source():
     """End to end on the real clock: the service thread reads SyntheticSource."""
     cfg = dict(load_config()["emg"])
     cfg["source"] = "synthetic"
+    cfg["brace_feature"] = "cocontraction"
     log = EventLog()
     src = emg.SyntheticSource()
+    src.flexor_ch = tuple(cfg["flexor_channels"])
+    src.extensor_ch = tuple(cfg["extensor_channels"])
     svc = emg.EmgService(cfg, src, log)
     svc.profile = emg.Profile()
     svc.start()
@@ -239,3 +365,19 @@ def test_service_thread_with_synthetic_source():
         assert len(log.recent(50, {"emg.brace"})) == 1
     finally:
         svc.stop()
+
+
+@pytest.mark.parametrize("feature", ["cocontraction", "flexor_spike"])
+@pytest.mark.parametrize("extensor_drive", [0.5, 0.55, 0.65])
+def test_slow_whole_forearm_co_contraction_never_confirms(rig, feature, extensor_drive):
+    # A ~1 s ramp is too slow to be a brace, but with the extensors past brace_effort it is
+    # still a co-contraction, and the hard-fist ratio allowance must not turn it into a squeeze.
+    rig.svc.brace_feature = feature
+    rig.svc.profile.calibrated = True
+    rig.run(1.0)
+    for i in range(1, 21):
+        rig.run(HOP_S, flexor=i / 20, extensor=extensor_drive * i / 20)
+    rig.run(1.0)
+    assert min(rig.svc.fast_flexor, rig.svc.fast_extensor) > rig.svc.brace_thr
+    assert "emg.brace" not in rig.kinds()
+    assert "emg.squeeze" not in rig.kinds()

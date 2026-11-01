@@ -21,6 +21,7 @@ import cv2
 import numpy as np
 
 from h2m.core import ROOT, EventLog, clamp, now
+from h2m.world import HandsSeen
 
 MODELS = ROOT / "models"
 HAND_MODEL_URL = (
@@ -146,7 +147,7 @@ def _device() -> str:
 class HandTracker:
     """MediaPipe Tasks HandLandmarker in VIDEO mode (MediaPipe 1.x has no mp.solutions)."""
 
-    def __init__(self) -> None:
+    def __init__(self, num_hands: int = 2) -> None:
         import mediapipe as mp
         from mediapipe.tasks.python import BaseOptions, vision
 
@@ -157,20 +158,23 @@ class HandTracker:
         options = vision.HandLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=str(path)),
             running_mode=vision.RunningMode.VIDEO,
-            num_hands=1,
+            num_hands=num_hands,  # 2: a second hand near the handover spot must be seen too
         )
         self.landmarker = vision.HandLandmarker.create_from_options(options)
         self._last_ms = -1
 
-    def landmarks(self, frame: np.ndarray) -> list[tuple[float, float]] | None:
+    def all_hands(self, frame: np.ndarray) -> list[list[tuple[float, float]]]:
+        """Pixel landmarks of every tracked hand (empty list: no hand seen)."""
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
         self._last_ms = max(int(now() * 1000), self._last_ms + 1)
         result = self.landmarker.detect_for_video(image, self._last_ms)
-        if not result.hand_landmarks:
-            return None
         h, w = frame.shape[:2]
-        return [(p.x * w, p.y * h) for p in result.hand_landmarks[0]]
+        return [[(p.x * w, p.y * h) for p in hand] for hand in (result.hand_landmarks or [])]
+
+    def landmarks(self, frame: np.ndarray) -> list[tuple[float, float]] | None:
+        hands = self.all_hands(frame)
+        return hands[0] if hands else None
 
 
 def pointing_scores(lm: list[tuple[float, float]], objects: list[dict], sigma_deg: float = 12.0):
@@ -214,6 +218,8 @@ class VisionService:
         self._lock = threading.Lock()
         self._seen: dict[str, dict[str, Any]] = {}
         self.pointing: dict[str, Any] = {"active": 0.0, "candidates": [], "ray": None}
+        # Latest hand-tracking pass in table coords; None until the tracker has run.
+        self.hands_seen: HandsSeen | None = None
         self.frame_size = (w, h)
         self.latency_ms: float | None = None
         self.fps = 0.0
@@ -250,7 +256,9 @@ class VisionService:
             self.wrist.stop()
 
     def table_xy(self, bbox: list[float]) -> tuple[float, float]:
-        cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+        return self.point_xy((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+
+    def point_xy(self, cx: float, cy: float) -> tuple[float, float]:
         if self.homography is not None:
             v = self.homography @ np.array([cx, cy, 1.0])
             return round(float(v[0] / v[2]), 4), round(float(v[1] / v[2]), 4)
@@ -273,17 +281,23 @@ class VisionService:
                 obj["table_xy"] = self.table_xy(obj["bbox"])
                 obj["seen_t"] = frame_t
             pointing = {"active": 0.0, "candidates": [], "ray": None}
+            hands_seen = None
             if self.hands is not None:
-                lm = self.hands.landmarks(frame)
-                if lm is not None:
-                    visible = found or [o for o in self._seen.values()]
+                hands = self.hands.all_hands(frame)
+                visible = found or [o for o in self._seen.values()]
+                for lm in hands:  # the hand that is pointing most wins
                     active, scores, ray = pointing_scores(lm, visible)
-                    pointing = {"active": active, "candidates": scores[:3], "ray": ray}
+                    if active > pointing["active"] or pointing["ray"] is None:
+                        pointing = {"active": active, "candidates": scores[:3], "ray": ray}
+                points = tuple(self.point_xy(x, y) for lm in hands for x, y in lm)
+                hands_seen = HandsSeen(frame_t, points)
             with self._lock:
                 for obj in found:
                     self._seen[obj["id"]] = obj
                 self._seen = {k: v for k, v in self._seen.items() if now() - v["seen_t"] < stale}
                 self.pointing = pointing
+                if hands_seen is not None:
+                    self.hands_seen = hands_seen
                 self.latency_ms = round((now() - frame_t) * 1000, 1)
                 dt = now() - started
                 self.fps = round(0.8 * self.fps + 0.2 * (1 / max(dt, 1e-3)), 1)

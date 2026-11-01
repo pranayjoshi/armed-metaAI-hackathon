@@ -10,6 +10,8 @@ import cv2
 import httpx
 import numpy as np
 
+from h2m.incident import SAM_MODEL
+
 BASE = "https://api.meta.ai/v1"
 MODELS = ("muse-wonder-1.0", "muse-spark-1.1")
 
@@ -24,9 +26,10 @@ def main() -> int:
         listing = httpx.get(f"{BASE}/models", headers=headers, timeout=15)
         print(f"GET /models -> {listing.status_code}")
         if listing.is_success:
-            print(
-                "  " + ", ".join(sorted(m.get("id", "?") for m in listing.json().get("data", [])))
-            )
+            ids = sorted(m.get("id", "?") for m in listing.json().get("data", []))
+            print("  " + ", ".join(ids))
+            sam = os.environ.get("H2M_SAM_MODEL") or SAM_MODEL
+            print(f"  SAM model {sam!r}: {'listed' if sam in ids else 'NOT listed'}")
     except httpx.HTTPError as exc:
         print(f"GET /models failed: {exc}")
 
@@ -37,7 +40,7 @@ def main() -> int:
     for model in MODELS:
         body = {
             "model": model,
-            "max_tokens": 30,
+            "max_tokens": 1000,  # includes reasoning tokens, which can use several hundred
             "messages": [
                 {
                     "role": "user",
@@ -56,10 +59,13 @@ def main() -> int:
             resp = httpx.post(f"{BASE}/chat/completions", json=body, headers=headers, timeout=60)
             ms = round((time.monotonic() - started) * 1000)
             if resp.is_success:
-                print(
-                    f"{model}: OK in {ms} ms -> {resp.json()['choices'][0]['message']['content']!r}"
-                )
-                ok = True
+                choice = resp.json()["choices"][0]
+                content = choice["message"]["content"]
+                if content:
+                    print(f"{model}: OK in {ms} ms -> {content!r}")
+                    ok = True
+                else:
+                    print(f"{model}: EMPTY reply in {ms} ms ({choice.get('finish_reason')})")
             else:
                 print(f"{model}: HTTP {resp.status_code} {resp.text[:200]}")
         except httpx.HTTPError as exc:

@@ -27,6 +27,12 @@ speech:
   silence_end_ms: 450
   preroll_ms: 250
   max_utterance_ms: 6000
+  # While the robot speaks and this long after, heard speech is tagged as echo: it can
+  # still stop or cancel, never confirm or start a request.
+  echo_tail_ms: 500
+  voice_out: true        # speak `say` tool replies with macOS `say` (cut off on stop/brace)
+  voice: null            # `say -v` voice name; null = system default
+  rate_wpm: null         # `say -r` words per minute; null = default
 
 vision:
   source: camera         # camera | off
@@ -48,10 +54,11 @@ emg:
   transport: ble         # ble | usb_dongle
   serial_port: null      # usb_dongle only
   mac_address: null      # optional BLE address / CoreBluetooth UUID
+  firmware: 2            # 2 | 3 | auto; this board reports 2 in the OpenBCI GUI
   sample_rate_hz: 200
   # Electrode placement: flexors squeeze (grip + confirm), extensors open-hand (stop).
-  flexor_channels: [0, 1]
-  extensor_channels: [2, 3]
+  flexor_channels: [0]
+  extensor_channels: [1]
   bandpass_hz: [20, 90]
   notch_hz: 60
   window_ms: 250
@@ -63,6 +70,7 @@ emg:
   stop_hold_ms: 80
   # Brace (flinch): min(flexor, extensor) on a faster window, normalized per user.
   # Priority is brace > open hand > squeeze.
+  brace_feature: flexor_spike  # flexor_spike: a sudden squeeze, plus co-contraction | cocontraction: both muscles only
   brace_window_ms: 100   # parallel fast window, same hop as above
   brace_smoothing: 0.6   # EMA on the fast flexor / extensor, 0..1
   brace_effort: 0.35     # brace feature above this counts as co-contraction
@@ -73,7 +81,13 @@ emg:
   brace_lockout_ms: 1500 # after a brace, squeeze events are suppressed (open hand never is)
   brace_trace_ms: 1500   # recent fast trace carried by emg.brace
   cocontraction_effort: 0.18  # squeeze needs extensors below this (well under brace_effort), so a brace never confirms
+  cocontraction_ratio: 0.6    # ... or below this share of flexor effort: a hard fist leaks into the extensors (the limit is capped at brace_effort)
+  cocontraction_ratio_min: 0.8  # the ratio applies only at this flexor effort or above, on a calibrated profile
   profile: default       # calibration profile name in data/profiles/
+  # POST /api/emg/calibrate: seconds is clamped to this range, and the arm must be
+  # disarmed or stopped (brace and open hand are not detected while a phase records).
+  calibrate_min_s: 1.0
+  calibrate_max_s: 10.0
 
 compiler:
   llm: auto              # auto (use if MODEL_API_KEY set) | on | off
@@ -81,6 +95,7 @@ compiler:
   model: muse-spark-1.1
   timeout_s: 4.0
   send_image: true
+  tools: true            # Muse answers with h2m.embodied tool calls (false = old JSON verb path)
 
 safety:
   auto_approve: 0.85     # act without asking at or above this confidence ...
@@ -90,11 +105,65 @@ safety:
   confirm_timeout_s: 8.0
   always_confirm: true   # physical arm: every motion needs a confirmation
   default_grip: 0.5      # grip effort when nobody squeezed
+  # Gesture exemption (REVIEWED RELAXATION, see h2m/safety.py::_gesture): a taught
+  # gesture skips per-motion confirmation only if armed, gripper proven empty, every
+  # step AND the arm's current pose within this envelope of home, at or below this speed.
+  gesture_envelope_deg: 15
+  gesture_speed_cap: 0.3
+  gesture_wait_s: 8.0    # a request after a gesture in one reply is gated once it ends (or this passes)
+  # A gripper load reading above this vetoes "gripper empty" (can only veto, never prove).
+  # UNVERIFIED on hardware: check the idle STS3215 load at home before relying on it.
+  gripper_empty_load_max: 0.15
+  # place_near_user starts only when the arm is within this of the taught start pose
+  # (configs/routes.yaml handover.from); its path is unproven from anywhere else.
+  handover_start_tol_deg: 5.0
+  # place_near_user lowers only after a hand pass newer than its arrival over the spot
+  # (waited for up to handover_recheck_s). While lowering and releasing, a watchdog stops
+  # the arm on any hand landmark within clear_radius + handover_watch_margin of the spot,
+  # or when the newest hand pass is older than handover_watch_stale_ms. UNVERIFIED live.
+  handover_recheck_s: 2.0
+  handover_watch_margin: 0.05
+  handover_watch_stale_ms: 500
+  # The arm counts as hiding the spot from the scene camera within this of the handover
+  # poses, unless routes.yaml handover.camera_sees_past_arm is true (checked at teach time).
+  handover_occlusion_deg: 30.0
+  # With EMG configured, no motion starts (and a moving arm stops) unless the newest EMG
+  # sample is younger than this: the brace / open-hand stop must be live to move.
+  emg_max_age_ms: 300
+  # Operator gripper release (SAFETY REVIEW, h2m/app.py::release_gripper): opens the
+  # gripper alone, outside any plan. OFF by default: POST /api/gripper/release answers
+  # 403 and the app refuses. When on: only with the arm READY, at one of these taught
+  # release-safe poses (within operator_release_tol_deg; "*.grasp" = every slot's grasp
+  # pose; handover poses are always refused), and with a two-step confirm: the first
+  # POST returns a release id, a second POST with it within operator_release_confirm_s
+  # commits (same arming, same pose, nothing cancelled or stopped in between).
+  operator_release: false
+  operator_release_poses: [tray_release, tray_above, "*.grasp"]
+  operator_release_tol_deg: 5.0
+  operator_release_confirm_s: 10.0
+
+rules:
+  user: default          # rule memory file: data/rules/<user>.json
+  routes_file: configs/routes.yaml
+  # Learned rules only restrict. These caps are shares of the configured maximum
+  # and are clamped to <= 1.0 in code, so a bad value can never speed anything up.
+  slow_down_speed: 0.5   # slow_down caps carry speed at this share of max_joint_speed
+  grip_gentler: 0.6      # grip_gentler caps grip at this share of the object's max_grip
+  proposal_timeout_s: 30 # an unanswered rule proposal is dropped (never saved)
+
+incident:
+  root: data/incidents   # saved clips, one folder per incident
+  seconds: 6.0           # ring buffer length before the freeze
+  fps: 5.0               # downsampled frame rate in the buffer
+  sample_hz: 10          # sampler thread rate (frames, joints, contract, EMG)
+  after_s: 1.0           # keep recording this long after the freeze
+  downscale: 320         # longest image side kept in the buffer
+  sam_model: sam-3.1     # SAM model id for the blame highlight (unverified live; env H2M_SAM_MODEL also works)
 
 arm:
   backend: virtual       # virtual | lerobot
   port: null             # or env H2M_ARM_PORT
-  robot_id: h2m_follower
+  robot_id: my_follower_arm
   poses_file: configs/poses.yaml
   control_hz: 30
   max_joint_speed_deg_s: 30
@@ -102,7 +171,11 @@ arm:
   max_step_deg: 4.0
   arrive_tolerance_deg: 3.0
   tracking_error_deg: 20.0
-  skill_timeout_s: 25
+  # Each plan may take factor x (its joint distance / speed + dwell) + margin, so a
+  # slowed plan gets exactly the extra time its distance needs. UNVERIFIED on hardware.
+  plan_budget_factor: 1.5
+  plan_budget_margin_s: 3.0
+  waypoint_stall_s: 1.5  # a waypoint commanded but not reached (arrive_tolerance) this long faults
   # Gripper percent-open values. Grip effort maps soft..hard into this range.
   gripper_open: 60
   gripper_soft_close: 25

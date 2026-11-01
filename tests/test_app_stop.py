@@ -132,6 +132,15 @@ def test_squeeze_after_reaction_time_confirms(h2m):
     assert len(calls) == 1 and calls[0]["by"] == "emg"
 
 
+def test_open_hand_while_moving_starts_an_incident(h2m):
+    from h2m.robot.skills import plan_home
+
+    assert h2m.arm.execute(plan_home(h2m.arm.poses))[0]
+    h2m.log.emit("emg.open_hand", extensor=0.9)
+    assert h2m.arm.state is ArmState.STOPPED
+    assert [e.data["source"] for e in h2m.log.recent(50, {"incident.triggered"})] == ["open_hand"]
+
+
 def test_open_hand_race_with_confirm_cannot_slip_past(h2m):
     """UI confirm pops pending right after the open-hand handler read its state: the
     handler took pending and in_flight in one critical section, so confirm finds nothing."""
@@ -210,6 +219,9 @@ def test_brace_during_choose_is_not_undone(h2m, monkeypatch):
 
 def test_brace_during_compile_blocks_auto_approved_move(h2m, monkeypatch):
     h2m.safety_cfg = {**h2m.safety_cfg, "always_confirm": False}
+    # Proven empty: going home then carries nothing, so the gate would auto-approve it.
+    h2m.gripper.started({"verb": "pick_place", "object_id": "cup"})
+    h2m.gripper.completed({"verb": "pick_place"})
     real = app_mod.compile_contract
 
     def compile_and_brace(*a, **k):

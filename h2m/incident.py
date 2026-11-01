@@ -28,7 +28,13 @@ RESPONSES = ("route_around", "slow_down", "lift_higher", "grip_gentler")
 FALLBACK_SAY = "Something bothered you. What was it?"
 MIN_CONFIDENCE = 0.3  # below this the explanation is too weak to propose a rule
 WONDER_MODEL = "muse-wonder-1.0"
-SAM_MODEL = "sam-3.1"
+SAM_MODEL = "sam-3.1"  # default; override with incident.sam_model in the config or H2M_SAM_MODEL
+SAM_LABEL_MAX = 60
+# One box record from SAM's text output: <object id><|box;x1=..;y1=..;x2=..;y2=..;w=..;h=..[;c=..]|>
+# (https://dev.meta.ai/docs/sam/reading-segmentation). Mask tokens are not parsed.
+_SAM_BOX = re.compile(
+    r"<\|box;x1=(-?\d+);y1=(-?\d+);x2=(-?\d+);y2=(-?\d+);w=(\d+);h=(\d+)(?:;c=([0-9.eE+-]+))?\|>"
+)
 
 SYSTEM = """You review the seconds before a person flinched while a tabletop robot arm
 moved. Explain what bothered them. Reply with ONLY a JSON object:
@@ -266,6 +272,76 @@ def validate_explanation(data: Any) -> Explanation | None:
     )
 
 
+def sam_label(label: Any) -> str | None:
+    """A short plain noun phrase safe to send as the SAM text prompt, or None.
+
+    The label comes from model output, so it must not carry SAM's own box/point
+    tokens (``<``, ``|``) or control characters, which would switch the prompt mode."""
+    if not isinstance(label, str):
+        return None
+    label = " ".join(label.split())
+    if not label or len(label) > SAM_LABEL_MAX:
+        return None
+    if any(c in label for c in "<>|;") or not label.isprintable():
+        return None
+    return label
+
+
+def parse_sam_box(text: str, image_wh: tuple[int, int]) -> tuple[float, float, float, float] | None:
+    """Best box (x1, y1, x2, y2) in the sent image's pixels from SAM's text output.
+
+    Highest confidence wins when ``c`` is present, else the first match. Boxes are
+    rescaled if SAM reports a different source size, then must be non-degenerate
+    and lie inside the image (tiny overshoot is clamped); anything else is dropped."""
+    iw, ih = image_wh
+    best: tuple[float, tuple[float, float, float, float]] | None = None
+    for m in _SAM_BOX.finditer(text):
+        x1, y1, x2, y2, w, h = (int(m.group(k)) for k in range(1, 7))
+        if w <= 0 or h <= 0:
+            continue
+        try:
+            conf = float(m.group(7)) if m.group(7) is not None else 0.0
+        except ValueError:
+            conf = 0.0
+        if not 0.0 <= conf <= 1.0:  # also rejects nan
+            continue
+        sx, sy = iw / w, ih / h
+        # x2/y2 are inclusive pixel indices, so the exclusive edge is +1
+        box = (x1 * sx, (y1) * sy, (x2 + 1) * sx, (y2 + 1) * sy)
+        slack = 0.02 * max(iw, ih)
+        if box[0] < -slack or box[1] < -slack or box[2] > iw + slack or box[3] > ih + slack:
+            continue
+        box = (
+            min(max(box[0], 0.0), float(iw)),
+            min(max(box[1], 0.0), float(ih)),
+            min(max(box[2], 0.0), float(iw)),
+            min(max(box[3], 0.0), float(ih)),
+        )
+        if box[2] - box[0] < 1.0 or box[3] - box[1] < 1.0:
+            continue
+        if best is None or conf > best[0]:
+            best = (conf, box)
+    return best[1] if best else None
+
+
+def _response_text(data: Any) -> str:
+    """Text of a non-streaming /v1/responses reply: the output_text parts joined."""
+    if not isinstance(data, dict):
+        return ""
+    parts: list[str] = []
+    for item in data.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        for part in item.get("content") or []:
+            if isinstance(part, dict) and part.get("type") == "output_text":
+                if isinstance(part.get("text"), str):
+                    parts.append(part["text"])
+    if parts:
+        return "".join(parts)
+    top = data.get("output_text")  # SDK-only helper, but harmless if present
+    return top if isinstance(top, str) else ""
+
+
 class WonderClient(Protocol):
     def chat(self, model: str, messages: list[dict[str, Any]]) -> str: ...
 
@@ -277,7 +353,10 @@ class MuseClient:
         cfg = cfg or {}
         self.base_url = cfg.get("base_url", "https://api.meta.ai/v1").rstrip("/")
         self.timeout = float(cfg.get("timeout_s", 20.0))
+        self.sam_timeout = float(cfg.get("sam_timeout_s", min(self.timeout, 10.0)))
+        self.sam_model = str(cfg.get("sam_model") or os.environ.get("H2M_SAM_MODEL") or SAM_MODEL)
         self.key = os.environ.get("MODEL_API_KEY", "")
+        self.last_error: str | None = None
 
     @property
     def available(self) -> bool:
@@ -292,6 +371,58 @@ class MuseClient:
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
+
+    def segment(
+        self, model: str, image: np.ndarray, label: str | None
+    ) -> tuple[float, float, float, float] | None:
+        """SAM 3.1 (Meta Model API ``POST /v1/responses``): box of ``label`` in ``image``.
+
+        Returns (x1, y1, x2, y2) in the pixels of the image passed in, or None on any
+        failure (no key, bad label, timeout, HTTP error, no match, unparseable reply).
+        Never raises. The API also returns a raster mask; it is not decoded here, so
+        there is no polygon. Request/response shape follows dev.meta.ai/docs/sam and
+        has not been exercised against the live API."""
+        try:
+            text = sam_label(label)
+            if text is None or not self.key or not model:
+                return None
+            if not isinstance(image, np.ndarray) or image.ndim < 2 or image.size == 0:
+                return None
+            ok, buf = cv2.imencode(".jpg", image)
+            if not ok:
+                return None
+            ih, iw = image.shape[:2]
+            body = {
+                "model": model,
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": text},
+                            {
+                                "type": "input_image",
+                                "image_url": "data:image/jpeg;base64,"
+                                + base64.b64encode(buf.tobytes()).decode(),
+                            },
+                        ],
+                    }
+                ],
+                "metadata": {"include_confidence": "true", "mask_encoding": "one_bit"},
+            }
+            resp = httpx.post(
+                f"{self.base_url}/responses",
+                json=body,
+                timeout=self.sam_timeout,
+                headers={"Authorization": f"Bearer {self.key}"},
+            )
+            resp.raise_for_status()
+            box = parse_sam_box(_response_text(resp.json()), (iw, ih))
+            self.last_error = None if box else "no match"
+            return box
+        except Exception as exc:  # never raise; keep only the type, not the message
+            self.last_error = type(exc).__name__
+            return None
 
 
 def _jpeg_url(img: np.ndarray) -> str:
@@ -335,7 +466,9 @@ def _locate(
     segment = getattr(client, "segment", None)
     if segment is not None and last is not None:
         try:
-            box = segment(SAM_MODEL, last.overhead, exp.cause_object)
+            box = segment(
+                getattr(client, "sam_model", None) or SAM_MODEL, last.overhead, exp.cause_object
+            )
             if box is not None and len(box) == 4:
                 return tuple(float(v) for v in box), "sam"  # type: ignore[return-value]
         except Exception:

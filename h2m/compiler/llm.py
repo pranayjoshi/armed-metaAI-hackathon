@@ -4,6 +4,11 @@ Only called when the local grammar cannot parse a request. It returns the
 same structure as the grammar (verb, object, reference, grip words); target
 fusion with pointing and the safety decision stay deterministic.
 STOP and CANCEL never reach this module.
+
+``call_tools`` is the embodied path: the model picks tools from ``h2m.embodied.TOOLS``
+and only (name, raw arguments) come back. Nothing here is trusted: every call is
+schema-checked and gated by ``Embodied.handle_tool_call``. The tool-call wire format
+(OpenAI-style ``tool_calls``) is UNVERIFIED against the live Muse API.
 """
 
 from __future__ import annotations
@@ -12,6 +17,8 @@ import base64
 import json
 import os
 import re
+import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -33,6 +40,23 @@ Reply with ONLY a JSON object:
 Use deictic when they say this/that/it without naming. Never invent object ids."""
 
 GRIP = {"gentle": 0.25, "firm": 0.85}
+MAX_TOOL_CALLS = 4
+
+TOOL_SYSTEM = """You are the voice of a small tabletop robot arm. Answer by calling tools.
+Use only the object ids given. pick_place and place_near_user move objects and the person
+will be asked to confirm. Use gesture for small expressive motions and say for short
+spoken replies (one or two sentences). If the request is unclear, call say to ask.
+Never describe joint angles or invent tools."""
+
+SCENE_SYSTEM = """You look at a photo of a tabletop robot workspace and answer the person's
+question in one or two short spoken sentences. Describe only what is visible in the photo.
+If you cannot tell, say so."""
+
+
+@dataclass
+class ToolReply:
+    calls: list[tuple[str, Any]]  # (tool name, raw arguments): untrusted, validated later
+    text: str = ""
 
 
 class MuseCompiler:
@@ -70,10 +94,8 @@ class MuseCompiler:
                 {"role": "user", "content": content},
             ],
             "temperature": 0,
-            "max_tokens": 200,
+            "max_tokens": 1000,  # includes reasoning tokens; 200 returned empty replies
         }
-        import time
-
         started = time.monotonic()
         try:
             resp = httpx.post(
@@ -92,6 +114,91 @@ class MuseCompiler:
             self.last_ms = round((time.monotonic() - started) * 1000)
         self.last_error = None
         return self._to_parsed(text, data, {o["id"] for o in objects}), str(data.get("reply") or "")
+
+    def _post(self, body: dict[str, Any]) -> dict[str, Any]:
+        resp = httpx.post(
+            f"{self.base_url}/chat/completions",
+            json=body,
+            timeout=self.timeout,
+            headers={"Authorization": f"Bearer {self.key}"},
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]
+
+    def call_tools(
+        self,
+        text: str,
+        objects: list[dict],
+        pointing: dict,
+        tools: list[dict[str, Any]],
+        jpeg: bytes | None = None,
+    ) -> ToolReply | None:
+        """Ask Muse to answer with tool calls. None on any failure (last_error set)."""
+        scene = [{"id": o["id"], "name": o["name"]} for o in objects]
+        prompt = (
+            f'Person said: "{text}"\nVisible objects: {json.dumps(scene)}\n'
+            f"Pointing at (scores): {json.dumps(pointing.get('candidates') or [])}"
+        )
+        body = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": TOOL_SYSTEM},
+                {"role": "user", "content": self._content(prompt, jpeg)},
+            ],
+            "tools": tools,
+            "tool_choice": "auto",
+            "temperature": 0,
+            "max_tokens": 1000,
+        }
+        started = time.monotonic()
+        try:
+            message = self._post(body)
+            calls: list[tuple[str, Any]] = []
+            for call in (message.get("tool_calls") or [])[:MAX_TOOL_CALLS]:
+                fn = call.get("function") or {}
+                raw = fn.get("arguments")
+                try:
+                    args = json.loads(raw) if isinstance(raw, str) else raw
+                except ValueError:
+                    args = raw  # the schema check rejects it
+                calls.append((str(fn.get("name")), args))
+            reply = ToolReply(calls, str(message.get("content") or "").strip())
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"[:200]
+            return None
+        finally:
+            self.last_ms = round((time.monotonic() - started) * 1000)
+        self.last_error = None
+        return reply
+
+    def describe(self, question: str, jpeg: bytes) -> str:
+        """Answer a scene question from one frame. Raises on failure (the caller
+        speaks a stock sentence instead)."""
+        body = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": SCENE_SYSTEM},
+                {"role": "user", "content": self._content(question, jpeg, force_image=True)},
+            ],
+            "temperature": 0,
+            "max_tokens": 1000,
+        }
+        started = time.monotonic()
+        try:
+            return str(self._post(body).get("content") or "").strip()
+        finally:
+            self.last_ms = round((time.monotonic() - started) * 1000)
+
+    def _content(
+        self, text: str, jpeg: bytes | None, force_image: bool = False
+    ) -> list[dict[str, Any]]:
+        content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+        if jpeg and (self.send_image or force_image):
+            b64 = base64.b64encode(jpeg).decode()
+            content.append(
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+            )
+        return content
 
     @staticmethod
     def _to_parsed(text: str, data: dict[str, Any], valid_ids: set[str]) -> Parsed:

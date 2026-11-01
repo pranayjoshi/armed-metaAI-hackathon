@@ -41,6 +41,8 @@ class PoseLibrary:
     poses: dict[str, Pose]
     slots: dict[str, Slot]
     path: Path | None = None
+    # Carry routes: name -> taught via poses between lift and tray (empty = direct).
+    routes: dict[str, tuple[Pose, ...]] = field(default_factory=dict)
 
     def pose(self, name: str) -> Pose:
         if "." in name:
@@ -84,7 +86,13 @@ def load_poses(path: Path) -> PoseLibrary:
             (float(x), float(y)),
             *(_pose(f"{slot_id}.{kind}", raw.get(kind)) for kind in ("above", "grasp", "point")),
         )
-    return PoseLibrary(poses, slots, path)
+    routes = {}
+    for name, via in (data.get("routes") or {}).items():
+        missing = [str(v) for v in (via or []) if str(v) not in poses]
+        if missing:
+            raise PoseError(f"route {name} uses undefined poses: {', '.join(missing)}")
+        routes[str(name)] = tuple(poses[str(v)] for v in (via or []))
+    return PoseLibrary(poses, slots, path, routes)
 
 
 def save_pose(library: PoseLibrary, name: str, joints: Joints) -> None:
@@ -127,25 +135,43 @@ def _move(label: str, pose: Pose, stage: str, gripper: float | None = None) -> W
     return Waypoint(label, joints, stage)
 
 
-def plan_home(lib: PoseLibrary) -> Plan:
-    home = lib.pose("home")
-    return Plan("home", (_move("home", home, "home"),), (home,))
+def _arm_only(label: str, pose: Pose, stage: str) -> Waypoint:
+    """The five arm joints of a pose; the gripper keeps whatever it is commanded now."""
+    return Waypoint(label, {j: v for j, v in pose.joints.items() if j != GRIPPER}, stage)
 
 
-def plan_point(lib: PoseLibrary, slot: Slot) -> Plan:
+def plan_home(lib: PoseLibrary, gripper: bool = False) -> Plan:
+    """``gripper``: also command the home pose's gripper value. Only for a gripper
+    proven empty; otherwise the gripper is left as it is (it may be holding)."""
     home = lib.pose("home")
+    move = _move if gripper else _arm_only
+    return Plan("home", (move("home", home, "home"),), (home,))
+
+
+def plan_point(lib: PoseLibrary, slot: Slot, gripper: bool = False) -> Plan:
+    """``gripper``: as for plan_home."""
+    home = lib.pose("home")
+    move = _move if gripper else _arm_only
     return Plan(
         "point",
         (
-            _move(f"{slot.slot_id}.point", slot.point, "point"),
+            move(f"{slot.slot_id}.point", slot.point, "point"),
             Waypoint("hold", {}, "point", dwell_s=0.8),
-            _move("home", home, "return"),
+            move("home", home, "return"),
         ),
         (slot.point, home),
     )
 
 
-def plan_pick_place(lib: PoseLibrary, slot: Slot, open_pct: float, close_pct: float) -> Plan:
+def plan_pick_place(
+    lib: PoseLibrary,
+    slot: Slot,
+    open_pct: float,
+    close_pct: float,
+    via: tuple[Pose, ...] = (),
+) -> Plan:
+    """``via``: taught poses of the chosen carry route (``lib.routes[name]``),
+    visited in order between the lift and the tray."""
     home, tray_above, tray_release = (lib.pose(n) for n in ("home", "tray_above", "tray_release"))
     return Plan(
         "pick_place",
@@ -154,11 +180,12 @@ def plan_pick_place(lib: PoseLibrary, slot: Slot, open_pct: float, close_pct: fl
             _move(f"{slot.slot_id}.grasp", slot.grasp, "approach", gripper=open_pct),
             Waypoint("close", {GRIPPER: close_pct}, "grasp", gripper_only=True, dwell_s=0.4),
             _move("lift", slot.above, "carry", gripper=close_pct),
+            *(_move(f"via.{p.name}", p, "carry", gripper=close_pct) for p in via),
             _move("tray_above", tray_above, "carry", gripper=close_pct),
             _move("tray_release", tray_release, "release", gripper=close_pct),
             Waypoint("open", {GRIPPER: open_pct}, "release", gripper_only=True, dwell_s=0.3),
             _move("retreat", tray_above, "return", gripper=open_pct),
             _move("home", home, "return"),
         ),
-        (slot.above, slot.grasp, tray_above, tray_release, home),
+        (slot.above, slot.grasp, *via, tray_above, tray_release, home),
     )

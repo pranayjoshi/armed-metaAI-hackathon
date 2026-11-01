@@ -15,7 +15,7 @@ SCENE = [
     {"id": "cup", "name": "paper cup", "table_xy": (0.25, 0.55)},
     {"id": "block", "name": "wooden block", "table_xy": (0.5, 0.55)},
 ]
-READY = {"arm_ready": True, "slot_id": "slot_1", "target_visible": True}
+READY = {"arm_ready": True, "slot_id": "slot_1", "target_visible": True, "route_clear": True}
 
 
 def test_ambiguous_pointing_asks_instead_of_guessing():

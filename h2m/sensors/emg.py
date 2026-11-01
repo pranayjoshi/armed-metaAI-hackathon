@@ -17,6 +17,7 @@ Every stage is causal: no future samples are used.
 
 from __future__ import annotations
 
+import atexit
 import json
 import queue
 import threading
@@ -131,6 +132,11 @@ class SyntheticSource:
         return self._rng.normal(0.0, 1.0, (self.n, n)) * amp[:, None]
 
 
+REST_MAX_RMS = 25.0  # a relaxed forearm reads well under this
+MIN_GAIN = 3.0  # a real contraction reaches at least this many times rest
+CONNECT_ATTEMPTS = 6  # about half of connections fail, and most often right after a disconnect
+
+
 class GanglionSource:
     """OpenBCI Ganglion over BLE (native) or the BLED112 USB dongle, via BrainFlow."""
 
@@ -143,9 +149,11 @@ class GanglionSource:
         serial_port: str | None = None,
         mac_address: str | None = None,
         timeout_s: int = 15,
+        firmware: str | int = "auto",
     ):
         self.transport, self.serial_port = transport, serial_port
         self.mac_address, self.timeout_s = mac_address, timeout_s
+        self.firmware = firmware
         self._board: Any = None
         self._channels: list[int] = []
 
@@ -163,10 +171,28 @@ class GanglionSource:
             params.timeout = self.timeout_s
             if self.mac_address:
                 params.mac_address = self.mac_address
+            # BrainFlow assumes firmware 3 unless told otherwise; the wrong version
+            # decodes the compressed samples into noise thousands of uV too large.
+            params.other_info = f"fw:{self.firmware}"
         BoardShim.disable_board_logger()
-        self._board = BoardShim(board_id, params)
-        self._board.prepare_session()
-        self._board.start_stream()
+        for attempt in range(1, CONNECT_ATTEMPTS + 1):
+            self._board = BoardShim(board_id, params)
+            try:
+                self._board.prepare_session()
+                self._board.start_stream()
+                break
+            except Exception:  # BLE connections fail intermittently on macOS
+                try:
+                    self._board.release_session()
+                except Exception:
+                    pass
+                self._board = None
+                if attempt == CONNECT_ATTEMPTS:
+                    raise
+                print(f"Ganglion connection failed, retrying ({attempt}/{CONNECT_ATTEMPTS})...")
+                time.sleep(2.0)
+        # Ctrl+C must not leave the Ganglion holding a stale BLE session.
+        atexit.register(self.stop)
         self._channels = list(BoardShim.get_exg_channels(board_id))[:4]
 
     def stop(self) -> None:
@@ -186,6 +212,18 @@ class GanglionSource:
 
 
 # ── processing service ───────────────────────────────────────────────────────
+@dataclass
+class _Onset:
+    """State of one fast-onset detector."""
+
+    hist: deque[tuple[float, float]]
+    state: str = "idle"  # idle | candidate | fired | blocked
+    back: int = 0  # hops from the calm hop to the crossing hop
+    hops: int = 0  # hops held above threshold so far
+    onset: float = 0.0
+    cross: float = 0.0
+
+
 class EmgService:
     TRACE_SECONDS = 10.0
 
@@ -206,6 +244,9 @@ class EmgService:
         self.fast_window = min(self.window, int(rate * cfg.get("brace_window_ms", 100) / 1000))
         self.fast_alpha = float(cfg.get("brace_smoothing", 0.6))
         self.brace_thr = float(cfg.get("brace_effort", 0.35))
+        self.brace_feature = str(cfg.get("brace_feature", "cocontraction"))
+        if self.brace_feature not in ("flexor_spike", "cocontraction"):
+            raise ValueError("emg.brace_feature must be flexor_spike or cocontraction")
         self.brace_calm = float(cfg.get("brace_calm", 0.12))
         self.brace_rise_hops = max(1, round(cfg.get("brace_rise_ms", 150) / hop_ms))
         self.brace_base_hops = max(1, round(cfg.get("brace_baseline_ms", 250) / hop_ms))
@@ -225,14 +266,13 @@ class EmgService:
         self.fast_flexor = 0.0
         self.fast_extensor = 0.0
         self.brace = 0.0
-        self._brace_hist: deque[tuple[float, float]] = deque(
-            maxlen=self.brace_rise_hops + self.brace_base_hops + 2
-        )
-        self._brace_state = "idle"  # idle | candidate | fired | blocked
-        self._brace_back = 0  # hops from the calm hop to the crossing hop
-        self._brace_hops = 0  # hops held above threshold so far
-        self._brace_onset = 0.0
-        self._brace_cross = 0.0
+        self.fast_spike = 0.0
+        history = self.brace_rise_hops + self.brace_base_hops + 2
+        self._onsets = {
+            "cocontraction": _Onset(deque(maxlen=history)),
+            "flexor_spike": _Onset(deque(maxlen=history)),
+        }
+        self._brace_by: str | None = None  # which detector fired the current lockout
         self._brace_until = 0.0  # squeeze is suppressed until then (open hand never is)
         self._squeeze_needs_release = False
         n_trace = int(self.TRACE_SECONDS * 1000 / hop_ms)
@@ -303,11 +343,17 @@ class EmgService:
             fast_rms = np.sqrt(np.mean(window[:, -self.fast_window :] ** 2, axis=1))
             maxima = self.profile.brace_max
             flex_raw = self._norm(fast_rms, self.flexor_ch, maxima or self.profile.squeeze_max)
+            # A flexor spike is scaled to a real fist: a weak calibration brace must
+            # not turn every small grip into a flinch.
+            spike_raw = self._norm(fast_rms, self.flexor_ch, self.profile.squeeze_max)
             ext_raw = self._norm(fast_rms, self.extensor_ch, maxima or self.profile.open_max)
             a = self.fast_alpha
             self.fast_flexor = (1 - a) * self.fast_flexor + a * flex_raw
             self.fast_extensor = (1 - a) * self.fast_extensor + a * ext_raw
+            self.fast_spike = (1 - a) * self.fast_spike + a * spike_raw
             self.brace = min(self.fast_flexor, self.fast_extensor)
+            if self.brace_feature == "flexor_spike":
+                self.brace = max(self.brace, self.fast_spike)
             self._fast_trace.append(
                 (
                     round(t, 3),
@@ -322,10 +368,11 @@ class EmgService:
             self._brace_reset()
 
     def _brace_reset(self) -> None:
-        self._brace_hist.clear()
-        self._brace_state = "idle"
+        for det in self._onsets.values():
+            det.hist.clear()
+            det.state = "idle"
 
-    def _fast_onset(self) -> tuple[int, float] | None:
+    def _fast_onset(self, det: _Onset) -> tuple[int, float] | None:
         """Called on the hop where brace first crosses the threshold. Returns
         (hops back to the last calm hop, its time) if the rise was fast, else None.
 
@@ -333,7 +380,7 @@ class EmgService:
         calm for the ``brace_baseline_ms`` before that. A slow ramp, or a signal that
         was already busy, fails this and never counts as a flinch.
         """
-        hist = list(self._brace_hist)
+        hist = list(det.hist)
         need = self.brace_rise_hops + self.brace_base_hops
         if len(hist) < need:  # not enough history to call anything calm
             return None
@@ -346,26 +393,36 @@ class EmgService:
         return None
 
     def _detect_brace(self, t: float) -> None:
-        above = self.brace >= self.brace_thr
-        if not above:
-            self._brace_state = "idle"
-        elif self._brace_state == "idle":
-            onset = self._fast_onset()
-            if onset is None:
-                self._brace_state = "blocked"  # busy or slow: wait until it drops again
-            else:
-                self._brace_state = "candidate"
-                self._brace_back, self._brace_onset = onset
-                self._brace_cross, self._brace_hops = t, 1
-        elif self._brace_state == "candidate":
-            self._brace_hops += 1
-        if self._brace_state == "candidate" and self._brace_hops >= self.brace_hold:
-            self._brace_state = "fired"
-            self._fire_brace(t)
-        self._brace_hist.append((t, self.brace))
+        # Co-contraction always runs, so flexor_spike only ever adds triggers: a flinch
+        # from an already busy flexor still fires on the extensors joining in.
+        self._step_onset(t, "cocontraction", min(self.fast_flexor, self.fast_extensor))
+        if self.brace_feature == "flexor_spike":
+            self._step_onset(t, "flexor_spike", self.fast_spike)
 
-    def _fire_brace(self, t: float) -> None:
-        span = self._brace_back + self._brace_hops
+    def _step_onset(self, t: float, name: str, value: float) -> None:
+        det = self._onsets[name]
+        if value < self.brace_thr:
+            det.state = "idle"
+        elif det.state == "idle":
+            onset = self._fast_onset(det)
+            if onset is None:
+                det.state = "blocked"  # busy or slow: wait until it drops again
+            else:
+                det.state = "candidate"
+                det.back, det.onset = onset
+                det.cross, det.hops = t, 1
+        elif det.state == "candidate":
+            det.hops += 1
+        if det.state == "candidate" and det.hops >= self.brace_hold:
+            det.state = "fired"
+            # One reaction fires one event, whichever detector crossed first.
+            if self._brace_by in (None, name) or t >= self._brace_until:
+                self._brace_by = name
+                self._fire_brace(t, det, name)
+        det.hist.append((t, value))
+
+    def _fire_brace(self, t: float, det: _Onset, trigger: str) -> None:
+        span = det.back + det.hops
         rise = list(self._fast_trace)[-span:]
         n_trace = max(1, int(self.cfg.get("brace_trace_ms", 1500) / self.cfg.get("hop_ms", 50)))
         self._brace_until = t + self.cfg.get("brace_lockout_ms", 1500) / 1000
@@ -374,9 +431,10 @@ class EmgService:
         self._squeeze_samples.clear()
         self.log.emit(
             "emg.brace",
-            onset_t=round(self._brace_onset, 3),
-            cross_t=round(self._brace_cross, 3),
-            detect_ms=round((t - self._brace_onset) * 1000),
+            trigger=trigger,
+            onset_t=round(det.onset, 3),
+            cross_t=round(det.cross, 3),
+            detect_ms=round((t - det.onset) * 1000),
             peak_flexor=round(max(r[1] for r in rise), 3),
             peak_extensor=round(max(r[2] for r in rise), 3),
             peak_brace=round(max(r[3] for r in rise), 3),
@@ -399,11 +457,19 @@ class EmgService:
                 self.log.emit("emg.open_hand", extensor=round(self.extensor, 3))
         else:
             self._open_since, self._open_fired = None, False
-        # squeeze -> confirm, carrying grip effort. Extensors must stay quiet: a
-        # co-contraction is a brace, never a confirmation.
+        # squeeze -> confirm, carrying grip effort. Extensors must stay quiet relative to
+        # the flexors: a co-contraction is a brace, never a confirmation. A hard fist
+        # leaks into the extensor channel, so on a calibrated profile the limit scales
+        # with flexor effort, but only for a hard fist.
         if self.effort < cfg.get("confirm_effort", 0.3):
             self._squeeze_needs_release = False
+            self._squeeze_fired = False  # only a real release re-arms the squeeze
         cocontraction = cfg.get("cocontraction_effort", self.brace_thr)
+        if self.profile.calibrated and self.effort >= cfg.get("cocontraction_ratio_min", 0.8):
+            cocontraction = max(cocontraction, cfg.get("cocontraction_ratio", 0.0) * self.effort)
+        # Never above brace_effort: extensors past it, with flexors up, are a co-contraction
+        # (min(fast flexor, fast extensor) >= brace_effort) however slowly it built up.
+        cocontraction = min(cocontraction, self.brace_thr)
         if (
             self.effort >= cfg.get("confirm_effort", 0.3)
             and max(self.extensor, self.fast_extensor) < cocontraction
@@ -418,7 +484,7 @@ class EmgService:
                 grip = float(np.mean(self._squeeze_samples))
                 self.log.emit("emg.squeeze", effort=round(grip, 3), held_ms=round(held))
         else:
-            self._squeeze_since, self._squeeze_fired = None, False
+            self._squeeze_since = None
             self._squeeze_samples.clear()
 
     # calibration: rest -> squeeze -> open -> brace, a few seconds each
@@ -449,6 +515,47 @@ class EmgService:
             "rms": [round(float(v), 2) for v in np.median(windows, axis=0)],
         }
 
+    def phase_problems(self, phase: str) -> list[str]:
+        """What looks wrong with the last recording of ``phase``, in plain words."""
+        pending = self._pending
+        if phase not in pending:
+            return ["nothing recorded"]
+
+        def level(values: list[float], channels: list[int]) -> float:
+            return float(np.mean([values[c] for c in channels]))
+
+        flexor = level(pending[phase], self.flexor_ch)
+        extensor = level(pending[phase], self.extensor_ch)
+        if phase == "rest":
+            if max(flexor, extensor) > REST_MAX_RMS:
+                return ["forearm is not relaxed: let it go limp, supported on the desk"]
+            return []
+        rest = pending.get("rest")
+        if rest is None:
+            return []
+        flexor_gain = flexor / max(level(rest, self.flexor_ch), 1e-6)
+        extensor_gain = extensor / max(level(rest, self.extensor_ch), 1e-6)
+        problems = []
+        if phase == "squeeze":
+            if flexor_gain < MIN_GAIN:
+                problems.append("flexor barely rose: squeeze harder or check that pad")
+            elif extensor > flexor:
+                problems.append("extensor beat flexor: are the two wires swapped?")
+        elif phase == "open":
+            if extensor_gain < MIN_GAIN:
+                problems.append("extensor barely rose: open wider or check that pad")
+            elif flexor > extensor:
+                problems.append("flexor beat extensor: are the two wires swapped?")
+        elif phase == "brace":
+            if min(flexor_gain, extensor_gain) < MIN_GAIN:
+                problems.append("both muscles must rise: stiffen the wrist without moving it")
+            squeeze, opened = pending.get("squeeze"), pending.get("open")
+            if squeeze and flexor < 0.5 * level(squeeze, self.flexor_ch):
+                problems.append("flexor is under half your fist: brace harder")
+            if opened and extensor < 0.5 * level(opened, self.extensor_ch):
+                problems.append("extensor is under half your open hand: brace harder")
+        return problems
+
     def _finish_calibration(self) -> dict[str, Any]:
         pending = self._pending
         has_base = {"rest", "squeeze", "open"} <= set(pending)
@@ -471,6 +578,10 @@ class EmgService:
             }
         if brace is None and not has_base:
             brace = old.brace_max
+        if brace is not None:
+            # A weak brace must not shrink the scale below a plain fist or open hand,
+            # or either one would read as both muscles at full effort.
+            brace = [max(b, s, o) for b, s, o in zip(brace, squeeze, opened, strict=True)]
         self.profile = Profile(
             old.name, rest, squeeze, opened, True, time.strftime("%Y-%m-%d %H:%M:%S"), brace
         )
@@ -478,6 +589,12 @@ class EmgService:
         self._pending = {}
         self.log.emit("emg.calibrated", profile=self.profile.name, brace=brace is not None)
         return {"ok": True, "profile": asdict(self.profile)}
+
+    def fast_trace_since(self, t: float) -> list[tuple[float, float, float, float]]:
+        """(t, fast flexor, fast extensor, brace) rows newer than ``t``, for the incident
+        buffer. Copies under the lock (a short, I/O-free hold)."""
+        with self._lock:
+            return [row for row in self._fast_trace if row[0] > t]
 
     def snapshot(self) -> dict[str, Any]:
         age = None if self.last_sample_t is None else round((now() - self.last_sample_t) * 1000)
@@ -513,6 +630,9 @@ def build_emg(cfg: dict[str, Any], log: EventLog) -> EmgService | None:
         source.extensor_ch = tuple(cfg.get("extensor_channels", [2, 3]))
     else:
         source = GanglionSource(
-            cfg.get("transport", "ble"), cfg.get("serial_port"), cfg.get("mac_address")
+            cfg.get("transport", "ble"),
+            cfg.get("serial_port"),
+            cfg.get("mac_address"),
+            firmware=cfg.get("firmware", "auto"),
         )
     return EmgService(cfg, source, log)
