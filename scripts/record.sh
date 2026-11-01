@@ -12,6 +12,8 @@ lerobot-record \
   --dataset.repo_id="$user/$name" \
   --dataset.num_episodes="$episodes" \
   --dataset.single_task="$task" \
+  --dataset.episode_time_s="${H2M_EPISODE_S:-20}" \
+  --dataset.reset_time_s="${H2M_RESET_S:-10}" \
   --dataset.streaming_encoding=true \
   --dataset.push_to_hub="${H2M_PUSH:-false}" \
   --display_data=true
