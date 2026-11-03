@@ -2,30 +2,30 @@ poses:
   home:
     taught: true
     joints:
-      shoulder_pan: -6.95
-      shoulder_lift: -57.23
-      elbow_flex: 23.65
-      wrist_flex: 80.04
-      wrist_roll: -13.14
-      gripper: 6.98
+      shoulder_pan: -9.05
+      shoulder_lift: -57.67
+      elbow_flex: 21.36
+      wrist_flex: 92.35
+      wrist_roll: -17.71
+      gripper: 4.58
   tray_above:
     taught: true
     joints:
-      shoulder_pan: -64.26
-      shoulder_lift: 8.09
-      elbow_flex: 11.6
-      wrist_flex: 45.32
-      wrist_roll: -13.23
-      gripper: 7.04
+      shoulder_pan: -77.98
+      shoulder_lift: -17.23
+      elbow_flex: -2.11
+      wrist_flex: 87.78
+      wrist_roll: -13.41
+      gripper: 26.18
   tray_release:
     taught: true
     joints:
-      shoulder_pan: -64.7
-      shoulder_lift: 17.14
-      elbow_flex: 11.43
-      wrist_flex: 33.98
-      wrist_roll: -13.23
-      gripper: 7.04
+      shoulder_pan: -78.42
+      shoulder_lift: 11.6
+      elbow_flex: -2.11
+      wrist_flex: 87.6
+      wrist_roll: -13.49
+      gripper: 26.18
   handover_above:
     taught: false
     joints:
@@ -202,30 +202,30 @@ slots:
     above:
       taught: true
       joints:
-        shoulder_pan: -13.8
-        shoulder_lift: -23.03
-        elbow_flex: 47.12
-        wrist_flex: 70.29
-        wrist_roll: -12.79
-        gripper: 29.77
+        shoulder_pan: -10.99
+        shoulder_lift: -17.93
+        elbow_flex: 8.88
+        wrist_flex: 76.35
+        wrist_roll: -13.49
+        gripper: 38.47
     grasp:
       taught: true
       joints:
-        shoulder_pan: -13.8
-        shoulder_lift: -0.09
-        elbow_flex: 41.23
-        wrist_flex: 60.09
-        wrist_roll: -13.23
-        gripper: 29.83
+        shoulder_pan: -10.9
+        shoulder_lift: 8.88
+        elbow_flex: 9.05
+        wrist_flex: 76.26
+        wrist_roll: -13.41
+        gripper: 38.47
     point:
       taught: true
       joints:
-        shoulder_pan: -15.21
-        shoulder_lift: -6.95
-        elbow_flex: 35.08
-        wrist_flex: 70.11
-        wrist_roll: -12.79
-        gripper: 5.18
+        shoulder_pan: -11.08
+        shoulder_lift: 9.58
+        elbow_flex: 8.7
+        wrist_flex: 75.65
+        wrist_roll: -13.49
+        gripper: 27.31
   slot_2:
     table_xy:
     - 0.5

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Reflex</title>
+  <title>Armed</title>
   <meta name="theme-color" content="#05070b" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%2305070b'/%3E%3Cpath d='M4 18h5l3-10 4 16 3-11 2 5h7' fill='none' stroke='%234fd8ff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -18,15 +18,16 @@
 
   <div id="app">
     <header class="topbar">
-      <a class="brand" href="#/home" aria-label="Reflex home">
+      <a class="brand" href="#/home" aria-label="Armed home">
         <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
           <rect width="32" height="32" rx="9" fill="var(--bg-2)" stroke="var(--line-2)" />
           <path class="spike" d="M4 18h5l3-10 4 16 3-11 2 5h7" fill="none" stroke="var(--grip)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
-        <span class="name">Reflex</span><span class="sub">H2M</span>
+        <span class="name">Armed</span><span class="sub">H2M</span>
       </a>
       <div class="crumb" aria-live="polite"><span class="kicker" id="crumb-n">01</span><span id="crumb">Home</span></div>
       <div class="chips" id="chips"></div>
+      <span class="cardlinks"><a href="/web/card/index.html" target="_blank" rel="noopener" title="Open the Card (desk overlay page)">Card</a><a href="/web/card/index.html?mode=far" target="_blank" rel="noopener" title="Open the bedside screen (far mode)">Bedside</a></span>
       <button class="stop" id="stop" title="Stop the arm now (Space)"><span class="ring"></span><b>STOP</b></button>
     </header>
 

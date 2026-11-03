@@ -126,8 +126,18 @@ class LeRobotArm(ArmBackend):
     name = "lerobot"
     is_hardware = True
 
-    def __init__(self, port: str | None, robot_id: str, max_step_deg: float):
+    def __init__(
+        self,
+        port: str | None,
+        robot_id: str,
+        max_step_deg: float,
+        p_gains: Mapping[str, int] | None = None,
+    ):
         self._port, self._robot_id, self._max_step = port, robot_id, max_step_deg
+        # P_Coefficient overrides per joint. LeRobot's default of 16 is soft; with the
+        # per-step clamp the servo sees at most max_step_deg of error, so a lifting
+        # joint can barely out-push gravity at full reach.
+        self._p_gains = {j: int(v) for j, v in (p_gains or {}).items()}
         self._robot: Any | None = None
 
     def _build(self) -> Any:
@@ -163,8 +173,18 @@ class LeRobotArm(ArmBackend):
         except Exception as exc:
             raise BackendError(f"connect failed: {exc}") from exc
         self._robot = robot
+        self._apply_gains()
         # Pin the goal to the current position so enabling torque never jumps.
         self.write_goal(self.read_joints())
+
+    def _apply_gains(self) -> None:
+        for joint, gain in self._p_gains.items():
+            if joint not in JOINTS or not 1 <= gain <= 64:
+                raise BackendError(f"bad P gain for {joint!r}: {gain}")
+            try:
+                self._bus().write("P_Coefficient", joint, gain)
+            except Exception as exc:
+                raise BackendError(f"P gain write failed for {joint}: {exc}") from exc
 
     def disconnect(self) -> None:
         robot, self._robot = self._robot, None

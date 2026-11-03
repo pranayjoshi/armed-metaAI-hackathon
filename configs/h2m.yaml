@@ -255,9 +255,13 @@ arm:
   poses_file: configs/poses.yaml
   skills_file: configs/skills.yaml
   control_hz: 30
-  max_joint_speed_deg_s: 30
+  max_joint_speed_deg_s: 20
   max_gripper_speed_pct_s: 60
   max_step_deg: 4.0
+  # Servo P_Coefficient overrides (LeRobot default 16). shoulder_lift stalled near full
+  # reach with 16: at most max_step_deg of error x a soft gain barely beats gravity.
+  p_gains:
+    shoulder_lift: 28
   # 3.0 faulted every pick at the retreat: shoulder_lift holds 3.7 deg low at tray_above.
   arrive_tolerance_deg: 5.0
   tracking_error_deg: 20.0

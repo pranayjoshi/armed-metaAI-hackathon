@@ -16,7 +16,10 @@ def build_arm(cfg: dict[str, Any], log: EventLog | None = None) -> Arm:
     if cfg.get("backend") == "lerobot":
         port = cfg.get("port") or os.environ.get("H2M_ARM_PORT")
         backend = LeRobotArm(
-            port, cfg.get("robot_id", "h2m_follower"), float(cfg.get("max_step_deg", 4))
+            port,
+            cfg.get("robot_id", "h2m_follower"),
+            float(cfg.get("max_step_deg", 4)),
+            cfg.get("p_gains") or {},
         )
     else:
         backend = VirtualArm(poses.pose("home").joints)

@@ -202,7 +202,7 @@ def test_budget_comes_from_distance_and_speed(arm):
     assert arm.execute(plan, grip=grip, speed=1.0)[0]
     fast = arm._budget_s
     s = arm.settings
-    assert s.plan_budget_margin_s < fast < slow < 25 / 0.1
+    assert s.plan_budget_margin_s < fast < slow < 40 / 0.1
     # Only the motion scales with speed; dwell and margin stay fixed.
     fixed = s.plan_budget_margin_s + s.plan_budget_factor * sum(w.dwell_s for w in plan.waypoints)
     assert slow - fixed == pytest.approx(10 * (fast - fixed), rel=0.1)

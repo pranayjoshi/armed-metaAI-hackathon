@@ -474,7 +474,12 @@ class Arm:
             return
         arm_err = [abs(self._measured[j] - self._cmd[j]) for j in JOINTS if j != GRIPPER]
         if max(arm_err) > s.tracking_error_deg:
-            self._fault("tracking error: arm blocked or slipping")
+            worst = [j for j in JOINTS if j != GRIPPER][arm_err.index(max(arm_err))]
+            self._fault(
+                "tracking error: arm blocked or slipping "
+                f"({worst} {self._measured[worst]:.1f} vs commanded {self._cmd[worst]:.1f}"
+                f" at {wp.label})"
+            )
             return
         commanded = all(abs(self._cmd[j] - v) < 1e-6 for j, v in wp.joints.items())
         settled = wp.gripper_only or all(

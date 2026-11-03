@@ -88,3 +88,8 @@
 .brand .sub { font: 500 10px var(--font-mono); letter-spacing: .16em; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 6px; padding: 3px 6px; }
 :root[data-mode="replay"] .topbar { border-bottom-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 :root[data-mode="replay"] .stop { opacity: .85; }
+
+.cardlinks { display: flex; gap: 6px; flex: none; }
+.cardlinks a { font: 500 11.5px var(--font-mono); color: var(--ink-2); text-decoration: none; padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 9px; transition: color .2s, border-color .2s, background .2s; }
+.cardlinks a:hover { color: var(--ink); border-color: var(--ink-3); background: rgba(255,255,255,.05); }
+@media (max-width: 760px) { .cardlinks { display: none; } }
