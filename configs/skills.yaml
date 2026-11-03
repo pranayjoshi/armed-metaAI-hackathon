@@ -21,7 +21,7 @@
 skills:
   wave:
     say: "Hello."
-    speed: 0.5
+    speed: 1.0
     steps:
       - {pose: wave_up}
       - {pose: wave_left}

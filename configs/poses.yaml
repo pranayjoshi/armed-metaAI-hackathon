@@ -63,32 +63,32 @@ poses:
       wrist_roll: 0
       gripper: 5
   wave_up:
-    taught: false
+    taught: true
     joints:
-      shoulder_pan: -6.95
-      shoulder_lift: -27.23
-      elbow_flex: 23.65
-      wrist_flex: 80.04
-      wrist_roll: -13.14
-      gripper: 6.98
+      shoulder_pan: 20.31
+      shoulder_lift: -59.52
+      elbow_flex: 18.64
+      wrist_flex: 26.95
+      wrist_roll: -14.99
+      gripper: 39.2
   wave_left:
-    taught: false
+    taught: true
     joints:
-      shoulder_pan: -6.95
-      shoulder_lift: -27.23
-      elbow_flex: 23.65
-      wrist_flex: 80.04
-      wrist_roll: -38.14
-      gripper: 6.98
+      shoulder_pan: 20.4
+      shoulder_lift: -59.34
+      elbow_flex: 18.55
+      wrist_flex: 26.86
+      wrist_roll: 34.95
+      gripper: 39.27
   wave_right:
-    taught: false
+    taught: true
     joints:
-      shoulder_pan: -6.95
-      shoulder_lift: -27.23
-      elbow_flex: 23.65
-      wrist_flex: 80.04
-      wrist_roll: 11.86
-      gripper: 6.98
+      shoulder_pan: 20.04
+      shoulder_lift: -59.25
+      elbow_flex: 18.64
+      wrist_flex: 26.95
+      wrist_roll: -44.97
+      gripper: 39.53
   bow_down:
     taught: false
     joints:
@@ -231,23 +231,23 @@ slots:
     - 0.5
     - 0.55
     above:
-      taught: false
+      taught: true
       joints:
-        shoulder_pan: 0
-        shoulder_lift: -20
-        elbow_flex: 30
-        wrist_flex: 70
-        wrist_roll: 0
-        gripper: 60
+        shoulder_pan: -29.27
+        shoulder_lift: -27.52
+        elbow_flex: 9.58
+        wrist_flex: 70.64
+        wrist_roll: -17.19
+        gripper: 24.78
     grasp:
-      taught: false
+      taught: true
       joints:
-        shoulder_pan: 0
-        shoulder_lift: 0
-        elbow_flex: 20
-        wrist_flex: 75
-        wrist_roll: 0
-        gripper: 60
+        shoulder_pan: -29.1
+        shoulder_lift: 2.64
+        elbow_flex: 9.41
+        wrist_flex: 70.55
+        wrist_roll: -17.19
+        gripper: 24.78
     point:
       taught: false
       joints:
@@ -262,23 +262,23 @@ slots:
     - 0.75
     - 0.55
     above:
-      taught: false
+      taught: true
       joints:
-        shoulder_pan: 30
-        shoulder_lift: -20
-        elbow_flex: 30
-        wrist_flex: 70
-        wrist_roll: 0
-        gripper: 60
+        shoulder_pan: 6.86
+        shoulder_lift: -22.59
+        elbow_flex: 10.55
+        wrist_flex: 70.55
+        wrist_roll: -17.19
+        gripper: 24.78
     grasp:
-      taught: false
+      taught: true
       joints:
-        shoulder_pan: 30
-        shoulder_lift: 0
-        elbow_flex: 20
-        wrist_flex: 75
-        wrist_roll: 0
-        gripper: 60
+        shoulder_pan: 7.21
+        shoulder_lift: 3.96
+        elbow_flex: 10.37
+        wrist_flex: 70.55
+        wrist_roll: -17.19
+        gripper: 24.78
     point:
       taught: false
       joints:
