@@ -81,6 +81,18 @@ skills:
       - {pose: tray_release, dwell: 0.4}
       - {gripper: open, dwell: 0.3}
       - {pose: tray_above}
+  hold_jar:
+    # Open at the hand spot, wait for the jar to be held out, close softly, hold while the
+    # person twists the lid off, then let go and retreat.
+    needs_empty: true
+    near_person: true
+    speed: 0.4
+    say: "I've got it."
+    steps:
+      - {pose: jar_hold, gripper: open, dwell: 3.0}
+      - {gripper: soft, dwell: 12.0}
+      - {gripper: open, dwell: 0.3}
+      - {pose: home, gripper: keep}
   sip:
     # Bring what is held (a cup with a straw) toward the mouth from below, hold, retreat.
     needs_holding: true

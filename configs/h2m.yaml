@@ -14,9 +14,9 @@ objects:
     prompt: wooden block
     max_grip: 0.9
   - id: ball
-    name: tennis ball
-    prompt: tennis ball
-    max_grip: 0.6
+    name: phone
+    prompt: phone
+    max_grip: 0.5
 
 speech:
   source: mic            # mic | off  (typed commands always work)
@@ -274,11 +274,18 @@ arm:
   gripper_open: 30      # matches the taught opening; wider can hit the tray at tray_release
   gripper_soft_close: 25
   gripper_hard_close: 0
+  # Open to the jaw value taught at each slot's grasp pose (clamped to the range below)
+  # instead of the one gripper_open for every object. Off: every pick opens to gripper_open.
+  use_taught_grasp_jaws: true
+  taught_jaws_range: [20, 60]
+  # UNMEASURED: the widest opening known to clear the tray wall at tray_release. A pick to the
+  # tray opens no wider than this; measure 38 and 57 at the arm, then raise it.
+  tray_release_max_pct: 30
   # Never exceed this share of servo torque (LeRobot burnout cap is 50%).
   max_gripper_torque: 0.5
   slot_tolerance: 0.12   # table distance from an object to a taught slot
   joint_limits:
-    shoulder_pan: [-100, 100]
+    shoulder_pan: [-100, 110]   # the calibrated range ends near 118; hold_up reaches 106 toward the user
     shoulder_lift: [-100, 100]
     elbow_flex: [-100, 100]
     wrist_flex: [-100, 100]
