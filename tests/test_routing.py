@@ -142,7 +142,7 @@ def test_route_with_undefined_pose_is_rejected(tmp_path):
 
     from h2m.robot.skills import PoseError, load_poses
 
-    data = yaml.safe_load((ROOT / "configs" / "poses.yaml").read_text())
+    data = yaml.safe_load((ROOT / "tests" / "fixtures" / "poses.yaml").read_text())
     data["routes"]["sneaky"] = ["not_a_pose"]
     path = tmp_path / "poses.yaml"
     path.write_text(yaml.safe_dump(data))

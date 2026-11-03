@@ -25,7 +25,7 @@ Prepared October 27, 2026. **Direction replaced October 31, 2026:** the hackatho
 
 **The bet that can fail:** a real flinch may not register cleanly on forearm electrodes. Gate G1 (§4.2) tests this first. If it fails, the entry falls back to a deliberate "tense up" signal and drops the word "involuntary".
 
-**Hackathon fit.** Reported weights are impact 30%, creative use of Meta models 25%, demo 25%, technical depth 20% ([secondary source](https://thegenaimagazine.com/meta-global-ai-developer-hackathon-ideas-prizes)). The [event page](https://cerebralvalley.ai/e/meta-ai-developer-hackathon) describes indie judging as creativity, ambition and whether it works, and startup judging as execution and whether it holds up in production. **Read the official rules** for weights, track, and whether code ported from `human2machine` is acceptable: secondary sources say only work from Oct 26–Nov 4 counts, and `h2m` ports earlier code, so disclose it.
+**Hackathon fit.** Reported weights are impact 30%, creative use of Meta models 25%, demo 25%, technical depth 20% ([secondary source](https://thegenaimagazine.com/meta-global-ai-developer-hackathon-ideas-prizes)). The [event page](https://cerebralvalley.ai/e/meta-ai-developer-hackathon) describes indie judging as creativity, ambition and whether it works, and startup judging as execution and whether it holds up in production. The official rules were checked on November 1 and the entry qualifies; the README keeps a dated list of what was built during the event.
 
 ---
 

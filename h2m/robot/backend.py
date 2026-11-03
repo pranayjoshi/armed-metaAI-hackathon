@@ -151,11 +151,13 @@ class LeRobotArm(ArmBackend):
     def connect(self) -> None:
         robot = self._build()
         try:
+            robot.connect(calibrate=False)
+            # is_calibrated reads the motors, so it only works once the bus is open.
             if getattr(robot, "is_calibrated", True) is False:
+                robot.disconnect()
                 raise BackendError(
                     f"follower {self._robot_id!r} not calibrated: run lerobot-calibrate"
                 )
-            robot.connect(calibrate=False)
         except BackendError:
             raise
         except Exception as exc:
@@ -209,8 +211,8 @@ class LeRobotArm(ArmBackend):
             raw = float(self._bus().read(LOAD_REGISTER, GRIPPER))
         except Exception:
             return None
-        # STS3215 load: 0..1000 magnitude, bit 10 = direction.
-        return round((int(raw) & 0x3FF) / 1000.0, 3)
+        # LeRobot has already decoded the sign bit, so the value is -1000..1000.
+        return round(abs(int(raw)) / 1000.0, 3)
 
     def _bus(self) -> Any:
         bus = getattr(self._require(), "bus", None)

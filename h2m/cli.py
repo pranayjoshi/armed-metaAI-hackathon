@@ -173,7 +173,10 @@ def cmd_arm(args: argparse.Namespace) -> int:
                 time.sleep(0.1)
         if args.action == "teach":
             if not args.pose:
-                print("usage: h2m arm teach <pose>   e.g. home, tray_above, slot_1.grasp")
+                print(
+                    "usage: h2m arm teach <pose>   e.g. home, tray_above, slot_1.grasp,"
+                    " gesture.nod.nod_down"
+                )
                 return 1
             arm.backend.set_torque(False)
             input(f"Torque OFF. Support the arm, move it to '{args.pose}', then press Enter...")

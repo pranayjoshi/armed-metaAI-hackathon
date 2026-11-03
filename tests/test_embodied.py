@@ -24,7 +24,7 @@ from h2m.speech_out import SpeechOut
 ROOT = Path(__file__).resolve().parent.parent
 CFG = load_config()
 SAFETY = CFG["safety"]
-POSES = ROOT / "configs" / "poses.yaml"
+POSES = ROOT / "tests" / "fixtures" / "poses.yaml"
 SCENE = [{"id": "cup", "name": "paper cup", "table_xy": (0.25, 0.55)}]
 
 
@@ -302,3 +302,23 @@ def test_scene_vision_failure_is_graceful():
     emb, _, _, spoken, _ = make(vision=bad)
     assert emb.answer_scene("?", "F").spoken
     assert "not sure" in spoken[-1][-1]
+
+
+def test_teach_saves_gesture_keyframe(tmp_path):
+    from h2m.embodied import load_gestures
+    from h2m.robot.skills import load_poses, save_pose
+
+    src = Path("tests/fixtures/poses.yaml")
+    path = tmp_path / "poses.yaml"
+    path.write_text(src.read_text())
+    lib = load_poses(path)
+    joints = {"shoulder_pan": 1.0, "shoulder_lift": -88.0, "elbow_flex": 89.0,
+              "wrist_flex": 70.0, "wrist_roll": 0.5, "gripper": 5.0}
+    save_pose(lib, "gesture.nod.nod_down", joints)
+    save_pose(lib, "gesture.nod.nod_extra", joints)
+    steps = load_gestures(path)["nod"]
+    by_name = {s.name: s for s in steps}
+    assert by_name["gesture.nod.nod_down"].taught
+    assert by_name["gesture.nod.nod_down"].joints["shoulder_lift"] == -88.0
+    assert steps[-1].name == "gesture.nod.nod_extra"  # appended last
+    assert not by_name["gesture.nod.nod_up"].taught  # others untouched

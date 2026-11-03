@@ -1,0 +1,22 @@
+// Small 24x24 stroke glyphs, one per node kind. Drawn with currentColor.
+export const ICONS = {
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  keys: '<rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 11h.01M11 11h.01M15 11h.01M8 14h8"/>',
+  eye: '<path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.8"/>',
+  wave: '<path d="M3 12h2M7 8v8M11 4v16M15 8v8M19 10v4M21 12h0"/>',
+  parse: '<path d="M4 7h10M4 12h16M4 17h7"/><circle cx="18" cy="7" r="1.6"/>',
+  bolt: '<path d="M13 3 5 13h6l-1 8 8-10h-6z"/>',
+  spark: '<path d="M12 3v5M12 16v5M3 12h5M16 12h5M6 6l3 3M15 15l3 3M18 6l-3 3M9 15l-3 3"/>',
+  doc: '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4M10 12h5M10 16h5"/>',
+  shield: '<path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/><path d="m9 12 2.2 2.2L15 10"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',
+  arm: '<path d="M4 20h6"/><path d="M7 20V12l6-6 5 3"/><circle cx="7" cy="12" r="1.4"/><circle cx="13" cy="6" r="1.4"/><path d="M18 9v3M16 12h4"/>',
+  pulse: '<path d="M2 12h4l2.5-7 4 14 3-9 1.5 2H22"/>',
+  fist: '<path d="M7 11V7a2 2 0 0 1 4 0v3M11 9V6a2 2 0 0 1 4 0v4M15 10V8a2 2 0 0 1 4 0v6a7 7 0 0 1-7 7h-1a5 5 0 0 1-5-5v-5a2 2 0 0 1 4 0"/>',
+  palm: '<path d="M8 13V6a1.6 1.6 0 0 1 3.2 0v5M11.2 11V4.6a1.6 1.6 0 0 1 3.2 0V11M14.4 11V6a1.6 1.6 0 0 1 3.2 0v8a7 7 0 0 1-7 7 5 5 0 0 1-4-2l-2.4-3.4a1.6 1.6 0 0 1 2.6-1.8L8 14"/>',
+  alert: '<path d="M12 3 2.5 20h19z"/><path d="M12 10v5M12 17.5v.01"/>',
+  stop: '<rect x="5" y="5" width="14" height="14" rx="2.5"/>',
+  film: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 5v14M16 5v14M3 10h5M3 14h5M16 10h5M16 14h5"/>',
+  check: '<path d="m4 12.5 5 5L20 6.5"/>',
+  db: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/>',
+};

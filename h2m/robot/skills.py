@@ -101,7 +101,17 @@ def save_pose(library: PoseLibrary, name: str, joints: Joints) -> None:
         raise PoseError("library has no file")
     data = yaml.safe_load(library.path.read_text()) or {}
     entry = {"taught": True, "joints": {j: round(float(joints[j]), 2) for j in JOINTS}}
-    if "." in name:
+    if name.startswith("gesture."):
+        # gesture.<gesture>.<step>: one keyframe of a gesture, kept in step order
+        _, gesture, step = name.split(".", 2)
+        steps = data.setdefault("gestures", {}).setdefault(gesture, [])
+        for raw in steps:
+            if raw.get("name") == step:
+                raw.update(entry)
+                break
+        else:
+            steps.append({"name": step, **entry})
+    elif "." in name:
         slot_id, kind = name.split(".", 1)
         data.setdefault("slots", {}).setdefault(slot_id, {})[kind] = entry
     else:
@@ -128,11 +138,13 @@ class Plan:
         return sorted({p.name for p in self.poses if not p.taught})
 
 
-def _move(label: str, pose: Pose, stage: str, gripper: float | None = None) -> Waypoint:
+def _move(
+    label: str, pose: Pose, stage: str, gripper: float | None = None, dwell_s: float = 0.0
+) -> Waypoint:
     joints = dict(pose.joints)
     if gripper is not None:
         joints[GRIPPER] = gripper
-    return Waypoint(label, joints, stage)
+    return Waypoint(label, joints, stage, dwell_s=dwell_s)
 
 
 def _arm_only(label: str, pose: Pose, stage: str) -> Waypoint:
@@ -177,12 +189,13 @@ def plan_pick_place(
         "pick_place",
         (
             _move(f"{slot.slot_id}.above", slot.above, "approach", gripper=open_pct),
-            _move(f"{slot.slot_id}.grasp", slot.grasp, "approach", gripper=open_pct),
+            # Settle before the jaws move: arrival only means within arrive_tolerance.
+            _move(f"{slot.slot_id}.grasp", slot.grasp, "approach", gripper=open_pct, dwell_s=0.4),
             Waypoint("close", {GRIPPER: close_pct}, "grasp", gripper_only=True, dwell_s=0.4),
             _move("lift", slot.above, "carry", gripper=close_pct),
             *(_move(f"via.{p.name}", p, "carry", gripper=close_pct) for p in via),
             _move("tray_above", tray_above, "carry", gripper=close_pct),
-            _move("tray_release", tray_release, "release", gripper=close_pct),
+            _move("tray_release", tray_release, "release", gripper=close_pct, dwell_s=0.4),
             Waypoint("open", {GRIPPER: open_pct}, "release", gripper_only=True, dwell_s=0.3),
             _move("retreat", tray_above, "return", gripper=open_pct),
             _move("home", home, "return"),

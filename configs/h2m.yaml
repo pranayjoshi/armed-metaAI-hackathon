@@ -252,7 +252,8 @@ arm:
   max_joint_speed_deg_s: 30
   max_gripper_speed_pct_s: 60
   max_step_deg: 4.0
-  arrive_tolerance_deg: 3.0
+  # 3.0 faulted every pick at the retreat: shoulder_lift holds 3.7 deg low at tray_above.
+  arrive_tolerance_deg: 5.0
   tracking_error_deg: 20.0
   # Each plan may take factor x (its joint distance / speed + dwell) + margin, so a
   # slowed plan gets exactly the extra time its distance needs. UNVERIFIED on hardware.
@@ -260,7 +261,7 @@ arm:
   plan_budget_margin_s: 3.0
   waypoint_stall_s: 1.5  # a waypoint commanded but not reached (arrive_tolerance) this long faults
   # Gripper percent-open values. Grip effort maps soft..hard into this range.
-  gripper_open: 60
+  gripper_open: 30      # matches the taught opening; wider can hit the tray at tray_release
   gripper_soft_close: 25
   gripper_hard_close: 0
   # Never exceed this share of servo torque (LeRobot burnout cap is 50%).

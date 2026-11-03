@@ -155,7 +155,7 @@ def test_a_failing_empty_check_keeps_the_grip(arm):
 def test_home_and_point_never_command_the_gripper_unless_asked():
     from h2m.robot.skills import load_poses, plan_point
 
-    lib = load_poses(__import__("h2m.core", fromlist=["ROOT"]).ROOT / "configs" / "poses.yaml")
+    lib = load_poses(__import__("h2m.core", fromlist=["ROOT"]).ROOT / "tests" / "fixtures" / "poses.yaml")
     slot = lib.slots["slot_1"]
     for plan in (plan_home(lib), plan_point(lib, slot)):
         assert all("gripper" not in wp.joints for wp in plan.waypoints)
@@ -178,7 +178,7 @@ def _wall(arm, joint, limit):
 def test_blocked_waypoint_faults_on_stall_not_after_ten_times_the_timeout(arm):
     arm.arm()
     plan, grip = pick_plan(arm)
-    _wall(arm, "shoulder_pan", -25.0)  # slot_1.above is at -30: 5 deg short
+    _wall(arm, "shoulder_pan", -22.0)  # slot_1.above is at -30: 8 deg short
     first = plan.waypoints[0].joints
     motion = max(abs(v - arm._cmd[j]) for j, v in first.items() if j != "gripper") / (
         arm.settings.max_joint_speed_deg_s * 0.1
@@ -203,7 +203,9 @@ def test_budget_comes_from_distance_and_speed(arm):
     fast = arm._budget_s
     s = arm.settings
     assert s.plan_budget_margin_s < fast < slow < 25 / 0.1
-    assert slow - s.plan_budget_margin_s == pytest.approx(10 * (fast - s.plan_budget_margin_s), rel=0.1)
+    # Only the motion scales with speed; dwell and margin stay fixed.
+    fixed = s.plan_budget_margin_s + s.plan_budget_factor * sum(w.dwell_s for w in plan.waypoints)
+    assert slow - fixed == pytest.approx(10 * (fast - fixed), rel=0.1)
 
 
 def test_slowed_plan_still_completes_inside_its_budget(arm):
