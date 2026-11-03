@@ -161,6 +161,11 @@ safety:
   gesture_envelope_deg: 15
   gesture_speed_cap: 0.3
   gesture_wait_s: 8.0    # a request after a gesture in one reply is gated once it ends (or this passes)
+  # Taught skills (configs/skills.yaml) always confirm. Those flagged near_person (hold_up,
+  # take_this, sip) go near a face or a hand: HELD until this is true (REVIEWED RELAXATION
+  # when switched on), and capped at near_person_speed_cap.
+  near_person_enabled: false
+  near_person_speed_cap: 0.3
   # A gripper load reading above this vetoes "gripper empty" (can only veto, never prove).
   # UNVERIFIED on hardware: check the idle STS3215 load at home before relying on it.
   gripper_empty_load_max: 0.15
@@ -248,6 +253,7 @@ arm:
   port: null             # or env H2M_ARM_PORT
   robot_id: my_follower_arm
   poses_file: configs/poses.yaml
+  skills_file: configs/skills.yaml
   control_hz: 30
   max_joint_speed_deg_s: 30
   max_gripper_speed_pct_s: 60

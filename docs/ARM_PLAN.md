@@ -10,54 +10,89 @@ Environment for every hardware command: a terminal tab with `conda activate lero
 |---|---|---|
 | 0.1 Rerun the empty-gripper pick with the tolerance fix | `h2m run --arm lerobot --emg off --vision off --speech off --llm off --i-have-the-estop`, arm it, `pick up the paper cup`, confirm | Plan reaches `home` without a fault, twice |
 | 0.2 Real object | Same, with the wooden block at slot_1 | Block lands in the tray, twice |
-| 0.3 Teach work poses (section 1) | `h2m arm teach <name>` per pose | Every pose in section 1 marked `taught: true` |
-| 0.4 Teach gesture keyframes (section 2) | `h2m arm teach gesture.<gesture>.<step>` | The five gestures taught; wave and bow readings noted |
+| 0.3 Teach block A (section 2) | `h2m arm teach <name>` per pose | Every pose in block A marked `taught: true` |
+| 0.4 Teach blocks B and C (section 2) | `h2m arm teach <name>`, gesture steps as `gesture.<gesture>.<step>` | All taught; the skills in block C stay held until review |
 | 0.5 Record the dataset (section 3) | `scripts/record.sh` three runs into one dataset | 75 episodes, no slow-loop warnings |
 | 0.6 Start training on Vultr (section 4) | tmux on the instance | Loss printing, step rate checked |
 | 0.7 Sleep | — | — |
 
-`h2m arm teach` now also saves gesture keyframes: `gesture.nod.nod_down` updates that step of `nod` in `configs/poses.yaml`, or appends it if the name is new. Gesture names themselves are still fixed to `nod, tilt, shake, look_at_user, thinking` in `h2m/embodied.py`; new gesture names (wave, bow) are the Body stream's job and must not be written to the poses file before that lands, or the app refuses to start.
+Two kinds of taught motion now exist, and the teach command serves both:
+
+- **Gestures** (`nod`, `tilt`, `shake`, `look_at_user`, `thinking`): tiny moves within 15° of `home` that run without a confirmation when the gripper is proven empty. Keyframes are taught as `gesture.nod.nod_down` and so on.
+- **Skills** (`configs/skills.yaml`: `wave`, `bow`, `celebrate`, `sorry`, `hold_up`, `take_this`, `sip`, `press_button`): fixed sequences of ordinary poses that always ask for a confirmation, so they may leave the home envelope. Their poses are plain names (`wave_up`, `face_near`, ...), taught like `home`. Typed or spoken: "wave", "take this", "hold up the cup", "sip", "press the button". Muse gets them as the `skill` tool. A slot-to-slot move ("move the cup to slot 2", tool `move_to_slot`) is built the same way.
+
+`hold_up`, `take_this` and `sip` go near your face or hand: they are **held** until `safety.near_person_enabled` is true in `configs/h2m.yaml`, which stays false until the safety review clears them for the real arm. Teach their poses tonight anyway; they run the moment the flag flips.
 
 Teaching routine, every pose: torque drops, support the arm with one hand, place it, press Enter, torque returns pinned where it is. Keep the leader arm unplugged during teaching so nothing else talks to the bus.
 
-## 1. Work poses to teach
+## 1. Every demo beat and the poses it needs
 
-Order matters: the ones at the top unblock the demo loop; the ones at the bottom are for beats that need a safety review before they run.
+The desk layout, fixed before teaching anything: you sit at the front edge; the arm is clamped at the back right; three object spots in a row in front of the arm (`slot_1` left, `slot_2` middle, `slot_3` right, 10–12 cm apart); the tray at the far left; the laptop between `slot_1` and the tray so the direct carry crosses it; a hand spot at the front edge by your right hand. Mark every spot with tape so it survives the night.
 
-| Pose | Purpose | How to place it | Notes |
+| Beat | What the arm does | How it runs | Poses |
 |---|---|---|---|
-| `home` | Rest and return pose | Already taught. Leave it. | Every plan ends here |
-| `slot_1.above`, `slot_1.grasp`, `slot_1.point` | First object spot | Taught. Re-teach `above` about 2 cm higher if the jaws came close to the table in 0.2 | — |
-| `slot_2.above`, `slot_2.grasp`, `slot_2.point` | Second object spot, table_xy 0.5/0.55 | Same height as slot_1, 10–12 cm to the right | Needed for three real cards |
-| `slot_3.above`, `slot_3.grasp`, `slot_3.point` | Third spot, 0.75/0.55 | Another 10–12 cm right | — |
-| `tray_above`, `tray_release` | Drop-off | Taught. Check the jaw clears the tray rim at `tray_release` with the gripper at 30 | — |
-| `via_high` | High carry route for liquids and the laptop rule | Above `home` height, between slot_1 and the tray, nothing underneath | The rule learned from a flinch routes through this |
-| `via_left` | Alternative route, used by the rules demo | Same height as `via_high`, swung left | — |
-| `handover_above`, `handover_release` | Place-near-user and take-this spot | A spot at the front edge of the desk where your hand rests naturally; `above` 8 cm over it, `release` 2 cm over it, gripper 30 | Also set `handover.spot` table_xy in `configs/routes.yaml`; keep `camera_sees_past_arm: false` until checked |
-| `phone_pick` (as `slot_2.grasp` reuse) | Show-phone | Use slot_2 for the phone so no new pick pose is needed; the phone goes in a rubber case | — |
-| `phone_hold` | Phone held at eye level | Arm up, gripper toward your face, 40 cm away, screen facing you | Reviewed relaxation: outside the home envelope. Teach it now, run it only after review |
-| `face_above`, `face_near` | Straw-to-mouth | `above` 20 cm in front of and above your mouth; `near` 6 cm from your lips, approached from below | Reviewed relaxation. Teach with the arm empty. Never run before `safety-reviewer` approves the face approach |
+| Hello / goodbye | Waves, looks at you; bows at the end | skills `wave`, `bow`; gesture `look_at_user` | `wave_up`, `wave_left`, `wave_right`, `bow_down`, `gesture.look_at_user.*` |
+| Three cards, one twitch | Pick from any of three spots to the tray | `pick_place` | `slot_1/2/3 .above .grasp .point`, `tray_above`, `tray_release`, `home` |
+| Show phone while typing | Picks the phone from its slot, holds it at eye level 6 s, puts it back | skill `hold_up` (near person) | the phone's slot, `hold_up` |
+| Take this (put it away) | Opens at the hand spot, waits 3 s for you to place it and let go, closes softly, tray | skill `take_this` (near person) | `handover_above`, `handover_release`, `tray_*` |
+| Hand me the cup | Carries a cup to the hand spot and lowers it | `place_near_user` | `handover_above`, `handover_release`; set `handover.spot` in `routes.yaml` |
+| Water to my mouth | Brings the held cup to 6 cm from your lips from below, holds 4 s, returns | skill `sip` (near person, needs a held object) | `face_above`, `face_near` |
+| Pills at 8am | Picks the pill cup from a slot to the hand spot | `pick_place` to the hand spot: not built; use `place_near_user` after a pick | `slot_3.*`, `handover_*` |
+| It notices (tidy) | Pen cup bumped from `slot_2` to `slot_3`; card appears; it moves it back | `move_to_slot` | `slot_3.*` → `slot_2.*` |
+| Press the call button / light | Taps a taught button spot with closed jaws | skill `press_button` | `press_above`, `press_down` |
+| Flinch over the laptop | Direct carry crosses the laptop; you brace; freeze; "sorry" | brace stop, then skill `sorry` | `sorry_back`, `sorry_low`; laptop `avoid` zone in `routes.yaml` |
+| The rule | Next carry takes the high route | rules + routes | `via_high`, `via_left` |
+| Nod / shake / think | Accept, refuse, "hm" | gestures | `gesture.nod.*`, `gesture.shake.*`, `gesture.tilt.*`, `gesture.thinking.*` |
+| Celebrate | After a task | skill `celebrate` | `celebrate_up`, `celebrate_left`, `celebrate_right` |
+| Point / where are my keys | Points at a slot, looks at you | `point`, gesture | `slot_n.point`, `gesture.look_at_user.*` |
+| Send a message | No motion | `send_message` (Body, not built) | — |
+| Headboard scene | Water, pills, phone from the bed | second poses file (day 2) | `home`, one slot, `handover_*`, `face_*` |
 
-Save the approximate table positions of any new slot in `configs/poses.yaml` `table_xy` so vision can map objects to it later.
+Not built, and not needed for the beats above: hold-this-beside-you (`hold_side`), the forehead thermometer, the closed-jaw push, the gentler `face_low` approach. If the Body stream adds them, their poses are taught the same way.
 
-## 2. Gestures
+## 2. The teaching list, in order
 
-Each gesture is 2–4 keyframes; the executor plays them in order and returns to `home`. Keep every keyframe within about 15° of `home` on every joint (the gesture envelope), except the gripper, which stays closed. Teach them as `gesture.<name>.<step>`.
+Teach top to bottom. Block A unblocks the loop and the baseline; block B is the demo beats that run as soon as they are taught; block C is taught now and runs only after `safety-reviewer` clears `near_person_enabled` for the real arm.
 
-| Gesture | Steps | How it should look |
-|---|---|---|
-| `nod` | `nod_down`, `nod_up`, `nod_home` | Wrist flexes down ~10°, up ~10°, back |
-| `shake` | `shake_left`, `shake_right`, `shake_home` | Wrist rolls ±12° |
-| `tilt` | `tilt_left`, `tilt_home` | One roll of ~12°, hold, back: "hm?" |
-| `look_at_user` | `look_user` | Pan toward where you sit, wrist tilted up a little |
-| `thinking` | `think_up`, `think_side`, `think_home` | Wrist up ~10°, pan ~10° to one side, back |
+**Block A: the loop**
 
-For `wave` and `bow`, do not teach yet. Instead run `h2m arm read`, move the arm by hand through the shape you want (with torque off: Ctrl+C out of `arm read`, then use `h2m arm teach` to a scratch name you delete afterwards is simpler), and write the three readings into `docs/hardware/gesture_notes.md`:
+| Pose | How to place it |
+|---|---|
+| `home` | Taught. Leave it. |
+| `slot_1.above / .grasp / .point` | Taught. Re-teach `above` 2 cm higher if the jaws came close to the table. |
+| `slot_2.above / .grasp / .point` | Same height as slot_1, 10–12 cm right. `table_xy` 0.5/0.55 already set. |
+| `slot_3.above / .grasp / .point` | Another 10–12 cm right. 0.75/0.55. |
+| `tray_above`, `tray_release` | Taught. Confirm the jaw clears the rim at 30 open. |
+| `via_high` | Above `home` height, between slot_1 and the tray, clear of the laptop. |
+| `via_left` | Same height, swung left of the laptop. |
+| `handover_above`, `handover_release` | 8 cm and 2 cm over the hand spot, gripper 30. Set `handover.spot` in `routes.yaml`. |
 
-- wave: arm raised to the side, gripper up; wrist rolled left; wrist rolled right
-- bow: shoulder forward ~20°, wrist down; back
+**Block B: expressive skills and gestures (run after a confirmation, or auto for the five tiny gestures)**
 
-The Body stream adds `wave` and `bow` to the gesture list with a performance envelope, then you teach them in one minute.
+| Pose | How to place it |
+|---|---|
+| `wave_up` | Arm raised, forearm vertical, gripper pointing up, wrist roll centred |
+| `wave_left`, `wave_right` | Same, wrist rolled about 25° each way |
+| `bow_down` | From home, shoulder forward about 20°, wrist dipped |
+| `celebrate_up` | Arm high, wrist up |
+| `celebrate_left`, `celebrate_right` | Same, wrist rolled about 20° each way |
+| `sorry_back`, `sorry_low` | Shoulder back about 10°, wrist drooping; then a little lower |
+| `press_above`, `press_down` | Closed jaws 3 cm above the button or switch; then touching it with enough travel to press |
+| `gesture.nod.nod_down / nod_up / nod_home` | Wrist flex down ~10°, up ~10°, back; all within 15° of home |
+| `gesture.shake.shake_left / shake_right / shake_home` | Wrist roll ±12° |
+| `gesture.tilt.tilt_left / tilt_home` | One roll of 12°, hold, back |
+| `gesture.look_at_user.look_user / look_user_home` | Pan toward where you sit, wrist up a little; back |
+| `gesture.thinking.think_a / think_b / think_home` | Wrist up 10°, pan 10° to one side, then the other, back |
+
+**Block C: taught now, held until review (they approach your face or hand)**
+
+| Pose | How to place it |
+|---|---|
+| `hold_up` | Arm up, gripper toward your face, about 40 cm away, as if holding a phone for you to read |
+| `face_above` | 20 cm in front of and above your mouth |
+| `face_near` | 6 cm from your lips, straw level, approached from below |
+
+Teach with `h2m arm teach <name>`; gesture steps as `gesture.<gesture>.<step>`. Save any new slot's `table_xy` in `configs/poses.yaml`. A skill whose pose is still untaught is refused by the real arm with the pose named, so a half-taught list fails loudly, not quietly.
 
 ## 3. Recording the dataset
 
@@ -162,6 +197,6 @@ The policy never runs in the live demo unless it passed two clean runs inside th
 
 ## 6. What the code streams need from this file
 
-- Body: `wave` and `bow` gesture names plus the performance envelope; `phone_hold`, `face_above`/`face_near` approach plans and the take-this plan, each as a reviewed relaxation; the `learned_grasp` wrapper, last.
+- Body: `send_message`; the "sorry" retreat after a brace; optional extras (hold-beside-you, forehead thermometer, closed-jaw push, `face_low`) as new skills in `configs/skills.yaml`; the `learned_grasp` wrapper, last. The skill layer itself (wave, bow, celebrate, sorry, hold_up, take_this, sip, press_button, move_to_slot) is built and tested; `near_person_enabled` stays false until the safety review clears it.
 - Mind: slot_2 and slot_3 `table_xy` for the vision map; nothing else here.
 - Proof: the recording and training commands above go in the README's hardware section, with the dataset size and the training cost.

@@ -26,7 +26,7 @@ from h2m.contract import Verb
 from h2m.robot.backend import GRIPPER, JOINTS
 
 UNKNOWN, EMPTY, HOLDING = "unknown", "empty", "holding"
-RELEASE_VERBS = frozenset({str(Verb.PICK_PLACE), str(Verb.PLACE_NEAR_USER)})
+RELEASE_VERBS = frozenset({str(Verb.PICK_PLACE), str(Verb.PLACE_NEAR_USER), str(Verb.MOVE)})
 APPROACH = "approach"  # plan meta phase: place_near_user up to above the spot (no release)
 
 
@@ -60,7 +60,13 @@ class GripperTracker:
 
     def started(self, meta: Mapping[str, Any]) -> None:
         with self._lock:
-            self._active = {"verb": meta.get("verb"), "object_id": meta.get("object_id")}
+            self._active = {
+                "verb": meta.get("verb"),
+                "object_id": meta.get("object_id"),
+                # skills: does the plan close on something / end with the jaws open
+                "closes": meta.get("closes") is True,
+                "releases": meta.get("releases") is True,
+            }
 
     def completed(self, meta: Mapping[str, Any]) -> None:
         with self._lock:
@@ -68,6 +74,8 @@ class GripperTracker:
             if meta.get("verb") in RELEASE_VERBS and meta.get("phase") != APPROACH:
                 # the plan opened at the drop and retreated
                 self._state = GripperState(EMPTY, None, f"released after {meta.get('verb')}")
+            elif meta.get("verb") == str(Verb.SKILL) and meta.get("releases") is True:
+                self._state = GripperState(EMPTY, None, f"released after {meta.get('skill_name')}")
             # home / point / gesture never command the gripper on an object, and the
             # handover approach stops above the spot: the state is unchanged
 
@@ -87,6 +95,13 @@ class GripperTracker:
                 self._state = self._after_pick(prior, stage, active.get("object_id"))
             elif verb == str(Verb.PLACE_NEAR_USER):
                 self._state = self._after_place(prior, stage)
+            elif verb == str(Verb.MOVE):
+                self._state = self._after_pick(prior, stage, active.get("object_id"))
+            elif verb == str(Verb.SKILL) and not active.get("closes"):
+                # wave, sip, press: the jaws are never commanded on an object
+                self._state = replace(prior, why="stopped during a skill; gripper untouched")
+            elif verb == str(Verb.SKILL):
+                self._state = self._after_pick(prior, stage, active.get("object_id"))
             elif verb not in (str(Verb.HOME), str(Verb.POINT), str(Verb.GESTURE)):
                 self._state = GripperState(UNKNOWN, None, f"stopped during {verb}")
 
@@ -123,7 +138,7 @@ class GripperTracker:
     ) -> GripperState:
         """A fault keeps the grip in carry / lower (arm.HOLD_STAGES), so a known object
         is still held. Anything else is UNKNOWN: a fault never proves the gripper empty."""
-        if verb == str(Verb.PICK_PLACE) and stage == "carry" and object_id:
+        if verb in (str(Verb.PICK_PLACE), str(Verb.MOVE), str(Verb.SKILL)) and stage == "carry" and object_id:
             return GripperState(HOLDING, str(object_id), "fault while carrying; grip kept")
         if verb == str(Verb.PLACE_NEAR_USER) and stage in ("carry", "lower") and prior.holding:
             doing = "carrying" if stage == "carry" else "lowering"

@@ -228,7 +228,7 @@ def test_tampered_gesture_plan_is_refused(h2m):
     n = len(started(h2m))
     assert h2m._execute(c, d, "test", plan=bad) == (False, "plan does not match the taught poses")
     assert len(started(h2m)) == n and h2m.arm.state is ArmState.READY
-    unknown = StepContract(Verb.GESTURE, speed=0.25, confidence=0.9, utterance="wave")
+    unknown = StepContract(Verb.GESTURE, speed=0.25, confidence=0.9, utterance="salute")
     assert not h2m._execute(unknown, d, "test")[0]
 
 

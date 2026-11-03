@@ -58,7 +58,9 @@ def decide(contract: StepContract, world: dict[str, Any], cfg: dict[str, Any]) -
     if contract.verb is Verb.UNKNOWN:
         return Decision(Verdict.HOLD, "no robot action recognized", checks)
 
-    targeted = contract.verb in TARGETED_VERBS
+    # A skill is targeted when its definition takes an object (world["targeted"], set
+    # from the skills file, never from the model).
+    targeted = contract.verb in TARGETED_VERBS or world.get("targeted") is True
     checks["action_understood"] = True
     checks["arm_ready"] = bool(world.get("arm_ready"))
     if targeted:
@@ -72,7 +74,7 @@ def decide(contract: StepContract, world: dict[str, Any], cfg: dict[str, Any]) -
         return Decision(Verdict.APPROVE, "speech only, no motion", checks)
 
     held_move = contract.verb in HELD_MOVE_VERBS and world.get("gripper_empty") is not True
-    carries = contract.verb in CARRY_VERBS or held_move
+    carries = contract.verb in CARRY_VERBS or held_move or world.get("carries") is True
     if contract.needs_motion and world.get("emg_required") is True:
         age = world.get("emg_age_s")
         max_age = float(cfg.get("emg_max_age_ms", 300)) / 1000
@@ -84,11 +86,22 @@ def decide(contract: StepContract, world: dict[str, Any], cfg: dict[str, Any]) -
         )
     if carries:
         checks["route_clear"] = world.get("route_clear") is True
-    if contract.verb is Verb.PICK_PLACE:
+    if contract.verb in (Verb.PICK_PLACE, Verb.MOVE):
         # Unknown contents are asked about; a known object or a load reading blocks.
         checks["hand_free"] = (
             world.get("holding") is not True and world.get("gripper_loaded") is not True
         )
+    if world.get("needs_empty") is True:
+        # The skill opens the jaws first: anything held would drop, so empty must be proven.
+        checks["gripper_empty"] = world.get("gripper_empty") is True
+    if contract.verb is Verb.MOVE:
+        checks["destination_ok"] = world.get("destination_ok") is True
+    if contract.verb is Verb.SKILL:
+        checks["skill_known"] = world.get("skill_known") is True
+        if world.get("near_person") is True:
+            checks["near_person_ok"] = world.get("near_person_ok") is True
+        if world.get("needs_holding") is True:
+            checks["holding"] = world.get("holding") is True
     if contract.verb is Verb.PLACE_NEAR_USER:
         checks["holding"] = world.get("holding") is True
         checks["spot_watchable"] = world.get("spot_watchable") is True  # stage 2 can run
@@ -114,13 +127,29 @@ def decide(contract: StepContract, world: dict[str, Any], cfg: dict[str, Any]) -
             else "my muscle sensor is not streaming, so I won't move"
         )
         return Decision(Verdict.HOLD, why, checks)
-    if contract.verb is Verb.PICK_PLACE and not checks["hand_free"]:
+    if checks.get("hand_free") is False:
         why = (
             "I'm already holding something. Place it first."
             if world.get("holding") is True
             else "My gripper feels loaded, so I may be holding something. Place it first."
         )
         return Decision(Verdict.HOLD, why, checks, slot_id=world.get("slot_id"))
+    if contract.verb is Verb.SKILL:
+        if not checks["skill_known"]:
+            return Decision(Verdict.HOLD, f"I don't know how to {contract.utterance}", checks)
+        if checks.get("gripper_empty") is False:
+            return Decision(
+                Verdict.HOLD, "I can't prove my gripper is empty, and that move opens it", checks
+            )
+        if checks.get("near_person_ok") is False:
+            return Decision(
+                Verdict.HOLD, "moves near a person are switched off (near_person_enabled)", checks
+            )
+        if checks.get("holding") is False:
+            return Decision(Verdict.HOLD, "I'm not holding anything for that", checks)
+    if contract.verb is Verb.MOVE and not checks["destination_ok"]:
+        why = world.get("destination_reason") or "that is not a free taught spot"
+        return Decision(Verdict.HOLD, str(why), checks, slot_id=world.get("slot_id"))
     if carries and not checks["route_clear"]:
         why = world.get("route_reason") or "I can't prove a route is clear"
         return Decision(Verdict.HOLD, str(why), checks, slot_id=world.get("slot_id"))
@@ -140,7 +169,10 @@ def decide(contract: StepContract, world: dict[str, Any], cfg: dict[str, Any]) -
         decision = _gesture(contract, world, cfg, checks)
         if decision is not None:
             return decision
-    unconfirmed_carry = carries and world.get("confirmed") is not True
+    # Skills and moves never run unconfirmed, whatever always_confirm says.
+    unconfirmed_carry = (
+        carries or contract.verb in (Verb.SKILL, Verb.MOVE)
+    ) and world.get("confirmed") is not True
     if (
         unconfirmed_carry
         or contract.confidence < cfg.get("auto_approve", 0.85)
@@ -153,7 +185,19 @@ def decide(contract: StepContract, world: dict[str, Any], cfg: dict[str, Any]) -
 
 
 def _question(contract: StepContract, world: dict[str, Any]) -> str:
-    """The confirm question. It says so when the gripper is not proven empty."""
+    """The confirm question. It names a skill or a move (the phrase that triggered it
+    may have been ambiguous) and says so when the gripper is not proven empty."""
+    if contract.verb is Verb.SKILL:
+        name = contract.utterance.replace("_", " ")
+        return f"{name}? {_question_body(contract, world)}"
+    if contract.verb is Verb.MOVE:
+        what = contract.object_name or "it"
+        where = (contract.destination or "there").replace("_", " ")
+        return f"move the {what} to {where}? {_question_body(contract, world)}"
+    return _question_body(contract, world)
+
+
+def _question_body(contract: StepContract, world: dict[str, Any]) -> str:
     if world.get("gripper_empty") is True:
         return CONFIRM
     if contract.verb is Verb.PICK_PLACE:
@@ -161,7 +205,7 @@ def _question(contract: StepContract, world: dict[str, Any]) -> str:
             "I can't tell if my gripper is empty; if it holds something, it drops when "
             f"I open. {CONFIRM[0].upper()}{CONFIRM[1:]}."
         )
-    if contract.verb in HELD_MOVE_VERBS:
+    if contract.verb in HELD_MOVE_VERBS or contract.verb is Verb.SKILL:
         what = "I'm holding something" if world.get("holding") is True else (
             "I may be holding something"
         )

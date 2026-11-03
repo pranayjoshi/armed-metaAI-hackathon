@@ -20,11 +20,14 @@ from typing import Any
 import yaml
 
 from h2m.contract import StepContract, Verb
+from h2m.core import ROOT
 from h2m.robot.backend import GRIPPER, JOINTS
-from h2m.robot.skills import Plan, Pose, PoseError, PoseLibrary, Waypoint
+from h2m.robot.skills import Plan, Pose, PoseError, PoseLibrary, Skill, Waypoint, load_skills
 from h2m.safety import Decision, Verdict, decide
 from h2m.speech_out import SpeechOut
 
+# Only tiny motions near home skip confirmation. Bigger expressive moves (wave, bow,
+# celebrate, sorry) are skills: confirmed like any motion, see configs/skills.yaml.
 GESTURES = ("nod", "tilt", "shake", "look_at_user", "thinking")
 MAX_SAY_CHARS = 280
 TOOL_CONFIDENCE = 0.9  # fixed: a schema-valid tool call is explicit; the model's own odds never count
@@ -53,6 +56,23 @@ def _tool(name: str, description: str, properties: dict[str, Any], required: Seq
     }
 
 
+def _skill_tools(skills: Mapping[str, Skill], slots: Sequence[str]) -> list[dict[str, Any]]:
+    names = sorted(skills)
+    return [
+        _tool("skill",
+              "Run a taught skill. Expressive: wave, bow, celebrate, sorry. Helpful: hold_up "
+              "(hold a catalog object at eye level; needs object_id), take_this (take what the "
+              "person holds out and put it in the tray), sip (bring the held cup to the mouth), "
+              "press_button. The person is asked to confirm first.",
+              {"name": {"type": "string", "enum": names},
+               "object_id": {"type": "string", "maxLength": 64}}, ["name"]),
+        _tool("move_to_slot",
+              "Pick a catalog object and set it down on another taught spot (tidy, rearrange).",
+              {"object_id": {"type": "string", "maxLength": 64},
+               "slot": {"type": "string", "enum": sorted(slots)}}, ["object_id", "slot"]),
+    ]
+
+
 TOOLS: list[dict[str, Any]] = [
     _tool("pick_place", "Pick a catalog object and put it in the tray.",
           {"object_id": {"type": "string", "maxLength": 64}}, ["object_id"]),
@@ -73,16 +93,17 @@ class ToolError(ValueError):
     """Rejected before anything is built: unknown tool or bad arguments."""
 
 
-def validate_args(name: str, args: Any) -> dict[str, Any]:
-    """Strict check against TOOLS: known tool, object args, no extras, required present,
+def validate_args(name: str, args: Any, tools: Sequence[dict[str, Any]] = TOOLS) -> dict[str, Any]:
+    """Strict check against ``tools``: known tool, object args, no extras, required present,
     exact types (bool is not a number or string), enums and lengths enforced."""
-    if not isinstance(name, str) or name not in TOOL_NAMES:
+    names = {t["function"]["name"] for t in tools}
+    if not isinstance(name, str) or name not in names:
         raise ToolError(f"unknown tool: {name!r}")
     if args is None:
         args = {}
     if not isinstance(args, dict):
         raise ToolError(f"{name}: arguments must be an object")
-    schema = next(t["function"]["parameters"] for t in TOOLS if t["function"]["name"] == name)
+    schema = next(t["function"]["parameters"] for t in tools if t["function"]["name"] == name)
     props = schema["properties"]
     extra = sorted(set(args) - set(props))
     if extra:
@@ -183,6 +204,30 @@ def _arm_joints(pose: Pose) -> dict[str, float]:
     return {j: v for j, v in pose.joints.items() if j != GRIPPER}
 
 
+def skill_facts(skill: Skill | None, safety_cfg: Mapping[str, Any]) -> dict[str, Any]:
+    """World facts the gate reads for a skill contract, derived from the skills file and
+    the config only (never from the model or the caller)."""
+    if skill is None:
+        return {"skill_known": False}
+    return {
+        "skill_known": True,
+        "targeted": skill.requires_object,
+        "needs_holding": skill.needs_holding,
+        "needs_empty": skill.needs_empty,
+        "carries": skill.carries,
+        "near_person": skill.near_person,
+        "near_person_ok": safety_cfg.get("near_person_enabled") is True,  # "false" is not on
+    }
+
+
+def skill_speed(skill: Skill, safety_cfg: Mapping[str, Any]) -> float:
+    """The skill's own cap, lowered again near a person."""
+    speed = skill.speed
+    if skill.near_person:
+        speed = min(speed, float(safety_cfg.get("near_person_speed_cap", 0.3)))
+    return speed
+
+
 # ── dispatcher ─────────────────────────────────────────────────────────────────
 
 
@@ -243,10 +288,15 @@ class Embodied:
         self.speech = speech if speech is not None else SpeechOut()
         self.vision = vision
         self.gestures = load_gestures(lib.path)
+        skills_file = cfg.get("arm", {}).get("skills_file")
+        self.skills: dict[str, Skill] = (
+            load_skills(ROOT / str(skills_file)) if skills_file else {}
+        )
+        self._tools = [*TOOLS, *_skill_tools(self.skills, list(lib.slots))]
 
     @property
     def tools(self) -> list[dict[str, Any]]:
-        return TOOLS
+        return self._tools
 
     def cutoff(self) -> None:
         """Silence speech immediately. Call on stop and on brace."""
@@ -255,7 +305,7 @@ class Embodied:
     # public entry ---------------------------------------------------------------
     def handle_tool_call(self, name: str, args: Any = None) -> ToolResult:
         try:
-            clean = validate_args(name, args)
+            clean = validate_args(name, args, self._tools)
         except ToolError as exc:
             return ToolResult(str(name), False, error=str(exc))
         try:
@@ -342,6 +392,32 @@ class Embodied:
             result.executed = True
         return result
 
+    def _do_skill(self, name: str, object_id: str | None = None) -> ToolResult:
+        skill = self.skills.get(name)
+        if skill is None:
+            raise ToolError(f"unknown skill: {name}")
+        if skill.requires_object:
+            if object_id is None:
+                raise ToolError(f"skill {name} needs object_id")
+            contract = self._object_contract(Verb.SKILL, object_id)
+        elif object_id is not None:
+            raise ToolError(f"skill {name} takes no object")
+        else:
+            contract = self._contract(Verb.SKILL)
+        contract.utterance = name
+        contract.speed = skill_speed(skill, self.safety_cfg)
+        world = {**self.world_fn(contract), **skill_facts(skill, self.safety_cfg)}
+        decision = decide(contract, world, self.safety_cfg)
+        return ToolResult("skill", True, contract=contract, decision=decision)
+
+    def _do_move_to_slot(self, object_id: str, slot: str) -> ToolResult:
+        if slot not in self.lib.slots:
+            raise ToolError(f"unknown slot: {slot}")
+        contract = self._object_contract(Verb.MOVE, object_id)
+        contract.destination = slot
+        decision = decide(contract, self.world_fn(contract), self.safety_cfg)
+        return ToolResult("move_to_slot", True, contract=contract, decision=decision)
+
     def _do_say(self, text: str) -> ToolResult:
         contract = self._contract(Verb.SAY, utterance=text)
         decision = decide(contract, {}, self.safety_cfg)
@@ -354,4 +430,4 @@ class Embodied:
 
 __all__ = ["TOOLS", "GESTURES", "Embodied", "ToolError", "ToolResult", "validate_args",
            "load_gestures", "plan_gesture", "gesture_deviation", "plan_place_near_user",
-           "plan_place_lower"]
+           "plan_place_lower", "skill_facts", "skill_speed"]

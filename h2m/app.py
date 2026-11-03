@@ -80,12 +80,22 @@ from h2m.embodied import (
     plan_gesture,
     plan_place_lower,
     plan_place_near_user,
+    skill_facts,
+    skill_speed,
 )
 from h2m.intent import IntentRanker, RankResult, SparkClient, scanning_candidates
 from h2m.learning import Learner
 from h2m.recorder import Recorder
 from h2m.robot import ArmState, build_arm
-from h2m.robot.skills import Plan, Pose, plan_home, plan_pick_place, plan_point
+from h2m.robot.skills import (
+    Plan,
+    Pose,
+    plan_home,
+    plan_move,
+    plan_pick_place,
+    plan_point,
+    plan_skill,
+)
 from h2m.routing import (
     RouteConfig,
     RoutesUnavailable,
@@ -115,7 +125,10 @@ from h2m.world import (
 MIN_CONFIRM_REACTION_S = 0.3
 REJECT_RE = re.compile(r"^\s*(no|nope|no thanks|don'?t|do not)\b", re.I)
 NO_VISION_MODEL = "I can't look closely right now; my vision model is offline."
-TOOL_MOTION = frozenset({"pick_place", "place_near_user", "look_at", "gesture"})
+TOOL_MOTION = frozenset(
+    {"pick_place", "place_near_user", "look_at", "gesture", "skill", "move_to_slot"}
+)
+SKILL_GRIP_MAX = 0.4  # a skill's close (take_this, hold_up) stays soft: it may be near a hand
 HANDOVER_WATCH_STAGES = frozenset({"lower", "release"})  # the hand watchdog runs here
 # Never release-safe for the operator release, whatever the config lists: the spot near
 # the user is only let go over under the stage-2 hand watchdog.
@@ -367,7 +380,48 @@ class H2M:
             world["route_reason"] = problem
             world["spot_watchable"], world["watch_reason"] = self._spot_watchable()
             world["spot_clear"], world["spot_reason"] = self._spot_clear()
+        elif contract.verb is Verb.SKILL:
+            skill = self.embodied.skills.get(contract.utterance)
+            world.update(skill_facts(skill, self.safety_cfg))
+            if skill is not None:
+                contract.speed = min(contract.speed, skill_speed(skill, self.safety_cfg))
+                # Moving while (maybe) holding something is a carry whatever the skill
+                # says: rules shape it, a route must be proven, the question says so.
+                if skill.carries or (
+                    not skill.needs_empty and world["gripper_empty"] is not True
+                ):
+                    world["carries"] = True
+                    problem = self._shape_held_move(contract, held)
+                    world["route_clear"] = problem is None
+                    world["route_reason"] = problem
+        elif contract.verb is Verb.MOVE:
+            problem = self._shape_carry(contract)
+            if problem is None and (contract.applied_rules or contract.route not in (None, "direct")):
+                # The route polylines are slot-to-tray; none is taught slot-to-slot, so a
+                # move a rule cares about has no proof yet.
+                problem = "a rule applies to that object and moves between spots have no proven route yet"
+            world["route_clear"] = problem is None
+            world["route_reason"] = problem
+            world["destination_ok"], world["destination_reason"] = self._destination_free(
+                contract, slot
+            )
         return world
+
+    def _destination_free(self, contract: StepContract, source: Any) -> tuple[bool, str | None]:
+        """A move may only end on a taught slot that is not the source and that no other
+        visible object sits on."""
+        dest = self.arm.poses.slots.get(contract.destination or "")
+        if dest is None:
+            return False, f"{contract.destination or 'that'} is not a taught spot"
+        if source is not None and dest.slot_id == source.slot_id:
+            return False, f"the {contract.object_name or 'object'} is already there"
+        for other in self.visible_objects():
+            if other.get("id") == contract.object_id or not other.get("table_xy"):
+                continue
+            on = self.arm.slot_for(tuple(other["table_xy"]))
+            if on is not None and on.slot_id == dest.slot_id:
+                return False, f"{dest.slot_id} has the {other.get('name', 'other object')} on it"
+        return True, None
 
     def _emg_facts(self) -> dict[str, Any]:
         """``emg_required`` when EMG is configured, with the newest sample's age and
@@ -1258,6 +1312,61 @@ class H2M:
                 meta["route"] = contract.route
                 meta["applied_rules"] = list(contract.applied_rules)
                 meta["phase"] = APPROACH  # stops above the spot; lowering is stage 2
+        elif contract.verb is Verb.SKILL:
+            skill = self.embodied.skills.get(contract.utterance)
+            if skill is None or decision.checks.get("skill_known") is not True:
+                return False, f"skill {contract.utterance!r} is not defined"
+            slot = None
+            if skill.requires_object:
+                slot = arm.poses.slots.get(decision.slot_id or "")
+                if slot is None:
+                    return False, "no reachable slot"
+            if skill.carries and decision.checks.get("route_clear") is not True:
+                return False, "route not checked"
+            if skill.near_person and decision.checks.get("near_person_ok") is not True:
+                return False, "near-person move not checked"
+            close_pct = float(arm.settings.gripper_soft_close)
+            if skill.closes:
+                # A skill closes near a hand or on an unknown object: never above a soft grip.
+                effort = contract.grip_effort
+                if effort is None:
+                    effort = float(self.safety_cfg.get("default_grip", 0.5))
+                ceiling = float(self.catalog.get(contract.object_id or "", {}).get("max_grip", 1.0))
+                grip = arm.grip_for(min(effort, SKILL_GRIP_MAX), ceiling)
+                close_pct = grip.close_pct
+                meta["requested_effort"] = round(effort, 3)
+            meta["skill_name"] = skill.name
+            meta["closes"] = skill.closes
+            last_jaw = next((st.gripper for st in reversed(skill.steps) if st.gripper), None)
+            meta["releases"] = last_jaw == "open"
+            try:
+                plan = plan_skill(arm.poses, skill, arm.settings.gripper_open, close_pct, slot)
+            except KeyError as exc:
+                return False, f"skill {skill.name} uses an undefined pose {exc}"
+        elif contract.verb is Verb.MOVE:
+            slot = arm.poses.slots.get(decision.slot_id or "")
+            dest = arm.poses.slots.get(contract.destination or "")
+            if slot is None or dest is None:
+                return False, "no reachable slot"
+            if decision.checks.get("route_clear") is not True:
+                return False, "route not checked"
+            if decision.checks.get("destination_ok") is not True:
+                return False, "destination not checked"
+            if contract.route is not None:
+                route = arm.poses.routes.get(contract.route)
+                if route is None:
+                    return False, f"route {contract.route} has no taught waypoints"
+                via = route
+            meta["route"] = contract.route
+            meta["applied_rules"] = list(contract.applied_rules)
+            meta["destination"] = dest.slot_id
+            effort = contract.grip_effort
+            if effort is None:
+                effort = float(self.safety_cfg.get("default_grip", 0.5))
+            ceiling = float(self.catalog.get(contract.object_id or "", {}).get("max_grip", 1.0))
+            grip = arm.grip_for(effort, ceiling)
+            meta["requested_effort"] = round(effort, 3)
+            plan = plan_move(arm.poses, slot, dest, arm.settings.gripper_open, grip.close_pct, via)
         elif contract.verb not in (Verb.POINT, Verb.PICK_PLACE):
             return False, f"{contract.verb} is not a motion"
         else:
@@ -1301,6 +1410,8 @@ class H2M:
                 with self._lock:
                     self._handover_job = None
             self.log.emit("intent.blocked", reason=reason, contract_id=contract.id)
+        elif contract.verb is Verb.SKILL and (line := self.embodied.skills[contract.utterance].say):
+            self._say(line)  # gated speech only; the plan is already running
         return ok, reason
 
     # ── place_near_user stage 2 ──────────────────────────────────────────────

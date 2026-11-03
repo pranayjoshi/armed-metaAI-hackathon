@@ -49,11 +49,17 @@ def compile_contract(
     source: str = "grammar",
 ) -> StepContract:
     contract = StepContract(
-        verb=parsed.verb, utterance=parsed.text, source=source, grip_effort=parsed.grip_effort
+        verb=parsed.verb,
+        utterance=parsed.text,
+        source=source,
+        grip_effort=parsed.grip_effort,
+        destination=parsed.destination,
     )
+    if parsed.verb is Verb.SKILL:
+        contract.utterance = parsed.skill or ""  # the skill name, as gestures do
     action_conf = parsed.grammar_confidence
     contract.evidence["speech_action"] = round(action_conf, 3)
-    if parsed.verb not in TARGETED_VERBS:
+    if parsed.verb not in TARGETED_VERBS and not parsed.skill_needs_object:
         contract.confidence = round(action_conf, 3)
         if parsed.verb is Verb.UNKNOWN:
             contract.unresolved.append("action")

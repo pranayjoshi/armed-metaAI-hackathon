@@ -63,6 +63,27 @@ PICK_PHRASES = (
     "bring",
     "get",
 )
+# Taught skills (configs/skills.yaml): phrase -> (skill, takes an object). Checked before
+# the verbs so "hold up the cup" is a skill, while "show me the cup" stays a point.
+SKILL_PHRASES: tuple[tuple[str, str, bool], ...] = (
+    ("wave", "wave", False),
+    ("say hi", "wave", False),
+    ("say hello", "wave", False),
+    ("bow", "bow", False),
+    ("celebrate", "celebrate", False),
+    ("say sorry", "sorry", False),
+    ("apologize", "sorry", False),
+    ("take this", "take_this", False),
+    ("hold up", "hold_up", True),
+    ("lift up", "hold_up", True),
+    ("sip", "sip", False),
+    ("press the button", "press_button", False),
+)
+# "move the cup to slot 2": a pick that ends on another taught slot instead of the tray.
+DEST_RE = re.compile(
+    r"\b(?:to|into|onto|at|on) (?:slot|spot|place|position) ?(\d|one|two|three)\b"
+)
+_WORD_DIGITS = {"one": "1", "two": "2", "three": "3"}
 GENTLE_WORDS = ("gently", "gentle", "softly", "soft", "carefully", "careful", "lightly")
 FIRM_WORDS = ("firmly", "firm", "tightly", "tight", "hard", "securely")
 DEICTIC_RE = re.compile(r"\b(that one|this one|that|this|it|there)\b")
@@ -83,6 +104,9 @@ class Parsed:
     grammar_confidence: float = 0.0
     text: str = ""
     matched: list[str] = field(default_factory=list)
+    skill: str | None = None  # verb SKILL: the skill name
+    skill_needs_object: bool = False
+    destination: str | None = None  # verb MOVE: the slot to set down on
 
 
 def normalize(text: str) -> str:
@@ -127,16 +151,30 @@ def parse(text: str, vocabulary: dict[str, str]) -> Parsed:
         return Parsed(Verb.CANCEL, grammar_confidence=1.0, text=text, matched=[phrase])
 
     verb, confidence, matched = Verb.UNKNOWN, 0.0, []
-    for candidate, phrases, score in (
-        (Verb.HOME, HOME_PHRASES, 0.95),
-        (Verb.POINT, POINT_PHRASES, 0.9),
-        (Verb.PICK_PLACE, PICK_PHRASES, 0.9),
-    ):
-        if phrase := _first(clean, phrases):
-            verb, confidence, matched = candidate, score, [phrase]
+    skill: tuple[str, bool] | None = None
+    for phrase, name, needs_object in SKILL_PHRASES:
+        if _has(clean, phrase):
+            verb, confidence, matched, skill = Verb.SKILL, 0.9, [phrase], (name, needs_object)
             break
+    if skill is None:
+        for candidate, phrases, score in (
+            (Verb.HOME, HOME_PHRASES, 0.95),
+            (Verb.POINT, POINT_PHRASES, 0.9),
+            (Verb.PICK_PLACE, PICK_PHRASES, 0.9),
+        ):
+            if phrase := _first(clean, phrases):
+                verb, confidence, matched = candidate, score, [phrase]
+                break
+    destination = None
+    if verb is Verb.PICK_PLACE and (dest := DEST_RE.search(clean)):
+        n = _WORD_DIGITS.get(dest.group(1), dest.group(1))
+        verb, destination = Verb.MOVE, f"slot_{n}"
+        matched.append(dest.group(0))
 
     parsed = Parsed(verb, grammar_confidence=confidence, text=text, matched=matched)
+    if skill is not None:
+        parsed.skill, parsed.skill_needs_object = skill
+    parsed.destination = destination
     for name in sorted(vocabulary, key=len, reverse=True):  # "red cup" beats "cup"
         if _has(clean, name):
             parsed.object_id, parsed.reference = vocabulary[name], "named"

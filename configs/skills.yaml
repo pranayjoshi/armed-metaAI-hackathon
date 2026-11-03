@@ -1,0 +1,101 @@
+# Taught skills: fixed sequences of taught poses, run through the same contract,
+# gate and executor as every other motion. A skill never skips confirmation (unlike
+# the five tiny gestures), so it may leave the home envelope; what it may not do is
+# invent a pose: every `pose` here must exist in configs/poses.yaml, and the executor
+# refuses any plan with an untaught pose on the real arm.
+#
+# Step forms:
+#   - {pose: <name>, gripper: open|soft|keep, dwell: <s>}   move the arm (gripper optional)
+#   - {gripper: open|soft, dwell: <s>}                       gripper only
+# `{slot}` in a pose name is the slot of the requested object (requires_object: true).
+#
+# Flags (all default false / 1.0):
+#   requires_object  the tool takes an object_id; the object must be visible and on a slot
+#   needs_holding    only runs while holding something (a proven fact)
+#   needs_empty      only runs with the gripper proven free (it will close on something)
+#   carries          moves while holding: rules apply and the route must be proven
+#   near_person      the arm goes near a face or a hand: refused unless
+#                    safety.near_person_enabled is true, and capped at near_person_speed_cap
+#   speed            plan speed cap (0.1..1.0), only ever lowered by the gate
+#   say              one short line spoken when the skill starts (through the say tool)
+skills:
+  wave:
+    say: "Hello."
+    speed: 0.5
+    steps:
+      - {pose: wave_up}
+      - {pose: wave_left}
+      - {pose: wave_right}
+      - {pose: wave_left}
+      - {pose: wave_right}
+      - {pose: wave_up, dwell: 0.2}
+  bow:
+    speed: 0.4
+    steps:
+      - {pose: bow_down, dwell: 0.6}
+  celebrate:
+    say: "Done!"
+    speed: 0.5
+    steps:
+      - {pose: celebrate_up}
+      - {pose: celebrate_left}
+      - {pose: celebrate_right}
+      - {pose: celebrate_left}
+      - {pose: celebrate_up, dwell: 0.2}
+  sorry:
+    say: "Sorry."
+    speed: 0.3
+    steps:
+      - {pose: sorry_back, dwell: 0.4}
+      - {pose: sorry_low, dwell: 0.8}
+  hold_up:
+    # Pick the object from its slot, hold it at eye level for a while, put it back.
+    requires_object: true
+    needs_empty: true
+    near_person: true
+    speed: 0.4
+    say: "Here."
+    steps:
+      - {pose: "{slot}.above", gripper: open}
+      - {pose: "{slot}.grasp", gripper: open, dwell: 0.4}
+      - {gripper: soft, dwell: 0.4}
+      - {pose: "{slot}.above"}
+      - {pose: hold_up, dwell: 6.0}
+      - {pose: "{slot}.above"}
+      - {pose: "{slot}.grasp", dwell: 0.4}
+      - {gripper: open, dwell: 0.3}
+      - {pose: "{slot}.above"}
+  take_this:
+    # Open hand at the handover spot, wait for the person to place something and let
+    # go, close softly, carry it to the tray.
+    needs_empty: true
+    near_person: true
+    speed: 0.4
+    say: "Give it to me."
+    steps:
+      - {pose: handover_above, gripper: open}
+      - {pose: handover_release, gripper: open, dwell: 3.0}
+      - {gripper: soft, dwell: 0.5}
+      - {pose: handover_above}
+      - {pose: tray_above}
+      - {pose: tray_release, dwell: 0.4}
+      - {gripper: open, dwell: 0.3}
+      - {pose: tray_above}
+  sip:
+    # Bring what is held (a cup with a straw) toward the mouth from below, hold, retreat.
+    needs_holding: true
+    carries: true
+    near_person: true
+    speed: 0.3
+    say: "Here's a sip."
+    steps:
+      - {pose: face_above}
+      - {pose: face_near, dwell: 4.0}
+      - {pose: face_above}
+  press_button:
+    # Tap a taught button or switch position with the closed gripper.
+    speed: 0.6
+    steps:
+      - {pose: press_above}
+      - {pose: press_down, dwell: 0.3}
+      - {pose: press_above}

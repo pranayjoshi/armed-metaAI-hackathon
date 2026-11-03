@@ -202,3 +202,161 @@ def plan_pick_place(
         ),
         (slot.above, slot.grasp, *via, tray_above, tray_release, home),
     )
+
+
+# ── taught skills ─────────────────────────────────────────────────────────────
+# Fixed sequences of taught poses from configs/skills.yaml. They always confirm, so
+# they may leave the home envelope; they may never name a pose that is not taught.
+
+SKILL_GRIPPER = ("open", "soft", "keep")
+SKILL_KEYS = frozenset(
+    {"steps", "requires_object", "needs_holding", "needs_empty", "carries", "near_person",
+     "speed", "say"}
+)
+STEP_KEYS = frozenset({"pose", "gripper", "dwell"})
+MAX_DWELL_S = 30.0
+
+
+@dataclass(frozen=True)
+class SkillStep:
+    pose: str | None  # None: gripper-only step; may contain "{slot}" for object skills
+    gripper: str | None = None  # open | soft | None (keep)
+    dwell_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class Skill:
+    name: str
+    steps: tuple[SkillStep, ...]
+    requires_object: bool = False
+    needs_holding: bool = False
+    needs_empty: bool = False
+    carries: bool = False
+    near_person: bool = False
+    speed: float = 1.0
+    say: str = ""
+
+    @property
+    def closes(self) -> bool:
+        return any(s.gripper == "soft" for s in self.steps)
+
+
+def load_skills(path: Path) -> dict[str, Skill]:
+    """Parse the skills file. Malformed entries raise PoseError; nothing is defaulted
+    silently. Pose names are checked against the library at plan time."""
+    data = yaml.safe_load(path.read_text()) or {}
+    out: dict[str, Skill] = {}
+    for name, raw in (data.get("skills") or {}).items():
+        raw = raw or {}
+        if unknown := sorted(set(raw) - SKILL_KEYS):
+            raise PoseError(f"skill {name}: unknown keys {', '.join(unknown)}")
+        for flag in ("requires_object", "needs_holding", "needs_empty", "carries", "near_person"):
+            if flag in raw and not isinstance(raw[flag], bool):
+                raise PoseError(f"skill {name}: {flag} must be true or false")
+        steps = []
+        for i, step in enumerate(raw.get("steps") or []):
+            step = step or {}
+            if unknown := sorted(set(step) - STEP_KEYS):
+                raise PoseError(f"skill {name} step {i}: unknown keys {', '.join(unknown)}")
+            pose = step.get("pose")
+            gripper = step.get("gripper")
+            if pose is None and gripper in (None, "keep"):
+                raise PoseError(f"skill {name} step {i} moves nothing")
+            if gripper is not None and gripper not in SKILL_GRIPPER:
+                raise PoseError(f"skill {name} step {i}: gripper must be one of {SKILL_GRIPPER}")
+            dwell = float(step.get("dwell", 0.0))
+            if not math.isfinite(dwell) or not 0 <= dwell <= MAX_DWELL_S:
+                raise PoseError(f"skill {name} step {i}: dwell must be within 0..{MAX_DWELL_S}")
+            steps.append(SkillStep(str(pose) if pose else None, None if gripper == "keep" else gripper, dwell))
+        if not steps:
+            raise PoseError(f"skill {name} has no steps")
+        speed = float(raw.get("speed", 1.0))
+        if not math.isfinite(speed) or not 0.1 <= speed <= 1.0:
+            raise PoseError(f"skill {name}: speed must be within 0.1..1.0")
+        uses_slot = any(s.pose and "{slot}" in s.pose for s in steps)
+        requires_object = bool(raw.get("requires_object", False))
+        if uses_slot and not requires_object:
+            raise PoseError(f"skill {name} uses {{slot}} but requires_object is false")
+        out[str(name)] = Skill(
+            str(name),
+            tuple(steps),
+            requires_object=requires_object,
+            needs_holding=bool(raw.get("needs_holding", False)),
+            needs_empty=bool(raw.get("needs_empty", False)),
+            carries=bool(raw.get("carries", False)),
+            near_person=bool(raw.get("near_person", False)),
+            speed=speed,
+            say=str(raw.get("say") or "")[:80],
+        )
+    return out
+
+
+def plan_skill(
+    lib: PoseLibrary, skill: Skill, open_pct: float, soft_pct: float, slot: Slot | None = None
+) -> Plan:
+    """Build the skill's waypoints from taught poses only, then return to home. A
+    gripper step is gripper-only; a pose step with a gripper commands both. Raises
+    KeyError for an undefined pose and PoseError when an object skill has no slot."""
+    if skill.requires_object and slot is None:
+        raise PoseError(f"skill {skill.name} needs an object on a taught slot")
+    pct = {"open": open_pct, "soft": soft_pct}
+    waypoints: list[Waypoint] = []
+    poses: list[Pose] = []
+    # Stages drive the freeze's grip policy (arm._keep_grip): a close is "grasp", every
+    # step between a close and the next open is "carry" (the grip is kept on a stop),
+    # the open is "release", and the rest is "approach" / "return".
+    holding = skill.needs_holding
+    for i, step in enumerate(skill.steps):
+        if step.pose is None:
+            if step.gripper == "soft":
+                stage, holding = "grasp", True
+            else:
+                stage, holding = "release", False
+            waypoints.append(
+                Waypoint(f"gripper_{step.gripper}", {GRIPPER: pct[step.gripper]}, stage,
+                         gripper_only=True, dwell_s=step.dwell_s)
+            )
+            continue
+        name = step.pose.replace("{slot}", slot.slot_id) if slot else step.pose
+        pose = lib.pose(name)
+        poses.append(pose)
+        if step.gripper is None:
+            joints = {j: v for j, v in pose.joints.items() if j != GRIPPER}
+        else:
+            joints = {**pose.joints, GRIPPER: pct[step.gripper]}
+        stage = "carry" if holding else "approach"
+        waypoints.append(Waypoint(f"{i}.{name}", joints, stage, dwell_s=step.dwell_s))
+    home = lib.pose("home")
+    waypoints.append(_arm_only("home", home, "carry" if holding else "return"))
+    return Plan(f"skill.{skill.name}", tuple(waypoints), (*poses, home))
+
+
+def plan_move(
+    lib: PoseLibrary,
+    src: Slot,
+    dst: Slot,
+    open_pct: float,
+    close_pct: float,
+    via: tuple[Pose, ...] = (),
+) -> Plan:
+    """Pick at one taught slot and set down at another (tidy / rearrange). Same shape
+    as pick_place with the destination slot's poses in place of the tray."""
+    if src.slot_id == dst.slot_id:
+        raise PoseError("move needs two different slots")
+    home = lib.pose("home")
+    return Plan(
+        "move",
+        (
+            _move(f"{src.slot_id}.above", src.above, "approach", gripper=open_pct),
+            _move(f"{src.slot_id}.grasp", src.grasp, "approach", gripper=open_pct, dwell_s=0.4),
+            Waypoint("close", {GRIPPER: close_pct}, "grasp", gripper_only=True, dwell_s=0.4),
+            _move("lift", src.above, "carry", gripper=close_pct),
+            *(_move(f"via.{p.name}", p, "carry", gripper=close_pct) for p in via),
+            _move(f"{dst.slot_id}.above", dst.above, "carry", gripper=close_pct),
+            _move(f"{dst.slot_id}.grasp", dst.grasp, "release", gripper=close_pct, dwell_s=0.4),
+            Waypoint("open", {GRIPPER: open_pct}, "release", gripper_only=True, dwell_s=0.3),
+            _move("retreat", dst.above, "return", gripper=open_pct),
+            _move("home", home, "return"),
+        ),
+        (src.above, src.grasp, *via, dst.above, dst.grasp, home),
+    )
