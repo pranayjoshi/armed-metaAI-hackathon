@@ -10,7 +10,6 @@ Start with 2 episodes to confirm the video files and the camera views, then reco
 
 The camera names, indices and rotations in `scripts/hw_env.sh` must stay the same between recording, training and inference.
 
-`notebooks/lerobot_quickstart.ipynb` generates the same commands (plus training and inference) from one configuration cell.
 
 ## Reviewing a recording
 

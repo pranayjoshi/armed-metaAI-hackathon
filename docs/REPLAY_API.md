@@ -1,6 +1,6 @@
 # Replay mode and the software demo
 
-`REFLEX_BUILD_PLAN.md` item 0 and `WIN_ANALYSIS.md` §3 change 1: the entry runs with
+The entry runs with
 **no arm, no API key and no network**. Backend: `h2m/replay.py` (loaders),
 `h2m/scenario.py` (scripted simulation), `h2m/sim_view.py` (schematic table view),
 `h2m/server.py::create_replay_app` (HTTP).

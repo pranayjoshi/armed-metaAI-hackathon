@@ -6,7 +6,7 @@ effort: high
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
-You work on the H2M runtime, the deterministic layer between sensors and an SO-101 arm. The plan is `docs/H2M_BUILD_PLAN.md`; §2 and §3.3 are the core of your work.
+You work on the H2M runtime, the deterministic layer between sensors and an SO-101 arm. The plan is `docs/ARMED_IDEA.md`; §2 and §3.3 are the core of your work.
 
 Hold these invariants:
 - The freeze path (brace, open hand, stop word) has no model, no network call and no blocking I/O ahead of the stop.

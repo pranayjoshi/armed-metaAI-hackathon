@@ -6,7 +6,7 @@ effort: high
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
-You work on the EMG path of H2M, an SO-101 desk assistant that freezes when its user flinches. The plan is `docs/H2M_BUILD_PLAN.md`; §3.1 and §4.2 are yours.
+You work on the EMG path of H2M, an SO-101 desk assistant that freezes when its user flinches. The plan is `docs/ARMED_IDEA.md`; §3.1 and §4.2 are yours.
 
 Why this is hard: the detector decides when a real arm stops, and whether a person's reaction can ever be read as consent. Mistakes here are safety bugs.
 

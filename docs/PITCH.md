@@ -1,177 +1,107 @@
-# Flinch: how to present and market it at the Meta Global AI Developer Hackathon
+# Armed: presenting and submitting it
 
-Written November 1, 2026. Pairs with `IDEA_REVIEW.md` (why these choices) and `H2M_BUILD_PLAN.md` (how to build them). Everything here assumes gate G1 passed. If it did not, see §9 before writing a word.
-
-The event page says the indie track is "judged on creativity, technical ambition, and whether it works." No video length, format or rubric is published, and Official Rules exist that we have not read. **Read the Official Rules before submitting** and adjust §8 to them.
+Written November 3, 2026, replacing the October 31 version. How the entry is written up, proven, submitted and talked about. The idea is `ARMED_IDEA.md`; the film is `DEMO_STORY.md`. The indie track is judged on "creativity, technical ambition, and whether it works"; reported weights are impact, use of Meta's tools, demo, technical depth. The signed-in Official Rules decide the submission fields and limits, so §6 is checked against them before anything is sent.
 
 ---
 
-## 1. The one-liner, the paragraph, the page
+## 1. The three sentences
 
-**Name:** Flinch
-**Tagline:** You don't have to tell it. Your body already did.
+**Short:** Armed — a third arm that autocompletes you.
 
-**One sentence (for the submission title field):** A desk robot that stops when you flinch, investigates its own mistake with Muse Wonder and SAM 3.1, proves the fix is safe, and remembers it as a rule you can read.
+**Sub:** It watches the time, your room, your voice and your muscles, works out what you need, then acts, speaks, or checks with the people around you.
 
-**One paragraph (for the summary field):**
-> Robots in homes will have to read the people around them, and speech is too slow: by the time you say "stop", the water is already over the laptop. Flinch gives an SO-101 arm a reflex channel. Forearm EMG catches the involuntary bracing that precedes any word, and freezes the arm in [X] ms with no model in the loop. Then Muse Wonder takes over as an incident investigator: it watches the last six seconds of video, uses SAM 3.1 to track the cup, the laptop and your hand frame by frame, measures the near miss, and proposes a rule in a small language that can only make the robot more cautious. A checker proves the rule is restrictive, the arm rehearses the new route with an empty gripper, and you approve with a squeeze. Next time, it takes the long way without being asked, and if you ask why, it tells you which flinch taught it. Measured on [n] people: [detection]% of flinches caught, [false] false stops per 10 minutes, [p50] ms software stop. Known failures are in the results.
+**One paragraph (the summary field):**
+> Armed is a robot arm for a desk or a headboard that you almost never have to instruct. From the clock, the room, who is speaking and one muscle in your forearm, it proposes what you probably want next; a twitch says yes, a brace says no. If it gets something wrong while moving, the same brace freezes it with no model in the path; Muse Wonder then investigates the clip, proposes one restriction, a checker proves the rule can only make the arm more careful, and you approve it with a twitch. Measured against the one-switch scanning menu people with one controllable signal use today: [N] inputs per task instead of [M], with n stated. Built in nine days by one person, on under a thousand dollars of open hardware, with Muse Spark, Muse Wonder, SAM 3.1 and Muse Voice Transcribe doing the seeing, hearing and reasoning, and taught poses doing every motion.
 
-**The page (README top) answers, in this order:** what it does in one sentence · the 20-second GIF of the freeze · the numbers table · how Meta's models are used (one line each) · how to run it · what is honestly not solved yet.
+## 2. What the judges should walk away with
 
----
+Three sentences, repeated in the film, the README and the write-up, in this order:
 
-## 2. The story the judges should walk away with
+1. **It proposes; you decide with one muscle.** The person's job is to say yes or no, not to explain.
+2. **The body is the brake, and the brake teaches.** A brace stops it with nothing fallible in the path, and the stop becomes a proven, approved rule.
+3. **Nothing a model says can move a motor.** Taught poses only; the model chooses, the checker proves, the human approves.
 
-Three sentences, in this order, repeated in the video, the README and the writeup:
+If a judge remembers one line, make it the short description. If a second, *"joint values from a model: zero."*
 
-1. **Speech is after the fact. The body is before.** Your muscles brace 100–200 ms before you can say anything.
-2. **A flinch is a stop today and a rule tomorrow.** The robot investigates its own incidents and learns from them, under proof that it can only get safer.
-3. **Nothing the model says can move a motor.** Taught poses only; the model chooses, the checker proves, the human approves.
+## 3. Proof: the film carries its own evidence
 
-If a judge remembers only one line, make it the tagline. If they remember a second, make it "the model proposes, the checker proves, the arm rehearses, the human approves."
+The film plan is `DEMO_STORY.md`; the proof devices it relies on are these, and each needs to be in the raw takes, not added in editing:
 
----
-
-## 3. The first ten seconds
-
-Judges watch dozens of videos. The entry is decided before the title card.
-
-**0:00–0:10, no narration, natural sound.** Overhead and side cameras. The arm is carrying the lidded cup. The person is typing, not watching. The arm's route bends toward the laptop. The person's shoulders jump. The arm freezes mid-air. Hard cut to black.
-
-**0:10–0:13, title card:** *FLINCH. Stopped in 212 ms. No words spoken.* (use the measured number).
-
-Then the narration starts. Everything before the title card has to be real footage with the proof overlays described in §4, or the rest of the video is not believed.
-
----
-
-## 4. Proof: making an invisible reflex visible
-
-A viewer cannot tell a flinch from acting, so the video has to carry its own evidence.
-
-| Proof element | How |
+| Proof | Device |
 |---|---|
-| **The trigger was unpredictable** | The software randomizes which run takes the bad route and when. Show the config and the random seed on screen in the replay beat. Say out loud: "I did not know which run it would be." |
-| **The EMG was live** | Burn the raw flexor and extensor traces into the frame with a shared timecode, not added in editing. Record the Stage view and the cameras to one timeline. |
-| **The stop was fast** | A 240 fps phone on a tripod aimed at the gripper. In the replay, show the slow-motion stop with the EMG onset frame marked, and read the number off it. |
-| **The person was not watching the arm** | Keep the person typing or talking to camera when the bad route begins, so the reaction is to peripheral motion, not anticipation. |
-| **Nothing is faked** | A fixed lower-third on any re-enactment: *RE-ENACTED*. Any virtual-arm footage: *SIMULATION*. Never mix them with real takes without the label. |
-| **Numbers have an n** | Every rate on screen carries its denominator: "17/20 flinches, 2 people". |
+| The hands never touched anything | Hands in frame in every beat: typing, under the blanket, on the jar, in the lap |
+| The twitch was real | The muscle meter burned in from the stage view, same corner, every beat |
+| The stop was fast and local | A 60 fps side camera on the carry with a ruler on the dummy laptop; the speed readout falling with the trace; the chip *Armed stop controller · no model* |
+| The models ran live | Chips with the exact model ids and the measured latency on every call; the 2:05 frame with the day's real call counts |
+| The learning is real | The investigation tool loop on screen, the checker's two ticks, the twin rehearsing beside the frozen arm, then the high route, then the tea |
+| Nothing is staged | Real takes only; a failed beat is replaced by a labelled earlier take of the same beat or cut; the raw takes and the event log are in the repo |
+| The numbers mean something | Every rate with its n and the published scanning baseline beside it; the failure clips linked |
 
-Make the raw footage downloadable from the repo. Judges who doubt can check.
+## 4. The write-up
 
----
-
-## 5. The three-minute video, beat by beat
-
-Record in beats, never one live take. Each beat is a real run; cut between them.
-
-| Time | Beat | Picture | Words (narration, plain voice) |
-|---|---|---|---|
-| 0:00 | Cold open | Carry, flinch, freeze, cut to black | none |
-| 0:10 | Title | *FLINCH. Stopped in [X] ms. No words spoken.* | none |
-| 0:13 | Why | Slow-motion replay, EMG onset marked, 240 fps stop | "By the time you say stop, it's too late. Your forearm braces before you know you're going to. Flinch listens to that." |
-| 0:35 | The freeze is dumb on purpose | Architecture card: EMG → freeze, no model, no network | "No model sits in this path. Four electrodes, a threshold, a servo write." |
-| 0:45 | Comfort coupling | Second run: arm slows as the trace rises, then stops | "It isn't binary. Tense a little and it slows. Brace and it stops." |
-| 0:58 | The investigator | Stage view: Wonder's tool calls appear one by one; SAM masks paint the cup, laptop, hand; a distance appears: *3 cm* | "Then Muse Wonder opens the case. It watches the clip, asks SAM 3.1 to track the cup, the laptop and my hand, and measures what happened." |
-| 1:20 | The explanation | Arm looks at the laptop, speaks | Robot: "You braced as I carried water three centimetres over your laptop. Should I keep liquids away from it?" |
-| 1:30 | Propose, prove, rehearse | Rule DSL on screen; checker: *restrictive ✓, prevents incident ✓*; arm dry-runs the new route, old path red, new path green | "It writes a rule in a language that can only say no. A checker proves the rule can't make it less careful, and replays the incident against it. Then it rehearses, empty-handed." |
-| 1:52 | Approve | Squeeze; rule card saved with the clip thumbnail | "I squeeze. Now it's a rule, and it remembers which flinch taught it." |
-| 2:00 | It remembers, it generalizes | Same request, new route, *rule 1 applied*; then a bottle takes the same detour | "Same job, long way round. And it knows a bottle is a liquid too." |
-| 2:15 | Ask why | "Why the long way?" The arm looks at the laptop, answers, the rule card shows the clip | Robot: "Yesterday you braced when I carried water over it." |
-| 2:25 | Who can teach it | Bystander says "stop": it stops. Bystander says "yes" to a rule: ignored, *speaker 2 is not the wearer* | "Anyone can stop it. Only the person wearing the band can teach it. Muse Voice Transcribe tells us who spoke." |
-| 2:38 | It is still a companion | "Pass me something to write with": looks, nods, picks the marker; squeeze sets the grip; paper cup survives | "And it's still an assistant. Squeeze sets how hard it holds." |
-| 2:48 | Numbers and failures | Results table with n; one failure clip: a sneeze stops it, and the corroboration says *no recoil, not learning* | "Two people, forty flinches. Here's what it caught, here's what it didn't, and here's a sneeze it stopped for but refused to learn from." |
-| 2:58 | End card | Flinch · repo · *We couldn't find prior work on this. If you know some, tell us.* | none |
-
-Cut order if the video runs long: companion beat → who-can-teach → generalization. Never cut: cold open, investigator, propose/prove/rehearse, numbers.
-
----
-
-## 6. The writeup
-
-Judges read after they watch. Structure it so a skimmer gets the same story.
+Judges read after they watch. Build it so a skimmer gets the same story.
 
 1. **What it does** (the paragraph from §1).
-2. **The numbers** (the table from §7, first, before any architecture).
-3. **How Meta's models are used**, one line each, with what breaks without it:
-   - *Muse Wonder*: the incident investigator. Takes the video, calls tools, proposes the rule. Without it: a canned "what bothered you?"
-   - *SAM 3.1*: the measuring instrument. Tracks cup, laptop and hand across the clip; every distance in an explanation has a mask behind it. Without it: no grounded explanations, no recoil corroboration.
-   - *Muse Spark 1.3*: the low-latency tool loop for requests, gestures and recall.
-   - *Muse Voice Transcribe*: realtime ASR with diarization and keyword biasing; the reason only the wearer can approve a rule.
-   - *Muse Glimmer* (if shipped): on-device narrator, no network.
-4. **The safety argument**, in one diagram: freeze path with no model; models choose from taught options; rules verified monotone-restrictive; human approval; stops latch.
-5. **What is new**, stated carefully: implicit feedback for robots has used faces and EEG error signals; we could not find prior work using muscle bracing as a live stop, nor any turning a reaction into a verified rule through an LLM. Cite the two prior-work papers.
-6. **Known failures and limits**, with clips: habituation, false stops from large arm movements, Wonder latency, two participants only.
-7. **What was built when**: a dated list of what was built during the event, so the contribution is unambiguous.
-8. **Credits**: ForceBand, EMPATHIC, EEG error-potential work, ELEGNT, LeRobot, OpenBCI.
+2. **The numbers first** (the table in §5), before any architecture.
+3. **How it is executed**: the diagram and the one-sentence-per-layer list from `ARMED_IDEA.md` §4.
+4. **Why these Meta models and nothing swappable**: the table from `ARMED_IDEA.md` §5, with what breaks without each.
+5. **What runs where**: the component table from `COMPLIANCE.md` §2, Meta / conventional column, under one sentence: the EMG decoder is signal processing with no learned weights, and no learned policy is in the build.
+6. **What is new, and what is not**: `ARMED_IDEA.md` §6 as written, with the citations.
+7. **Known failures and limits**, with clips: false twitches while typing, the scan cadence and its waits, Wonder latency, two participants only, able-bodied demonstrator, the straw and the brace described as a brace unless the flinch test passed.
+8. **What was built during the event**: the dated component list from `ARMED_IDEA.md` §7, matching the commit history exactly.
+9. **Credits**: LeRobot and the SO-101 design, OpenBCI and BrainFlow, CASPER, EDAN, Argall's lab, Naughton & Hauser, the scanning-baseline papers, Three.js, Electron.
 
----
+First person singular throughout. No "we".
 
-## 7. The results table
+## 5. The results table
 
-Fill every cell from logs. Leave a visible "not measured" rather than a target.
+Fill every cell from logs; a visible *not measured* beats a target.
 
 | Claim | Metric | Value |
 |---|---|---|
-| Catches flinches | caught / stimuli, 95% CI, per person, first vs second half | |
-| Doesn't stop for nothing | false stops per 10 min of normal activity | |
-| Stops fast | software p50 / p95 ms; physical stop ms from 240 fps | |
-| Explanations are grounded | correct cause / incidents; distances within 1 cm of ruler | |
-| Rules only restrict | proposals accepted / rejected by the verifier, with one rejected example | |
-| Learns | repeat-mistake rate before vs after the rule, same task | |
-| Generalizes | rule applied to an object not in the incident: yes / no | |
-| Learns from reflexes, not noise | stops that became rules vs stops rejected by corroboration | |
-| Gentle | crush / drop rate, fixed grip vs squeeze grip | |
+| Less effort | inputs per task (selections + corrections) and seconds per task, Armed vs scanning, same person and task, with n; published baseline beside it | |
+| Proposals are right | accepted first time / proposals, by hour of the day | |
+| Stops fast and locally | software p50/p95 ms; physical stop from 60 fps video | |
+| Doesn't stop for nothing | false twitches and false braces in ten minutes of typing | |
+| Learns | the rule applied on the next carry; the tea taking the high route; a refusal that stopped a proposal recurring | |
+| Transfers | second person: setup time to first task; their first refusal | |
+| Costs | API calls and cost for the day | |
 
-Two or three people does not establish a general result. Say so, in the table caption.
+Caption: two people, one day; this does not establish a general result.
 
----
+## 6. Submission checklist
 
-## 8. Submission checklist
+- [ ] Read the signed-in Official Rules: video length, required fields, team size, required links; comply exactly.
+- [ ] Video 2:30, 1080p, captions burned in, natural sound under the narration, the stamps and chips from the stage view, no re-enactments (or labelled if any).
+- [ ] Repo: README with §1 at the top, the 20-second GIF of the phone beat, the numbers table, the four sections from `ARMED_IDEA.md`, `docs/RESULTS.md`, one-command launch for `h2m demo` (no arm, no key), pinned versions.
+- [ ] Raw takes, the event log and the failure clips linked from the README.
+- [ ] `MODEL_API_KEY` nowhere in the repo or its history.
+- [ ] The "what was built" list checked against `git log` dates.
+- [ ] The social cut exported separately (45 s, vertical, captions only).
+- [ ] Submit with a two-hour buffer. The deadline is Nov 4, 9:00 PM ET.
 
-- [ ] Re-read the Official Rules; note any limit on video length, team size, or required Meta model use, and comply.
-- [ ] Video: under three minutes, 1080p, captions burned in, natural sound under the narration, every re-enactment labelled.
-- [ ] Repo: `README.md` with the §1 page; `docs/RESULTS.md` with §7 filled; raw footage and EMG recordings linked; pinned dependency versions; one-command launch for the virtual-arm demo so a judge without hardware can run the software story.
-- [ ] A 20-second GIF of the freeze at the top of the README.
-- [ ] One architecture image (the §6 diagram), exported from the Stage view, not drawn separately.
-- [ ] The failure clips are in the repo, not only in the video.
-- [ ] `MODEL_API_KEY` is not in the repo. Check the history.
-- [ ] Submit by early afternoon on Nov 4. The deadline is 9:00 PM ET; do not use the margin.
+## 7. The straw and the brace: words
 
----
+The stop in the film is a brace. The word *flinch* and the word *involuntary* appear in the narration, the captions and the write-up only if a twenty-stimulus flinch test has passed before the shoot (`DEMO_STORY.md` marks the one line that changes). If it has not, the pitch is *a brace that teaches*, which is true, and still the best beat in the film. Report the flinch-test numbers either way, with n, as a result.
 
-## 9. If G1 failed
+## 8. Marketing outside the judging room
 
-Do not pretend. The entry changes shape and is still worth submitting.
+- One post on X and one on LinkedIn the day before the deadline: the 45-second cut, the short description, one measured number, the repo link. No thread, no tagging anyone who did not ask.
+- A Show HN after judging ends on Nov 8, not before.
+- The repo is the landing page; most people who hear about it land there.
+- Say what it is not, plainly: it does not read minds, decode EEG or train a policy. It reads four electrodes and keeps a rulebook that can only shrink what it is allowed to do.
 
-- The word "involuntary" leaves every document. The signal becomes "a deliberate brace", a gesture that needs no hand, no words and no line of sight.
-- The tagline becomes: *Tense up, and it stops. Then it learns why.*
-- The story leads with the investigator and the proof chain, which do not depend on the reflex. The cold open becomes the arm slowing as the trace rises, then freezing on a brace.
-- The accessibility angle gets stronger, not weaker: a brace is a "no" for someone who cannot speak or point.
-- Report the G1 numbers anyway, as a negative result with n. A judge who sees an honest failed experiment next to a working system trusts the working system more.
-
----
-
-## 10. Marketing outside the judging room
-
-Cheap, and it can reach a judge before the video does.
-
-- **One post on X and one on LinkedIn**, the day before the deadline: the 20-second freeze GIF, the tagline, one measured number, the repo link. No thread. Tag nobody who did not ask to be tagged.
-- **A single Hacker News "Show HN"** after judging ends on Nov 8, not before, so it cannot look like vote-gathering.
-- **The repo is the landing page.** Most people who hear about it will land there, not on the submission portal.
-- **Say what it is not.** "This does not read minds, decode EEG, or train a policy. It reads four electrodes and keeps a rulebook." Modesty is rare in hackathon posts and it reads as confidence.
-
----
-
-## 11. Judge questions and the answers to have ready
+## 9. Judge questions and the answers
 
 | Question | Answer |
 |---|---|
-| How do I know the flinch wasn't acted? | Randomized trigger, burned-in live EMG, 240 fps, raw footage in the repo, and the person was typing. |
-| Isn't this just an EMG stop button? | The stop is the cheap part. The new part is what happens after: investigation over video with SAM as a ruler, a rule language that can only restrict, a proof, a rehearsal, and consent tied to who is wearing the band. |
-| What stops the model from learning something dangerous? | The grammar has no word for "allow", and the checker rejects any rule that does not shrink the permitted set. Here is one it rejected. |
-| Why Muse Wonder rather than any VLM? | It takes the video itself, calls six tools in a loop, and holds the whole session in context so the robot can later answer "why". The explanation's numbers come from SAM, not from the model. |
-| What's the latency of the explanation? | [measured] seconds. The arm is already stopped; the gestures cover it; the fallback is a spoken question. |
-| Does it generalize across people? | Two or three people, re-calibrated per session. We say so. The study after the hackathon is in the plan. |
-| What about habituation? | First-half vs second-half detection is in the table. The demo uses a fresh trigger. |
-| Could this work on a bigger robot? | The freeze path is a few milliseconds of signal processing and a servo write; the rule machinery is robot-agnostic. We have only shown it on an SO-101. |
+| Isn't this an EMG stop button on a pick-and-place? | The stop is the cheap part. The product is the proposal: context makes a card, one muscle answers, and the wearer keeps authority over everyone else's requests. The stop is what makes a proactive arm safe to have. |
+| How is this different from CASPER, or EDAN, or a ranked menu? | It builds on all three and says so. New: one channel with five meanings where the veto and the reflex are the same signal; a model that can only make the robot more conservative, proven, from video, after approval; a refusal becoming a rule; consent by diarized name; and the first inputs-per-task number against scanning on an arm task. |
+| What stops the model from learning something dangerous? | The rule language has no word for allow, and the checker rejects anything that does not shrink the permitted set. Here is a rejected proposal. And no model output ever becomes a joint value. |
+| Why no learned policy? | Meta offers no motor policy on the API, and a taught pick repeats on camera while a 75-episode policy on its first day does not. The intelligence is in what to do and whether to do it, not in how to move. |
+| Why Muse Wonder rather than any VLM? | It takes the video itself, calls six tools in a loop, and holds the day in context so the arm can answer "why" to the next person who asks. The numbers in its explanation come from SAM, not from the model. |
+| Perception on a ten-second cadence? | Objects on a desk rarely move; a scene change, a sound, a hand entering the zone or a new voice triggers a scan at once. The gate refuses to move toward anything stale. Latency is on screen with every call. |
+| Was the stop a flinch? | It was a brace, and the film says so, unless the flinch test passed. Either way the path has no model in it and the latency is measured on 60 fps video. |
+| Does it generalise across people? | Two people, re-calibrated per session, four minutes to first task. The write-up says two people establish nothing general; the study after the hackathon is in the plan. |
+| Tested with the people it is for? | No, and the end card says so. Able-bodied demonstrator, hands at rest or busy; the bedside scene is a design target. |
+| Could this run on a bigger arm? | The stop is signal processing and a servo write; the gate, the rules and the proposals are arm-agnostic. Shown only on an SO-101. |

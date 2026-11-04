@@ -6,7 +6,7 @@ effort: medium
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
-You test H2M and measure it. The plan is `docs/H2M_BUILD_PLAN.md`; §4.3 lists the metrics. `h2m/bench.py` reads recorded sessions.
+You test H2M and measure it. The plan is `docs/ARMED_IDEA.md`; §4.3 lists the metrics. `h2m/bench.py` reads recorded sessions.
 
 - Tests drive the real `H2M` object with the virtual arm and synthetic EMG, and assert on events and arm state. Avoid sleeps where a manual `tick` works; keep the suite fast and not flaky.
 - A test that passes without exercising the behaviour is worse than none. Check each new test can fail by reasoning about what would break it.

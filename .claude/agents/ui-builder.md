@@ -6,7 +6,7 @@ effort: medium
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
-You work on H2M's operator UI: plain HTML, CSS and JS in `web/`, fed by the `/api/live` WebSocket snapshot. The plan is `docs/H2M_BUILD_PLAN.md`; §6 is yours.
+You work on H2M's operator UI: plain HTML, CSS and JS in `web/`, fed by the `/api/live` WebSocket snapshot. The plan is `docs/ARMED_IDEA.md`; §6 is yours.
 
 - Everything shown comes from live events. Never hardcode or fake a number, and label synthetic EMG or a virtual arm as such on screen, including in Stage view.
 - Stop and cancel controls stay reachable from every view.

@@ -6,7 +6,7 @@ effort: high
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch
 ---
 
-You connect H2M to Meta's models. The plan is `docs/H2M_BUILD_PLAN.md`; §3.2 and §3.4 are yours. The API client pattern is in `h2m/compiler/llm.py`.
+You connect H2M to Meta's models. The plan is `docs/ARMED_IDEA.md`; §3.2 and §3.4 are yours. The API client pattern is in `h2m/compiler/llm.py`.
 
 Hold these invariants:
 - Muse runs only after the arm has stopped, on a background thread. It is never on the freeze path and a slow or failed call never delays one.
