@@ -100,6 +100,19 @@ quiet_hours: "23:00-07:00"
 named_person: X
 ```
 
+### 5.1b The bed's hand overs (built Nov 4)
+One taught skill, `hand_over` (`configs/skills.yaml`: pick from `{slot}`, carry to `{handover}_above`, lower to `{handover}_release`, dwell, open, retreat), serves every object. `{handover}` is the object's **pose set**, from `arm.handover_sets` in `configs/bed.yaml`: pill cup → `handover`, water bottle (`cup`) → `handover_bottle`, marker → `x_hand`. Each set has its own measured hand spot in `routes_bed.yaml` (`handover.sets`), and the hand-over-the-spot check (`spot_clear`), the "can I watch the lowering" check (`spot_watchable`) and the hand watchdog all run against that set's spot, never another's. A set with a missing or untaught pose, or with no spot, is refused at the gate before anything moves. The close uses the slot's taught `point` jaws (`arm.use_taught_touch_close`) like every other grasp. The skill is `near_person`, `carries`, capped at `near_person_speed_cap`, and always a card; `trust.announce_enabled` and `near_person_enabled` are untouched.
+
+```yaml
+pills: {action: hand_over, object: pill_cup, every: 30m, mode: ask, profile: bed, label: "Pills?",
+        say: "It's {time} Pranay, time for your pills."}
+```
+
+- **Spoken at card time.** In *ask* mode a routine's `say` line is spoken once, when its card goes up (`{time}` is the local time, "8 pm" or "8:30 pm"). Speech only; the handover starts only after the person confirms the card. It stays silent in quiet hours, when speech is muted (`/api/speech/mute`) or `proactive.speak` is false. The announce rung still says its line with "Brace to cancel", and stays off.
+- **Pills, then water.** `arm.handover_then: {pill_cup: cup}`: when the pill hand over completes and the gripper is proven empty, the water card is raised straight away through the normal tool path. Two cards, two confirmations. A stop, cancel or re-arm in between drops it.
+- **The marker is two-stage** (`arm.handover_two_stage: [marker]`). *X asked: marker* (or `hand_over` on the marker from any card) ends its first confirm at the lift: the arm picks the marker and stops holding at `marker_slot.above`, nothing else moves, and a second card *Hand it to X?* goes up. Only its confirm runs the carry: `x_hand_above`, lower, open, retreat, home. Like the handover's two stages, the second runs the gate again on fresh facts (holding the marker, above the slot, the spot clear for `x_hand`) under the request epoch and arm_count stage 1 started at, in flight so a brace latches. A brace, stop, cancel or re-arm between the stages drops the card; the marker stays held and the arm stays stopped (*go home* brings it back).
+- **Typed or spoken.** "pills", "my pills" and "hand me my pills" resolve to the pill cup's `hand_over` and go through the same gate and confirmation (`h2m/compiler/grammar.py`).
+
 ### 5.2 How the person edits it
 A Routines page on the console: one row per routine, a cadence picker, the mode as three words, a snooze count, and *last ran*. From the chair or the bed, the same edits by voice ("water every two hours", "stop the water reminders", "pills at nine instead"), each confirmed by a card and a twitch. Changes by voice from anyone else go through the *X asked* rung.
 

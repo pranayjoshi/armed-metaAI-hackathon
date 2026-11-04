@@ -63,6 +63,7 @@ What runs where, in one sentence each:
 - **Motion** is taught poses only, interpolated at a capped speed, with one vision-derived pan angle for objects along the taught arc. No learned policy is in the build. The carry speed scales down as the forearm tenses before the brace threshold.
 - **The stop** is the brace, the open hand and a physical e-stop, reaching the servo with nothing fallible in the path. It latches until reset.
 - **Learning** is a restrict-only rule language (forbid, slow, lift, loosen; there is no word for allow), proposed by Wonder from the clip, proven monotone by a checker, replayed against the incident, rehearsed by the 3D twin, saved only on a twitch. A refusal becomes a "don't propose that" rule by the same machinery. Rules generalise through object tags.
+- **Judgement** is Muse Spark 1.3, always on: on every change and a slow heartbeat it sees the frame, the conversation, the timeline, the arm and the setting (desk or bed), and may say one useful thing or put one action from the closed list to the person as a single question; one yes, squeeze or click confirms. Ambient speech is context, never a command; only the wearer can arm it by voice, anyone can stand it down. What runs and what was measured: `LIVE_RUNTIME.md`.
 
 ## 5. Why these Meta models, and nothing swappable
 

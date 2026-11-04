@@ -51,8 +51,18 @@ You (band on the right forearm). X (one voice, on camera twice, and on the leade
 | `cup_slot.*` (the water bottle), `pill_slot.*`, `marker_slot.*` | above / grasp / point for the three bedside spots; `point` is the jaws just touching the object (the close goes there plus a slight squeeze) | pills, water, X asks |
 | bed `handover_above`, `handover_release` | over your open hand on the blanket, wrist roll about -26 (the pill box lies flat) | pills |
 | bed `handover_bottle_above`, `handover_bottle_release` | the same hand spot, wrist roll about 77 (the bottle stays upright) | water |
-| bed `x_hand_above`, `x_hand_release` | over X's outstretched hand on the far side of the bed, roll about -26 | the marker |
+| bed `x_hand_above`, `x_hand_release` | toward X's outstretched hand; the arm cannot swing far that way, so turn the wrist roll about 90° from the marker's grasp roll (-26) so the jaws present the marker to X | the marker |
 | bed `look_at_user` | pan toward X | X asks |
+
+**Handover sets and the one hand spot each needs measured.** `arm.handover_sets` (`configs/bed.yaml`) maps an object to the pair of poses it is handed over with (`<set>_above`, `<set>_release`), and each set is checked against its own hand spot in `configs/routes_bed.yaml` (`handover.sets.<set>` for `handover_bottle` and `x_hand`; `handover.spot` for the pill set). A hand over is refused until its pair is taught and its spot is real. Measure, with the arm at that set's `_release` pose and a hand held where the object goes:
+
+| Set | Objects | Measure | Then set |
+|---|---|---|---|
+| `handover` (pills) | pill cup | the hand spot (table x, y) under `handover_release`; `clear_radius` | `handover.spot`, `clear_radius`, `measured: true`, and `camera_sees_past_arm: true` only after checking the camera sees a hand there with the arm at both poses |
+| `handover_bottle` (water) | water bottle (`cup`) | the same, under `handover_bottle_release` | `handover.sets.handover_bottle.{spot, clear_radius, measured, camera_sees_past_arm}` |
+| `x_hand` (marker) | marker | the same, under `x_hand_release`, X's hand | `handover.sets.x_hand.{...}` |
+
+Three spots, one per set. The hand watchdog stops the lowering if a hand comes within `clear_radius` + `safety.handover_watch_margin` of that set's spot, so the spot is where the object is set down, not where the hand waits. Unmeasured placeholders are dropped as proof on the real arm. The marker also needs its second confirm: rehearse *X asked* with a hand away from the spot (first confirm lifts and stops, second hands it over).
 
 Revised November 4: the bed arm cannot reach your mouth, so on the bed it hands over the pills and then the water bottle to your hand, and the marker to X's hand; the straw to the mouth moves to the desk (a README clip). The cup spot holds the water bottle.
 
@@ -81,7 +91,7 @@ Clock is story time at the desk, real time in bed. Every beat: two clean runs be
 | 0:08 | Pills from the bed (preview) | pill cup from `pill_slot` to your open hand, let go | `pill_slot.*`, `handover_*` | 08:00 routine card *from your routine*; twitch at the approach | first-person phone; far-mode screen in shot |
 | 0:14 | Title, montage, counters | — | — | — | four dated stills |
 | 0:20 | Water after pills | the bottle from `cup_slot` to the same hand, upright, let go; a nod | `cup_slot.*`, `handover_bottle_*`, `nod` | routine *after pills*, *like yesterday* (yesterday's water run must exist); `muse-spark-1.3` | side |
-| 0:25 | X asks: marker | turn toward X, wait, marker to X's hand | `look_at_user`, `marker_slot.*`, `x_hand_*` | X's voice → *X asked* card; `muse-voice-transcribe-1.0 · speaker 2 = X`; the arm turns 1–2 s after X speaks (SAM face scan on new voice) | wide; transcript line |
+| 0:25 | X asks: marker | turn toward X, wait; first confirm: pick the marker and stop at the lift (`marker_slot.above`) and ask again; second confirm: roll the wrist toward X and hand it over | `look_at_user`, `marker_slot.*`, `x_hand_*` | X's voice → *X asked* card; `muse-voice-transcribe-1.0 · speaker 2 = X`; the arm turns 1–2 s after X speaks (SAM face scan on new voice) | wide; transcript line |
 | 0:35 | Clamp move | look up | `look_at_user` | — | one unbroken shot per move |
 | 0:38 | Context, then the jar | grip the jar at the hand spot, hold while you open it, release on twitch | `jar_hold` (via `take_this` grasp), hold stage | packet rows: *phone buzz*, *phone on desk · last scan 4 s*, *11:02, usually looks*; then *hand out · jar in hand* from adjacent masks; `calling sam-3.1 · [ms]` while the scan runs; the jar card arrives 1–2 s after the hand settles | live desk; laptop screen recording for the Card cutaway; gripper load bar |
 | 0:58 | Water over the laptop: slow-down, brace, stop | carry the sealed cup on the direct route; speed drops with the trace; freeze; "Sorry" | `slot_1.*` → direct route → `handover_*`; `sorry` | 14:00 routine card; comfort coupling (reviewed); `Armed stop controller · no model` | side phone at 60 fps, ruler on the laptop; meter and arm in one frame |

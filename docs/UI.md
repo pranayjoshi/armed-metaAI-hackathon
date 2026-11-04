@@ -106,6 +106,7 @@ Unchanged in its rules (`web/README.md`). Three additions:
 - **Film mode** on the Stage view (`?film=1`): the two EMG traces burned in with a shared timecode, the counters (*selections · flinches · rules learned · words spoken to the robot*), the current card mirrored small, and the robot's sentence as a caption. This is what the camera records beside the arm; it is the proof layer in `DEMO_STORY.md` (the evidence table and the rules of the cut).
 - **A Cards panel** on the Learn view: the proposal history of the session with what was accepted, stepped past or refused, and Muse's upgraded ranking where it arrived, for the top-1 number.
 - **A Rules page** already exists in Learn; each rule gets its incident clip and its verifier result, and a delete.
+- **The Mind view** (built Nov 4): senses, what it knows, Muse Spark thinking, what it says and suggests, the gate, the one confirmation and the arm, with the brace-to-rule lane below; a node glows only while its model call is in flight, a pulse runs only when a real event crossed the edge. The mock EMG dock sits in the top bar with the synthetic source. Details: `LIVE_RUNTIME.md` §6–7.
 
 ---
 
