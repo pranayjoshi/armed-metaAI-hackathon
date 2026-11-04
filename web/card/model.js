@@ -56,6 +56,8 @@ export function createMemory() {
     order: null, // {menu, ids, hid} the card order last seen, to spot a re-rank
     rerank: null, // {at, top} a re-sort happened with the highlight unchanged
     quiet: null, // {text, at}
+    noticed: null, // {key, text, sub, at}: the thinker's latest remark or held suggestion
+    noticedKey: null,
     vetoId: null, // card id of the routine whose ring was last up
   };
 }
@@ -103,6 +105,22 @@ export function ingest(mem, s, now) {
   if (!qt) mem.quiet = null;
   else if (mem.quiet?.text !== qt) mem.quiet = { text: qt, at: now };
   if (sel.auto && Number.isFinite(sel.auto.remaining_s) && sel.auto.remaining_s > 0) mem.vetoId = sel.auto.card_id;
+  // The thinker (state.think): a remark it said, or a suggestion it could not ask (held,
+  // disarmed). A queued suggestion is already the pending scene.
+  const notes = Array.isArray(s.think?.notes) ? s.think.notes : [];
+  const n = notes[notes.length - 1];
+  if (n && n.t !== mem.noticedKey) {
+    mem.noticedKey = n.t;
+    const held = n.suggest && !n.suggest.queued ? n.suggest : null;
+    if (n.said || held) {
+      const armed = s.arm?.state === "ready" || s.arm?.state === "moving";
+      mem.noticed = {
+        text: n.said || held.ask,
+        sub: held ? (held.why ? `because ${held.why}` : "") + (armed ? "" : `${held.why ? " · " : ""}say “arm yourself” first`) : n.notice || "",
+        at: now,
+      };
+    }
+  }
   return live;
 }
 
@@ -134,6 +152,7 @@ export function pickScene(s, mem, ctx) {
   if (veto) return "auto";
   if (s.pending) return "pending";
   if (sel.enabled && sel.cards?.length) return sel.confirming ? "confirm" : "cards";
+  if (mem.noticed && ctx.now - mem.noticed.at < 8000) return "noticed";
   if (mem.quiet && ctx.now - mem.quiet.at < 3000) return "quiet";
   if (arm.state === "disarmed" || arm.state === "disconnected") {
     // quiet: say it for a few seconds, then get out of the way (the bedside screen keeps it)

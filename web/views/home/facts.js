@@ -20,8 +20,15 @@ export function portalFacts(s, history, rulesCount, rulesError) {
   if (!s.arm) {
     // Replay server with no running simulation (`h2m replay <dir>`): the snapshot has no arm, EMG, vision or events.
     const quiet = { text: "no simulation running", tone: "" };
-    return { ...out, stage: quiet, flow: quiet, signals: quiet, learn: quiet, lab: quiet };
+    return { ...out, mind: quiet, stage: quiet, flow: quiet, signals: quiet, learn: quiet, lab: quiet };
   }
+
+  // Mind: the always-on Muse thinker
+  const th = s.think;
+  if (!th?.enabled) out.mind = { text: "thinker off", tone: "" };
+  else if (th.error) out.mind = { text: "thinker error", tone: "bad" };
+  else if (th.thinking) out.mind = { text: "thinking…", tone: "muse" };
+  else out.mind = { text: th.count ? `${th.count} thought${th.count === 1 ? "" : "s"}${th.last_ms ? ` · last ${(th.last_ms / 1000).toFixed(1)} s` : ""}` : "watching", tone: "muse" };
 
   // Stage: arm state + what is on the table
   const a = s.arm;

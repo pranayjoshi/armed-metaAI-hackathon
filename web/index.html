@@ -28,6 +28,11 @@
       <div class="crumb" aria-live="polite"><span class="kicker" id="crumb-n">01</span><span id="crumb">Home</span></div>
       <div class="chips" id="chips"></div>
       <span class="cardlinks"><a href="/web/card/index.html" target="_blank" rel="noopener" title="Open the Card (desk overlay page)">Card</a><a href="/web/card/index.html?mode=far" target="_blank" rel="noopener" title="Open the bedside screen (far mode)">Bedside</a></span>
+      <div class="emgsrc" id="emgsrc" hidden role="group" aria-label="EMG source">
+        <span class="kicker">EMG</span>
+        <button data-src="ganglion" title="The real band (Ganglion)">Real</button>
+        <button data-src="synthetic" title="Synthetic signal, with the mock buttons">Synthetic</button>
+      </div>
       <div class="emgmock" id="emgmock" hidden role="group" aria-label="Mock EMG">
         <span class="kicker">Mock EMG</span>
         <button data-g="twitch" class="g-twitch" title="One twitch: select or confirm the highlighted card (T)">Twitch<kbd>T</kbd></button>

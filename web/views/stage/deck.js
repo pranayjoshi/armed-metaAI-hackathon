@@ -56,6 +56,7 @@ export const SKELETON = `
           <button class="btn" data-arm="disarm">Disarm</button>
           <button class="btn" data-arm="reset">Reset</button>
           <button class="btn" data-arm="home">Home</button>
+          <button class="btn" data-el="release" hidden title="Open the gripper at home so Armed knows it is empty (two confirms)">Gripper empty</button>
         </div>
         <p class="arm-ro" data-el="armro" hidden></p>
       </div>
@@ -99,7 +100,7 @@ export class Deck {
   }
 
   bind() {
-    const { api } = this.ctx;
+    const { api, toast } = this.ctx;
     if (this.replay) {
       this.el.sayform.onsubmit = (e) => e.preventDefault();
       this.el.say.disabled = true;
@@ -119,6 +120,20 @@ export class Deck {
       this.el.say.value = "";
     };
     this.root.querySelectorAll("[data-arm]").forEach((b) => (b.onclick = () => api(`/api/arm/${b.dataset.arm}`)));
+    // "Gripper empty": the wrist camera check first (Muse Spark, nothing moves); where the
+    // operator release is on (bed: at home), open the jaws instead when the camera can't tell.
+    const rel = this.root.querySelector('[data-el="release"]');
+    rel.onclick = async () => {
+      rel.disabled = true;
+      const seen = this.state?.vision?.wrist_live ? await api("/api/gripper/check") : null;
+      rel.disabled = false;
+      if (seen?.ok) return toast(seen.detail, "ok");
+      if (!this.state?.operator_release?.enabled) return;
+      const offer = await api("/api/gripper/release", {});
+      if (!offer?.release_id) return;
+      if (!confirm(offer.detail)) return;
+      api("/api/gripper/release", { release_id: offer.release_id });
+    };
     const onAct = (e) => {
       const b = e.target.closest("button");
       if (!b) return;
@@ -249,8 +264,8 @@ export class Deck {
           <div class="ask-opts">${cands.map((c) => `<button class="opt"${ro ? " disabled" : ` data-choose="${esc(c.object_id)}"`}><span>${esc(c.name)}</span><b class="num">${pct(c.score)}</b><i style="--w:${c.score}"></i></button>`).join("")}</div>`;
       } else {
         ask = `<div class="ask-top"><div class="ask-ring"><svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="${R}"/><circle class="fg" cx="32" cy="32" r="${R}" stroke-dasharray="${CIRC.toFixed(1)}" data-ask-ring/></svg><span class="num" data-ask-n>—</span></div>
-          <div class="ask-txt"><strong class="ask-title">${this.replay ? "Awaiting confirmation" : "Squeeze to confirm"}</strong><span class="ask-sub">${this.replay ? "Read-only. The script confirms." : "or press Confirm."} Expires in <span class="num" data-ask-s>—</span> s</span></div></div>
-          ${this.replay ? "" : '<div class="btn-row ask-btns"><button class="btn primary" data-act="confirm">Confirm</button><button class="btn danger" data-act="cancel">Cancel</button></div>'}`;
+          <div class="ask-txt"><strong class="ask-title">${this.replay ? "Awaiting confirmation" : "Yes or no?"}</strong><span class="ask-sub">${this.replay ? "Read-only. The script confirms." : "Say it, squeeze, or press a button."} Expires in <span class="num" data-ask-s>—</span> s</span></div></div>
+          ${this.replay ? "" : '<div class="btn-row ask-btns"><button class="btn primary" data-act="confirm">Yes</button><button class="btn danger" data-act="cancel">No</button></div>'}`;
       }
     }
     this.el.rq.className = `panel rq v-${tone} ${asking ? "asking" : ""}`;
@@ -337,6 +352,8 @@ export class Deck {
     this.el.loadval.textContent = load == null ? "—" : pct(load);
     const st = a.state;
     this.root.querySelector('[data-arm="arm"]').classList.toggle("primary", st === "disarmed");
+    this.state = s;
+    this.root.querySelector('[data-el="release"]').hidden = !(s.operator_release?.enabled || s.vision?.wrist_live);
     this.root.querySelector('[data-arm="reset"]').classList.toggle("primary", st === "stopped" || st === "fault");
     this.root.querySelector('[data-arm="reset"]').classList.toggle("pulse", st === "stopped" || st === "fault");
   }

@@ -218,6 +218,22 @@ mockDock.addEventListener("click", (e) => {
   if (b) mockGesture(b.dataset.g);
 });
 
+// ── EMG source toggle: real band or synthetic, switched live (POST /api/emg/source) ──
+// The runtime disarms on a switch and holds motion until the new source streams.
+const srcToggle = $("#emgsrc");
+srcToggle.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-src]");
+  if (!b || b.classList.contains("on")) return;
+  if (!confirm(`Switch EMG to ${b.textContent}? Armed disarms first.`)) return;
+  srcToggle.classList.add("busy");
+  api("/api/emg/source", { source: b.dataset.src }).finally(() => srcToggle.classList.remove("busy"));
+});
+function renderSrc(s) {
+  srcToggle.hidden = mode === "replay" || !s.emg;
+  const cur = s.emg?.source === "synthetic" ? "synthetic" : "ganglion";
+  for (const b of srcToggle.querySelectorAll("button")) b.classList.toggle("on", b.dataset.src === cur);
+}
+
 // ── status chips ───────────────────────────────────────────────────────────
 const chip = (label, tone = "") => `<span class="chip ${tone}"><i></i>${esc(label)}</span>`;
 function renderChips(s) {
@@ -253,6 +269,7 @@ bus.on("conn", (ok) => {
 bus.on("state", (s) => {
   renderChips(s);
   mockDock.hidden = !mockOn();
+  renderSrc(s);
   const v = current && views.get(current);
   if (v?.mounted) v.mod.update?.(s, ctx);
 });

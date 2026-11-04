@@ -114,7 +114,7 @@ function renderOverlays(s) {
     const cands = (p.contract.candidates || []).filter((c) => c.score > 0);
     const acts = replay ? "" : p.decision.clarify
       ? cands.map((c) => `<button class="btn" data-choose="${esc(c.object_id)}">${esc(c.name)}</button>`).join("") + '<button class="btn danger" data-act="cancel">Cancel</button>'
-      : '<button class="btn primary" data-act="confirm">Confirm</button><button class="btn danger" data-act="cancel">Cancel</button>';
+      : '<button class="btn primary" data-act="confirm">Yes</button><button class="btn danger" data-act="cancel">No</button>';
     const html = `<span class="pr-k">${p.decision.clarify ? "Choose" : replay ? "Awaiting the script" : "Waiting for you"}</span><strong>${esc(sentenceFor(s))}</strong><span class="pr-acts">${acts}</span>`;
     if (el.prompt.dataset.h !== html) { el.prompt.dataset.h = html; el.prompt.innerHTML = html; }
   }

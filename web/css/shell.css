@@ -94,6 +94,14 @@
 .cardlinks a:hover { color: var(--ink); border-color: var(--ink-3); background: rgba(255,255,255,.05); }
 @media (max-width: 760px) { .cardlinks { display: none; } }
 
+/* EMG source toggle: real band / synthetic */
+.emgsrc { display: flex; align-items: center; gap: 3px; padding: 4px 4px 4px 10px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--bg-1); }
+.emgsrc[hidden] { display: none; }
+.emgsrc .kicker { font-size: 10px; margin-right: 3px; }
+.emgsrc button { padding: 6px 9px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--ink-3); font: 600 12.5px/1 var(--font-body); cursor: pointer; }
+.emgsrc button:hover { color: var(--ink); }
+.emgsrc button.on { background: var(--bg-3); border-color: var(--line-2); color: var(--ink); cursor: default; }
+.emgsrc.busy { opacity: .5; pointer-events: none; }
 /* mock EMG dock (synthetic source only), in the top bar beside STOP */
 .emgmock { display: flex; align-items: center; gap: 5px; padding: 4px 4px 4px 10px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--bg-1); }
 .emgmock[hidden] { display: none; }

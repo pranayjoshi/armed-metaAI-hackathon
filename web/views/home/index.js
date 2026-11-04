@@ -248,7 +248,7 @@ export default {
     function renderFacts(s) {
       const f = portalFacts(s, store.history, S.rules, S.rulesErr);
       factEls.forEach((x, i) => {
-        const v = f[PORTALS[i].id];
+        const v = f[PORTALS[i].id] || { text: "—", tone: "" };
         if (v.text !== x.last) {
           x.last = v.text;
           x.txt.textContent = v.text;

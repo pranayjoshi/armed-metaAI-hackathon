@@ -112,6 +112,19 @@ function quiet(s, mem) {
   };
 }
 
+// ── the thinker's remark or held suggestion ─────────────────────────────────
+function noticed(s, mem) {
+  const n = mem.noticed;
+  return {
+    edge: "line",
+    hdl: `<span class="w">Armed noticed · muse-spark-1.3</span>`,
+    acts: "",
+    body: `<div class="hero quiet"><div class="pic">${GLYPH.wait}</div><div class="txt"><div class="lbl">${esc(n.text)}</div>${n.sub ? `<div class="ev">${esc(n.sub)}</div>` : ""}</div></div>`,
+    aria: n.text,
+    sig: ["n", n.text, n.sub],
+  };
+}
+
 // ── pending request (voice, typed, click) ───────────────────────────────────
 function pending(s, mem, ctx) {
   const p = s.pending;
@@ -233,8 +246,8 @@ function disarmed(s) {
     edge: "grey",
     hdl: `<span class="w">${dis ? "no arm" : "disarmed"}</span>`,
     acts: "",
-    body: `<div class="hero quiet"><div class="pic">${GLYPH.off}</div><div class="txt"><div class="lbl">${dis ? "Arm not connected" : "Disarmed"}</div><div class="ev">${dis ? "start the runtime with an arm" : "arm it from the console"}</div></div></div>`,
-    aria: dis ? "Arm not connected" : "Disarmed. Arm it from the console.",
+    body: `<div class="hero quiet"><div class="pic">${GLYPH.off}</div><div class="txt"><div class="lbl">${dis ? "Arm not connected" : "Disarmed"}</div><div class="ev">${dis ? "start the runtime with an arm" : "say “arm yourself”"}</div></div></div>`,
+    aria: dis ? "Arm not connected" : "Disarmed. Say arm yourself.",
     sig: ["d", dis],
   };
 }
@@ -274,6 +287,7 @@ export function build(scene, s, mem, ctx) {
     case "pending": return pending(s, mem, ctx);
     case "auto": return auto(s, mem, ctx);
     case "quiet": return quiet(s, mem);
+    case "noticed": return noticed(s, mem);
     case "running": return running(s, mem, ctx);
     case "stopped": return stopped(s, mem, ctx);
     case "investigate": return investigate(s, mem, ctx);
