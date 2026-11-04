@@ -4,6 +4,8 @@
 
 *It watches the time, your room, your voice and your muscles, works out what you need, then acts, speaks, or checks with the people around you.*
 
+<p align="center"><img src="docs/media/home.png" alt="Armed console, home view (simulation)" width="900"></p>
+
 Armed is a robot arm for a desk or a headboard that you almost never have to instruct. From the clock, the room, who is speaking and one muscle in your forearm, it proposes what you probably want next; a twitch says yes, a brace says no. If it gets something wrong while moving, the same brace freezes it with no model in the path; Muse Wonder then investigates the clip, proposes one restriction, a checker proves the rule can only make the arm more careful, and you approve it with a twitch. Measured against the one-switch scanning menu people with one controllable signal use today: [N] inputs per task instead of [M], n = TODO (not measured yet, see the table below). Built in nine days by one person working with AI coding agents, on open hardware (cost: TODO, bill of materials not totalled yet), with Muse Spark, Muse Wonder, SAM 3.1 and Muse Voice Transcribe doing the seeing, hearing and reasoning, and taught poses doing every motion.
 
 > **Nothing a model says can move a motor.** Models rank, describe and propose. Motion is taught poses only, behind a pure-function gate, and the stop path (brace, open hand, physical e-stop) has no model and no network in it.
@@ -11,6 +13,20 @@ Armed is a robot arm for a desk or a headboard that you almost never have to ins
 Film (2:30): TODO (link). GIF of the phone beat (20 s): TODO (`docs/media/phone.gif` is not recorded yet).
 
 Entry for the Meta Global AI Developer Hackathon, solo, indie track. Status as of November 3, 2026: the software runs on the virtual arm (`h2m demo`, `h2m run`), and the SO-101 has been brought up with taught poses; the live Meta model calls are still being verified one by one, and most numbers below are not collected yet.
+
+---
+
+## See it
+
+Every screenshot below is the real console running `h2m demo`: a scripted scenario on a virtual arm with synthetic EMG. The screen labels it SIMULATION, and so does this page.
+
+| | |
+|---|---|
+| <img src="docs/media/stage.png" alt="Stage"><br>**Stage.** Muse Wonder investigates an interrupted carry with tools; the checker rejects one rule and proves the next. | <img src="docs/media/learn.png" alt="Learning"><br>**Learning.** From brace to rule: stop in 172 ms, clip, explanation, approval, saved rule. |
+| <img src="docs/media/flow.png" alt="Workflow"><br>**Workflow.** Every decision with the checks it passed. | <img src="docs/media/signals.png" alt="Signals"><br>**Signals.** The forearm channels, thresholds and the brace. |
+| <img src="docs/media/context.png" alt="Context"><br>**Context.** What Muse is told: the clock, the room, voices, history. | <img src="docs/media/replay.png" alt="Replay"><br>**Replay.** Re-run any recorded incident, read-only. |
+
+<p align="center"><img src="docs/media/card.png" alt="The Card overlay" width="420"><br><sub>The Card: the proposal, the muscle meter and a STOP that never leaves the screen.</sub></p>
 
 ---
 
@@ -34,6 +50,8 @@ Every cell is a value with its n, or `TODO (not measured)`. A target is never wr
 ---
 
 ## How it is executed
+
+<p align="center"><img src="docs/media/architecture.svg" alt="Architecture" width="1000"></p>
 
 ```text
  room ──► SAM 3.1 (phrase → masks: objects, hand, face; on change, events, 10 s) ─┐
@@ -68,6 +86,10 @@ What runs where, in one sentence each:
 - **Motion** is taught poses only, interpolated at a capped speed, with one vision-derived pan angle for objects along the taught arc. No learned policy is in the build. The carry speed scales down as the forearm tenses before the brace threshold.
 - **The stop** is the brace, the open hand and a physical e-stop, reaching the servo with nothing fallible in the path. It latches until reset.
 - **Learning** is a restrict-only rule language (forbid, slow, lift, loosen; there is no word for allow), proposed by Wonder from the clip, proven monotone by a checker, replayed against the incident, rehearsed by the 3D twin, saved only on a twitch. A refusal becomes a "don't propose that" rule by the same machinery. Rules generalise through object tags.
+
+### The trust ladder
+
+<p align="center"><img src="docs/media/ladder.svg" alt="Trust ladder" width="1000"></p>
 
 ## Why these Meta models, and nothing swappable
 

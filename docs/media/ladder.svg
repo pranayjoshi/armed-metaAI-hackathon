@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" font-family="ui-monospace,Menlo,monospace" font-size="15">
+<rect width="1200" height="300" rx="18" fill="#070a10"/>
+<g stroke-width="1.5" fill="#0d1420">
+<rect x="24" y="40" width="216" height="220" rx="12" stroke="#3ddc97"/><rect x="252" y="40" width="216" height="220" rx="12" stroke="#37c8ff"/><rect x="480" y="40" width="216" height="220" rx="12" stroke="#7c6cff"/><rect x="708" y="40" width="216" height="220" rx="12" stroke="#ffb454"/><rect x="936" y="40" width="240" height="220" rx="12" stroke="#ff5a6e"/>
+</g>
+<g fill="#d7e0ef" font-size="17">
+<text x="44" y="78" fill="#6ff0b0">1  Does it</text><text x="272" y="78" fill="#7fdcff">2  Announces</text><text x="500" y="78" fill="#a89cff">3  Proposes</text><text x="728" y="78" fill="#ffc980">4  Asks by name</text><text x="956" y="78" fill="#ff8a98">5  Never</text></g>
+<g fill="#9fb0cc" font-size="13.5">
+<text x="44" y="116">lamp on when you sit</text><text x="44" y="138">turn to look at you</text><text x="44" y="160">spoken reminder</text><text x="44" y="200" fill="#6f7f99">nothing moves near you</text>
+<text x="272" y="116">routine you approved</text><text x="272" y="138">5 s to veto with a brace</text><text x="272" y="160">then it runs, away from you</text><text x="272" y="200" fill="#6f7f99">off by default</text>
+<text x="500" y="116">anything that moves</text><text x="500" y="138">every message</text><text x="500" y="160">twitch to accept</text><text x="500" y="200" fill="#6f7f99">last approach always asks</text>
+<text x="728" y="116">another voice asked</text><text x="728" y="138">card: “Waiting for you”</text><text x="728" y="160">only the wearer can say yes</text><text x="728" y="200" fill="#6f7f99">consent by diarized name</text>
+<text x="956" y="116">model text to a motor</text><text x="956" y="138">anything in quiet hours</text><text x="956" y="160">except a stop</text><text x="956" y="200" fill="#6f7f99">no word for “allow”</text></g>
+</svg>
