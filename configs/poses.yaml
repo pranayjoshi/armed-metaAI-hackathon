@@ -314,7 +314,7 @@ slots:
         elbow_flex: 18.73
         wrist_flex: 75.12
         wrist_roll: -90.86
-        gripper: 57.01
+        gripper: 95
     grasp:
       taught: true
       joints:
@@ -323,7 +323,7 @@ slots:
         elbow_flex: 11.69
         wrist_flex: 66.95
         wrist_roll: -90.86
-        gripper: 57.34
+        gripper: 95
     point:
       taught: false
       joints:

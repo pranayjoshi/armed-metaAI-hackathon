@@ -257,6 +257,10 @@ def test_yes_approves_and_no_rejects(h2m):
     assert len(h2m.rules.list()) == 1
     h2m.arm.reset(), h2m.arm.arm()
     took_it_back(h2m)
+    # The second carry is already rerouted, so the same rule would change nothing and the
+    # checker rejects it (see test_duplicate_rule_that_changes_nothing_is_not_proposed).
+    # A different one (slow down) is proposed, and "no" drops it.
+    h2m.learner.muse = FakeMuse(reply={**GOOD, "rule": {**GOOD["rule"], "response": "slow_down"}})
     flinch_and_explain(h2m)
     answer_later(h2m.learner.proposal)
     h2m.on_utterance("no", source="typed")
@@ -585,3 +589,203 @@ def test_shaping_never_raises_an_already_lower_speed_or_grip(h2m):
     for _ in range(3):  # idempotent across re-checks
         h2m._shape_carry(c)
     assert c.speed == 0.3 and c.grip_effort == 0.1
+
+
+# added alongside today's changes
+class ToolMuse(FakeMuse):
+    """A Muse client that speaks the Responses path: a scripted list of turns, each a
+    list of (tool, args); an empty turn ends with text. ``segment`` returns one box
+    whose x grows with the frame's brightness (the incident frames), so track() moves."""
+
+    explanation_source = None
+
+    def __init__(self, script, box=(10.0, 10.0, 50.0, 50.0), fail=False):
+        super().__init__()
+        self.script, self.box, self.fail_respond = list(script), box, fail
+        self.bodies: list[dict] = []
+        self.turn = 0
+
+    def segment(self, model, image, label):
+        if self.box is None:
+            return None
+        shift = float(image[0, 0, 0]) if image is not None and image.size else 0.0
+        x1, y1, x2, y2 = self.box
+        return (x1 + shift, y1, x2 + shift, y2)
+
+    def respond(self, body):
+        import copy
+
+        self.threads.append(threading.current_thread().name)
+        self.bodies.append(copy.deepcopy(body))
+        if self.fail_respond:
+            raise RuntimeError("API down")
+        i, self.turn = self.turn, self.turn + 1
+        turn = self.script[i] if i < len(self.script) else []
+        if not turn:
+            return {"output": [{"type": "message", "role": "assistant", "content": [
+                {"type": "output_text", "text": "Nothing in the clip explains it."}]}]}
+        return {"output": [
+            {"type": "function_call", "call_id": f"t{i}-{j}", "name": name,
+             "arguments": json.dumps(args)}
+            for j, (name, args) in enumerate(turn)
+        ]}
+
+SCRIPT = [
+    [("track", {"phrase": "cup"}), ("track", {"phrase": "laptop"})],
+    [("measure", {"a": "cup", "b": "laptop", "t": 0.0}), ("body_trace", {})],
+    [("propose_rule", GOOD)],
+]
+
+WRONG = {**GOOD, "held_property": "rigid",
+         "rule": {"when_holding": ["rigid"], "avoid": "laptop", "response": "route_around"}}
+
+def with_camera(h):
+    """The fixture has no camera: give the learner the simulation's virtual one so the
+    clip has frames for SAM to look at (a flat grey table)."""
+    import numpy as np
+
+    h.learner.virtual_camera = lambda: np.full((240, 320, 3), 90, np.uint8)
+
+def test_tool_loop_publishes_feed_calls_checks_and_rehearsal(h2m):
+    with_camera(h2m)
+    h2m.learner.muse = ToolMuse(SCRIPT)
+    data = flinch_and_explain(h2m)
+    assert h2m.arm.state is ArmState.STOPPED  # the loop never touches the arm
+    assert data["explanation"]["source"] == "wonder" and data["investigation"]["status"] == "proposed"
+    assert data["investigation"]["tool_calls"] == 5 and data["investigation"]["rejected"] == 0
+    snap = h2m.snapshot()
+    learning = snap["learning"]
+    # the feed: [{t, tool, args, result_summary, ms}] in order
+    feed = learning["investigation"]
+    assert [e["tool"] for e in feed] == [
+        "wonder", "sam-3.1 track", "sam-3.1 track", "wonder", "measure", "measure body_trace",
+        "wonder", "wonder propose_rule", "checker",
+    ]
+    assert all({"t", "tool", "args", "result_summary", "ms"} <= set(e) for e in feed)
+    assert "cup-laptop" in feed[4]["result_summary"] and feed[-1]["ticks"] == [True, True]
+    # the same lines as incident.tool events in the snapshot's event list (the stage feed)
+    kinds_seen = [e["kind"] for e in snap["events"]]
+    assert kinds_seen.count("incident.tool") == len(feed) and "incident.investigated" in kinds_seen
+    tool_ev = [e for e in snap["events"] if e["kind"] == "incident.tool"][-1]
+    assert tool_ev["tool"] == "checker" and tool_ev["ticks"] == [True, True] and tool_ev["ok"]
+    # state.calls carries the Wonder and SAM calls with their ms
+    calls = [(c["model"], c["for"]) for c in snap["calls"]]
+    assert calls.count(("muse-wonder-1.0", "investigate")) == 3
+    assert all(isinstance(c.get("ms"), int) for c in snap["calls"])
+    # the proposal: both ticks, the verifier for the card, the rehearsal for the twin
+    p = learning["proposal"]
+    assert p["checks"]["restrictive"] is True and p["checks"]["prevented"] is True
+    assert "via_left" in p["checks"]["detail"]["prevented"]
+    assert p["verifier"] == {"removes options only": True, "incident prevented": True}
+    rh = p["rehearsal"]
+    assert rh["old_route_name"] == "direct" and rh["new_route_name"] == "via_left"
+    assert rh["old_route"][0] == [0.25, 0.55] and len(rh["new_route"]) == 3
+    assert rh["state"] in ("playing", "done") and 0.0 <= rh["progress"] <= 1.0
+    assert rh["source"] == {"file": "configs/routes.yaml", "measured": False}
+    assert "placeholder" in rh["note"] and "twin only" in rh["note"]
+    # the Wonder requests: the clip, the zones and tags it may use, then the tool outputs
+    first = h2m.learner.muse.bodies[0]
+    assert first["model"] == "muse-wonder-1.0" and first["input"][0]["content"][-1]["type"] == "input_video"
+    assert "laptop" in first["input"][0]["content"][0]["text"]
+    assert "liquid" in first["input"][0]["content"][0]["text"]
+    outputs = [it for it in h2m.learner.muse.bodies[2]["input"] if it["type"] == "function_call_output"]
+    seen = json.loads(outputs[0]["output"])["found_in"]
+    assert 1 <= seen <= h2m.learner.inv_cfg.track_frames  # one SAM call per frame, per phrase
+    assert calls.count(("sam-3.1", "track")) == 2 * seen
+    # the clip was saved next to the keyframes and the explanation records the loop
+    inc_dir = h2m.learner.root / data["incident_id"]
+    assert (inc_dir / "clip.mp4").exists()
+    saved = json.loads((inc_dir / "explanation.json").read_text())
+    assert saved["checks"]["prevented"] is True and saved["investigation"]["status"] == "proposed"
+    assert json.loads((inc_dir / "meta.json").read_text())["carry"]["slot_id"] == "slot_1"
+
+def test_rehearsal_plays_in_the_twin_only_and_no_timer_approves(h2m):
+    h2m.learner.cfg["rehearsal_s"] = 0.2
+    h2m.learner.muse = ToolMuse(SCRIPT)
+    flinch_and_explain(h2m)
+    p = h2m.learner.proposal
+    assert p.rehearsal_state()["state"] == "playing"
+    time.sleep(0.3)
+    done = p.rehearsal_state()
+    assert done["state"] == "done" and done["progress"] == 1.0
+    assert h2m.rules.list() == [] and h2m.learner.proposal is p  # finishing approves nothing
+    assert h2m.arm.state is ArmState.STOPPED  # and moves nothing, virtual or real
+    assert not kinds(h2m, "arm.started")[1:]  # only the carry's start is in the log
+
+def test_rejected_proposal_goes_back_to_wonder_once_then_is_dropped(h2m):
+    h2m.learner.muse = ToolMuse([[("propose_rule", WRONG)], [("propose_rule", GOOD)]])
+    data = flinch_and_explain(h2m)
+    assert data["investigation"]["rejected"] == 1 and data["proposal"]["rule"]["when_holding"] == ["liquid"]
+    feed = h2m.learner.snapshot()["investigation"]
+    checker = [e for e in feed if e["tool"] == "checker"]
+    assert checker[0]["ok"] is False and checker[0]["ticks"] == [True, False]
+    assert "rigid" in checker[0]["result_summary"] and checker[1]["ticks"] == [True, True]
+    # the reason went back to Wonder as the tool's result
+    out = json.loads(h2m.learner.muse.bodies[1]["input"][-1]["output"])
+    assert out["ok"] is False and "not prevented" in out["reason"] and "liquid" in out["tags"]
+    # two rejections: dropped, the one-shot path runs next, and the arm stays stopped
+    h2m.arm.reset(), h2m.arm.arm()
+    took_it_back(h2m)
+    h2m.learner.muse = ToolMuse([[("propose_rule", WRONG)], [("propose_rule", WRONG)]])
+    data = flinch_and_explain(h2m)
+    assert data["investigation"]["status"] == "rejected" and data["investigation"]["rejected"] == 2
+    assert h2m.learner.muse.turn == 2  # no third turn
+    assert data["proposal"] is None and data["say"] == FALLBACK_SAY
+    assert data["explanation"]["source"] == "fallback"  # no second opinion from chat()
+    assert h2m.learner.muse.calls == []  # the one-shot path did not run
+    assert h2m.arm.state is ArmState.STOPPED
+
+def test_loop_failure_falls_back_to_the_one_shot_path_then_the_fixed_question(h2m):
+    h2m.learner.muse = ToolMuse(SCRIPT, fail=True)  # respond raises; chat still answers GOOD
+    data = flinch_and_explain(h2m)
+    assert data["investigation"]["status"] == "error"
+    assert data["explanation"]["source"] == "wonder" and data["proposal"]["checks"]["prevented"]
+    assert h2m.arm.state is ArmState.STOPPED
+    h2m.arm.reset(), h2m.arm.arm()
+    took_it_back(h2m)
+    muse = ToolMuse([], fail=True)
+    muse.fail = True  # chat fails too
+    h2m.learner.muse = muse
+    data = flinch_and_explain(h2m)
+    assert data["explanation"]["source"] == "fallback" and data["say"] == FALLBACK_SAY
+    assert data["proposal"] is None and h2m.arm.state is ArmState.STOPPED
+    # tools off in the config: the one-shot path only, no Responses call
+    h2m.arm.reset(), h2m.arm.arm()
+    took_it_back(h2m)
+    h2m.learner.tools = False
+    h2m.learner.muse = ToolMuse(SCRIPT)
+    data = flinch_and_explain(h2m)
+    assert data["investigation"] is None and h2m.learner.muse.bodies == []
+    assert data["proposal"] is not None and h2m.learner.snapshot()["tools"] is False
+
+def test_one_shot_proposal_is_checked_too(h2m):
+    h2m.learner.muse = FakeMuse(reply=WRONG)  # chat() only: the one-shot path
+    data = flinch_and_explain(h2m)
+    assert data["proposal"] is None and any("not prevented" in p for p in data["problems"])
+    assert data["say"] == FALLBACK_SAY
+
+def test_duplicate_rule_that_changes_nothing_is_not_proposed(h2m):
+    flinch_and_explain(h2m)
+    answer_later(h2m.learner.proposal)
+    assert h2m.learner.approve(by="ui")[0]
+    h2m.arm.reset(), h2m.arm.arm()
+    took_it_back(h2m)
+    data = flinch_and_explain(h2m)  # the carry was on via_left, clear of the laptop
+    assert data["proposal"] is None
+    assert any("never crosses" in p for p in data["problems"])
+
+def test_applied_rules_name_the_tag_that_matched(h2m):
+    flinch_and_explain(h2m)
+    answer_later(h2m.learner.proposal)
+    rule_id = h2m.learner.proposal.rule.id
+    assert h2m.learner.approve(by="ui")[0]
+    h2m.arm.reset(), h2m.arm.arm()
+    took_it_back(h2m)
+    contract, _ = ask(h2m)
+    assert contract["applied_rules"] == [rule_id]
+    assert h2m.snapshot()["learning"]["applied_rules"] == [
+        {"id": rule_id, "index": 1, "tags": ["liquid"], "response": "route_around", "avoid": "laptop"}
+    ]
+    h2m.cancel("test")
+    ask(h2m, "hand me the block")
+    assert h2m.snapshot()["learning"]["applied_rules"] == []

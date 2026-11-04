@@ -1,9 +1,15 @@
-"""Rule memory and deterministic route choice.
+"""Rule memory, deterministic route choice and the checker's primitives.
 
 Rules are per-user, saved only after approval, and can only restrict: they
 remove routes or ask for slower, higher or gentler motion. They never relax a
 safety check. Route choice is deterministic: drop routes that cross an avoid
 zone for the object held, take the first remaining, else return None (ask).
+
+The checker does not trust that by construction: ``permitted_options`` computes
+the set of (route, speed cap, grip cap) a carry may use under a rule set, and
+``is_restrictive`` proves a proposed rule only ever shrinks that set, never grows
+it. ``h2m.routing.check_proposal`` runs both ticks (monotone and the counterfactual
+replay of the incident) and puts the result on the proposal.
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ import uuid
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 from h2m.core import ROOT, now
 
@@ -183,6 +190,85 @@ def choose_route(
         if not any(crosses(poly, z) for z in zones):
             return name, applied
     return None, applied
+
+
+@dataclass(frozen=True)
+class Permitted:
+    """What one carry may do under a rule set: the routes still allowed, and the
+    caps on speed and grip (shares of the configured maximum, 1.0 = uncapped)."""
+
+    routes: frozenset[str]
+    speed_cap: float = 1.0
+    grip_cap: float = 1.0
+
+    @property
+    def count(self) -> int:
+        return len(self.routes)
+
+
+def permitted_options(
+    held_tags: Sequence[str],
+    routes: Mapping[str, Sequence[Point]],
+    avoid_zones: Mapping[str, Zone],
+    rules: Sequence[Rule],
+    high_routes: Collection[str] = (),
+    slow_speed: float = 0.5,
+    gentle_grip: float = 0.6,
+) -> Permitted:
+    """The permitted set for one carry: every route not removed by a matching rule,
+    with the caps the matching rules impose. Pure. Fails closed like ``choose_route``:
+    a matching route_around rule whose zone is unknown or malformed leaves no route."""
+    matched = matching_rules(held_tags, rules)
+    allowed = set(routes)
+    for rule in matched:
+        if rule.response == "route_around":
+            zone = avoid_zones.get(rule.avoid)
+            if zone is None or not _zone_ok(zone):
+                allowed = set()
+                break
+            allowed = {n for n in allowed if not crosses(routes[n], zone)}
+        elif rule.response == "lift_higher":
+            allowed &= set(high_routes)
+    mods = modifiers(held_tags, rules)
+    speed = min(max(float(slow_speed), 0.0), 1.0) if "slow_down" in mods else 1.0
+    grip = min(max(float(gentle_grip), 0.0), 1.0) if "grip_gentler" in mods else 1.0
+    return Permitted(frozenset(allowed), speed, grip)
+
+
+def is_restrictive(
+    before: Mapping[Any, Permitted], after: Mapping[Any, Permitted], eps: float = 1e-9
+) -> tuple[bool, str]:
+    """True when ``after`` is a subset of ``before`` for every carry: no route is
+    added, no cap is raised, no carry appears that was not permitted before. The
+    detail names the option counts, or what was added."""
+    added: list[str] = []
+    for key, b in before.items():
+        a = after.get(key)
+        if a is None:
+            continue  # the carry disappeared entirely: a shrink
+        extra = a.routes - b.routes
+        if extra:
+            added.append(f"{key}: route {', '.join(sorted(extra))}")
+        if a.speed_cap > b.speed_cap + eps:
+            added.append(f"{key}: speed cap {b.speed_cap:g} -> {a.speed_cap:g}")
+        if a.grip_cap > b.grip_cap + eps:
+            added.append(f"{key}: grip cap {b.grip_cap:g} -> {a.grip_cap:g}")
+    for key in after:
+        if key not in before:
+            added.append(f"{key}: new carry")
+    n_before = sum(p.count for p in before.values())
+    n_after = sum(p.count for p in after.values())
+    if added:
+        return False, "adds options: " + "; ".join(added[:3])
+    capped = sum(
+        1 for k, a in after.items() if k in before and (
+            a.speed_cap < before[k].speed_cap - eps or a.grip_cap < before[k].grip_cap - eps
+        )
+    )
+    detail = f"routes {n_before} -> {n_after}"
+    if capped:
+        detail += f", caps lowered on {capped} carr{'y' if capped == 1 else 'ies'}"
+    return True, detail + ", none added"
 
 
 def modifiers(held_tags: Sequence[str], rules: Sequence[Rule]) -> dict[str, list[str]]:

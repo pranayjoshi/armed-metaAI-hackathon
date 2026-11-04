@@ -26,10 +26,40 @@ def now() -> float:
     return time.monotonic()
 
 
-def load_config(path: str | Path | None = None) -> dict[str, Any]:
+def load_config(path: str | Path | None = None, profile: str | None = None) -> dict[str, Any]:
+    """configs/h2m.yaml (or ``path``), with ``configs/<profile>.yaml`` merged on top when
+    a profile is named (``h2m run --profile shoot``): mappings merge key by key, any
+    other value in the overlay replaces the base one."""
     target = Path(path) if path else ROOT / "configs" / "h2m.yaml"
     with target.open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle) or {}
+        cfg = yaml.safe_load(handle) or {}
+    if profile:
+        cfg = deep_merge(cfg, load_profile(profile))
+    return cfg
+
+
+def load_profile(profile: str) -> dict[str, Any]:
+    """The overlay ``configs/<profile>.yaml``; FileNotFoundError names the missing file."""
+    target = ROOT / "configs" / f"{profile}.yaml"
+    if not target.is_file():
+        raise FileNotFoundError(f"no profile {profile!r}: {target.relative_to(ROOT)} is missing")
+    with target.open("r", encoding="utf-8") as handle:
+        overlay = yaml.safe_load(handle) or {}
+    if not isinstance(overlay, dict):
+        raise ValueError(f"profile {profile!r} must be a mapping of config sections")
+    return overlay
+
+
+def deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """A new dict: ``overlay`` over ``base``, recursing into mappings present in both;
+    lists and scalars in the overlay replace the base value. Neither input is changed."""
+    out = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
 
 
 def load_env(path: Path | None = None) -> None:

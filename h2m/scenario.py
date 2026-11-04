@@ -1,4 +1,4 @@
-"""Scripted software demo on the virtual arm (REFLEX_BUILD_PLAN item 0). SIMULATION.
+"""Scripted software demo on the virtual arm. SIMULATION.
 
 Runs the real runtime (h2m.app.H2M: grammar, gate, rules, routing, learner, incident
 capture) with the virtual arm, the SyntheticSource EMG and a canned explanation, and
@@ -37,11 +37,14 @@ import numpy as np
 
 from h2m.core import Event, now
 from h2m.learning import MIN_APPROVE_REACTION_S
+from h2m.proactive import Proposer
 from h2m.replay import CANNED_EXPLANATION, CANNED_NOTE
 from h2m.robot import ArmState
 from h2m.rules import RuleStore
 from h2m.sensors.emg import Profile
+from h2m.sim_view import SIZE as VIEW_SIZE
 from h2m.sim_view import TableView, jpeg
+from h2m.speech_out import SpeechOut
 from h2m.world import GripperTracker
 
 SIM_NOTE = (
@@ -61,6 +64,9 @@ STEPS: tuple[tuple[str, str], ...] = (
     ("rerun_request", "Same request again"),
     ("rerun_confirm", "Scripted confirmation"),
     ("rerun_carry", "The carry takes the long way round the laptop"),
+    ("routine_card", "Routine due: the Water? card comes from the clock, nobody asked"),
+    ("veto_ring", "Pre-approved routine: announced, a veto ring runs out, it runs"),
+    ("veto_brace", "The same routine again; a brace inside the ring cancels it quietly"),
 )
 STEP_NAMES = tuple(name for name, _ in STEPS)
 EXPECTED_STOPS = ("brace (EMG)", "open hand (EMG)")  # the scripted brace's stops
@@ -68,9 +74,22 @@ CARRYING = frozenset({"carry", "release"})  # plan stages with the object in the
 WATCHED = frozenset({
     "intent", "arm.started", "arm.completed", "arm.stopped", "arm.fault", "emg.brace",
     "emg.open_hand", "incident.triggered", "incident.saved", "incident.explained",
-    "incident.error", "rule.approved", "rule.rejected", "rule.expired", "rule.error",
+    "incident.error", "incident.tool", "incident.investigated", "rule.approved",
+    "rule.rejected", "rule.expired", "rule.error",
     "intent.blocked", "intent.cancelled", "intent.expired",
+    "selection.shown", "selection.accept", "selection.dismiss", "selection.auto_started",
+    "selection.auto_cancelled", "task.completed", "task.abandoned", "routine.proposed",
+    "routine.announced", "routine.auto_run", "routine.refused", "routine.done",
 })
+# The demo's routines (docs/PROACTIVE.md §5), written to the run's work dir: never the
+# person's configs/routines.yaml. `desk_check` is `announce` so the veto ring shows; the
+# wave stands in for a look around the desk (every pose is a taught placeholder).
+DEMO_ROUTINES = """\
+routines:
+  water: {action: pick_place, object: cup, every: 60m, mode: ask, window: 5m, label: "Water?"}
+  desk_check: {action: wave, every: 30m, mode: announce, window: 2m, label: "Check the desk?",
+               say: "Checking the desk."}
+"""
 
 
 class ScenarioAborted(RuntimeError):
@@ -95,6 +114,7 @@ class ScenarioSettings:
     brace_hold_s: float = 0.6
     step_timeout_s: float = 30.0
     loop_pause_s: float = 8.0
+    veto_window_s: float = 5.0  # the announce rung's ring in the demo (floor 3 s in code)
 
     def __post_init__(self) -> None:
         # The script answers like a person: never inside the reaction-time gate.
@@ -107,17 +127,55 @@ class ScenarioSettings:
         return cls(**{k: v for k, v in raw.items() if k in known})
 
 
+# The canned investigator's first proposal: the model generalised to the wrong tag (the
+# phone's `rigid`), so the checker's replay fails (the cup, liquid and fragile, would still
+# cross the laptop) and the proposal is rejected. The film's "here is a rejected one".
+CANNED_WRONG_PROPOSAL: dict[str, Any] = {
+    **CANNED_EXPLANATION,
+    "held_property": "rigid",
+    "rule": {"when_holding": ["rigid"], "avoid": "laptop", "response": "route_around"},
+}
+
+
 class CannedMuse:
-    """Stand-in for the Muse Wonder client: fixed text, no network, labelled canned."""
+    """Stand-in for the Muse Wonder client: fixed text, no network, labelled canned.
+
+    ``respond`` plays a fixed script through the real tool loop (track the cup and the
+    laptop, measure, read the arm, propose a wrong rule that the checker rejects, then the
+    canned one). ``segment`` returns no box (no SAM without a key), so track() reports the
+    objects unseen and measure() says so; the script proposes anyway."""
 
     explanation_source = "canned"
+    SCRIPT: tuple[tuple[tuple[str, dict[str, Any]], ...], ...] = (
+        (("track", {"phrase": "cup"}), ("track", {"phrase": "laptop"})),
+        (("measure", {"a": "cup", "b": "laptop", "t": 0.0}), ("arm_trace", {})),
+        (("propose_rule", CANNED_WRONG_PROPOSAL),),
+        (("propose_rule", CANNED_EXPLANATION),),
+    )
 
     def __init__(self) -> None:
         self.calls = 0
+        self.turns = 0
 
     def chat(self, model: str, messages: list[dict[str, Any]]) -> str:
         self.calls += 1
         return json.dumps(CANNED_EXPLANATION)
+
+    def segment(self, model: str, image: Any, label: Any) -> None:
+        return None
+
+    def respond(self, body: dict[str, Any]) -> dict[str, Any]:
+        self.calls += 1
+        turn = self.turns
+        self.turns += 1
+        if turn >= len(self.SCRIPT):
+            return {"output": [{"type": "message", "role": "assistant", "content": [
+                {"type": "output_text", "text": "Canned script finished."}]}]}
+        return {"output": [
+            {"type": "function_call", "call_id": f"canned-{turn}-{i}", "name": name,
+             "arguments": json.dumps(args)}
+            for i, (name, args) in enumerate(self.SCRIPT[turn])
+        ]}
 
 
 def scenario_config(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -174,6 +232,12 @@ class Scenario:
         self.proposal: dict[str, Any] | None = None
         self.rule: dict[str, Any] | None = None
         self.brace: dict[str, Any] | None = None
+        self.routine_card: dict[str, Any] | None = None  # the card the clock produced
+        self._scan: dict[str, Any] | None = None  # the simulated scene scan (scene_fields)
+        self._scan_step: str | None = None
+        self._scan_t = 0.0
+        self.veto: dict[str, Any] | None = None  # the ring that ran out
+        self.vetoed: dict[str, Any] | None = None  # the ring a brace cancelled
         self._t0 = now()
         self._abort: str | None = None
         self._frame: bytes | None = None
@@ -228,6 +292,7 @@ class Scenario:
             self.events, self.runs = [], []
             self.error = self.incident_id = None
             self.explanation = self.proposal = self.rule = self.brace = None
+            self.routine_card = self.veto = self.vetoed = self._scan = None
             self._abort = None
             self._t0 = now()
         try:
@@ -468,6 +533,159 @@ class Scenario:
             "" if h.arm.state is ArmState.READY else f" (arm {h.arm.state})"
         )
 
+    # ── proactive beats (docs/PROACTIVE.md, h2m/proactive.py) ────────────────
+    def _enable_proactive(self) -> Proposer:
+        """Cards on (headless: no UI ack), a silent voice so a motion card's question can
+        "play", and a Proposer on the demo routines. SIMULATION: the person's answers
+        below are scripted UI accepts, the same path as a click or a twitch."""
+        h = self.h2m
+        sel = {**(h.cfg.get("selection") or {}), "enabled": True, "require_ack": False,
+               "muse": False}
+        h._build_selection({**h.cfg, "selection": sel})
+        h.embodied.speech = SpeechOut(spawn=_silent_say)
+        run_dir = self.workdir / f"run-{self.run_count}"
+        routines = run_dir / "routines.yaml"
+        routines.parent.mkdir(parents=True, exist_ok=True)
+        routines.write_text(DEMO_ROUTINES)
+        cfg = {
+            **h.cfg,
+            "proactive": {"enabled": True, "propose_min_gap_s": 0,
+                          "veto_window_s": self.settings.veto_window_s},
+            # REVIEWED RELAXATION, on for the demo only: the virtual arm, a wave away from
+            # the body. The gate, the brace freeze and the confirmation path are unchanged.
+            "trust": {"announce_enabled": True, "actions": {}},
+        }
+        h.proactive = Proposer(h, cfg, routines_path=routines, state_dir=run_dir / "proactive")
+        return h.proactive
+
+    def _card_up(self, card_id: str, routine: str) -> bool:
+        menu = self.h2m.selection.menu
+        card = menu.highlighted if menu is not None else None
+        return card is not None and card.id == card_id and card.routine == routine
+
+    def _step_routine_card(self) -> str:
+        h = self.h2m
+        p = h.proactive or self._enable_proactive()
+        self._pause()
+        p.book.force_due("water")  # the clock, compressed: an hour has passed
+        self._wait(lambda: self._card_up("pick_place:cup", "water"), "the Water? card from the routine")
+        menu = h.selection.menu
+        card = menu.highlighted
+        with self._lock:
+            self.routine_card = {
+                "card": card.id, "label": card.label, "routine": card.routine, "rung": card.rung,
+                "evidence": [dict(e) for e in card.evidence], "lit": p._lit(),
+                "source": menu.source,
+            }
+        before = self._count("arm.completed")
+        # The scripted person: one accept selects the card (the arm asks), a second one
+        # after the question confirms it. Both pass the reaction gate like a twitch would.
+        self._sleep(h.selection.reaction_s + 0.3)
+        ok, why = h.selection_accept(card.id, menu.id)
+        if not ok:
+            raise ScenarioFailed(f"selecting the routine card refused: {why}")
+        self._wait(lambda: menu.confirming is not None and menu.announce_t < float("inf"),
+                   "the card's question")
+        self._sleep(h.selection.reaction_s + 0.3)
+        ok, why = h.selection_accept(card.id, menu.id)
+        if not ok:
+            raise ScenarioFailed(f"confirming the routine card refused: {why}")
+        self._wait(lambda: h.arm.state is ArmState.MOVING or self._count("arm.completed") > before,
+                   "the arm to start")
+        started = self._last("arm.started") or {}
+        self._run = None  # the two scripted carries in `runs` stay as they are
+        self._wait(lambda: self._count("arm.completed") > before, "the carry to finish")
+        with self._lock:
+            self.routine_card["route"] = started.get("route")
+            self.routine_card["outcome"] = "completed"
+        return (f"Water? came from the routine (every 60 min), rows lit: "
+                f"{', '.join(self.routine_card['lit'])}; confirmed by the scripted person; "
+                f"carried via {started.get('route')}")
+
+    def _step_veto_ring(self) -> str:
+        h = self.h2m
+        self._wait(lambda: h.arm.state is ArmState.READY, "the arm to settle")
+        self._pause()
+        rings = self._count("selection.auto_started")
+        self._wait(self._ring_forced(rings), "the veto ring")
+        ring = self._last("selection.auto_started") or {}
+        said = (self._last("routine.announced") or {}).get("say")
+        with self._lock:
+            self.veto = {"card": ring.get("card"), "label": ring.get("label"),
+                         "total_s": ring.get("total_s"), "say": said, "outcome": None}
+        starts = self._count("arm.started")
+        # Nobody touches anything: the ring runs out and the card goes through the gate.
+        self._wait(lambda: self._count("arm.started") > starts, "the ring to run out",
+                   timeout=float(ring.get("total_s") or 5) + self.settings.step_timeout_s)
+        started = self._last("arm.started") or {}
+        if started.get("confirmed_by") != "veto_window":
+            raise ScenarioFailed(f"the routine ran but not from the veto window: {started}")
+        done = self._count("arm.completed")
+        self._wait(lambda: self._count("arm.completed") >= done + (0 if self._seen_after("arm.completed", started) else 1),
+                   "the routine to finish")
+        with self._lock:
+            self.veto["outcome"] = "ran"
+        return f"'{said}' · {ring.get('total_s')} s ring, untouched · {started.get('skill_name')} ran, confirmed by the veto window"
+
+    def _step_veto_brace(self) -> str:
+        h, s = self.h2m, self.settings
+        self._wait(lambda: h.arm.state is ArmState.READY, "the arm to settle")
+        self._pause()
+        rings = self._count("selection.auto_started")
+        incidents = self._count("incident.triggered")
+        self._wait(self._ring_forced(rings), "the second veto ring")
+        self._sleep(0.8)  # the person sees the ring, then braces
+        source = h.emg.source
+        source.set_drive(s.brace_drive, s.brace_drive)
+        t0 = now()
+        try:
+            self._wait(lambda: self._seen_count("selection.auto_cancelled") > 0 and h.selection.menu is None,
+                       "the brace to cancel the ring", timeout=5.0)
+        finally:
+            rest = s.brace_hold_s - (now() - t0)
+            if rest > 0:
+                time.sleep(rest)
+            source.set_drive(0.0, 0.0)
+        if h.arm.state is not ArmState.READY:
+            raise ScenarioFailed(f"a veto must not stop an idle arm: {h.arm.state} ({h.arm.reason})")
+        if self._count("incident.triggered") != incidents:
+            raise ScenarioFailed("a veto inside the ring must not open an incident")
+        ended = self._last("task.abandoned") or {}
+        refused = self._last("routine.refused") or {}
+        with self._lock:
+            self.vetoed = {"card": refused.get("card"), "outcome": ended.get("outcome"),
+                           "dont_propose": refused.get("dont_propose"), "incident": False}
+        return f"brace in the ring: {ended.get('outcome')}, no incident; {refused.get('dont_propose')}"
+
+    def _ring_forced(self, rings: int) -> Callable[[], bool]:
+        """Condition for a new veto ring: make ``desk_check`` due and keep making it due until
+        the ring shows. The previous routine's completion handler can reschedule the book
+        after the first force, so one call is not enough; re-forcing is what a person
+        pressing "run now" twice would do."""
+        book = self.h2m.proactive.book
+        last = [float("-inf")]
+
+        def cond() -> bool:
+            if self._count("selection.auto_started") > rings:
+                return True
+            t = now()
+            if t - last[0] >= 0.5:
+                last[0] = t
+                book.force_due("desk_check")
+            return False
+
+        return cond
+
+    def _seen_count(self, kind: str) -> int:
+        return self._count(kind)
+
+    def _seen_after(self, kind: str, started: dict[str, Any]) -> bool:
+        with self._lock:
+            for e in reversed(self.events):
+                if e["kind"] == kind and e["data"].get("contract_id") == started.get("contract_id"):
+                    return True
+        return False
+
     # ── helpers ──────────────────────────────────────────────────────────────
     def _t(self) -> float:
         return round(now() - self._t0, 3)
@@ -602,6 +820,9 @@ class Scenario:
                 "t": self._t(),
                 "incident_id": self.incident_id,
                 "brace": self.brace,
+                "routine_card": self.routine_card,
+                "veto": self.veto,
+                "vetoed": self.vetoed,
                 "explanation": self.explanation,
                 "proposal": self.proposal,
                 "rule": self.rule,
@@ -622,6 +843,43 @@ class Scenario:
             out["frame_url"] = "/api/replay/scenario/frame.jpg"
         return out
 
+    def scene_fields(self) -> dict[str, Any] | None:
+        """The Context view's ``scene`` for the simulation: boxes drawn from the virtual
+        table's own object and zone positions, re-taken when a step changes (the real scan
+        cadence is on change, on events, else every 10 s). SIMULATION: no SAM call is made,
+        so no scan latency and no call chip is published, and ``simulated`` says so."""
+        h, view = self.h2m, self.view
+        if h is None or view is None:
+            return None
+        with self._lock:
+            step = next((s.name for s in self.steps if s.status == "active"), self.state)
+            fresh = self._scan is None or self._scan_step != step
+        if fresh:
+            w, hgt = VIEW_SIZE
+            masks = []
+
+            def box(x0: float, y0: float, x1: float, y1: float) -> list[float]:
+                (a, b), (c, d) = view.px((x0, y0)), view.px((x1, y1))
+                return [round(a / w, 4), round(b / hgt, 4), round(c / w, 4), round(d / hgt, 4)]
+
+            for obj in h.visible_objects():
+                xy = obj.get("table_xy")
+                if xy is not None:
+                    masks.append({"phrase": str(obj.get("name") or obj.get("id")),
+                                  "bbox": box(xy[0] - 0.055, xy[1] - 0.055, xy[0] + 0.055, xy[1] + 0.055)})
+            zone = h.routes.zones.get("laptop") if h.routes else None
+            if zone:
+                masks.append({"phrase": "laptop", "bbox": box(*zone)})
+            with self._lock:
+                self._scan = {"masks": masks, "scan_age_s": 0.0, "scan_ms": None, "stale": False,
+                              "simulated": True,
+                              "frame_url": f"/api/camera/scene.jpg?scan={self.run_count}-{step}"}
+                self._scan_step, self._scan_t = step, now()
+        with self._lock:
+            out = dict(self._scan or {})
+            out["scan_age_s"] = round(now() - self._scan_t, 1)
+        return out
+
     def timeline(self) -> dict[str, Any]:
         with self._lock:
             return {
@@ -630,6 +888,24 @@ class Scenario:
                 "steps": [asdict(s) for s in self.steps],
                 "events": list(self.events),
             }
+
+
+class _SilentProc:
+    """A `say` that plays for a moment without a voice (SIMULATION: voice_out is off)."""
+
+    def __init__(self, duration: float = 0.3) -> None:
+        self.ends = time.monotonic() + duration
+        self.killed = False
+
+    def poll(self) -> int | None:
+        return 1 if self.killed or time.monotonic() >= self.ends else None
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+def _silent_say(argv: list[str]) -> _SilentProc:
+    return _SilentProc()
 
 
 def make_sample(

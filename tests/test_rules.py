@@ -130,3 +130,43 @@ def test_wrong_typed_fields_are_rules_unavailable(tmp_path, bad):
         store.list()
     with pytest.raises(ValueError):
         Rule(**bad)
+
+# imports added with the tests below
+from h2m.rules import Permitted, is_restrictive, permitted_options  # noqa: E402
+
+
+# added alongside today's changes
+def test_permitted_options_shrinks_under_rules_and_fails_closed():
+    none = permitted_options(["liquid"], ROUTES, ZONES, [])
+    assert none == Permitted(frozenset(ROUTES), 1.0, 1.0)
+    around = permitted_options(["liquid"], ROUTES, ZONES, [rule()])
+    assert around.routes == frozenset({"via_left", "via_high"})  # direct crosses the laptop
+    high = permitted_options(["liquid"], ROUTES, ZONES, [rule(response="lift_higher")], ["via_high"])
+    assert high.routes == frozenset({"via_high"})
+    slow = permitted_options(["liquid"], ROUTES, ZONES, [rule(response="slow_down")], (), 0.5, 0.6)
+    assert slow == Permitted(frozenset(ROUTES), 0.5, 1.0)
+    gentle = permitted_options(["liquid"], ROUTES, ZONES, [rule(response="grip_gentler")], (), 0.5, 0.6)
+    assert gentle.grip_cap == 0.6 and gentle.routes == frozenset(ROUTES)
+    # a rule that does not match the held object changes nothing
+    assert permitted_options(["block"], ROUTES, ZONES, [rule()]) == none
+    # a matching rule with an unknown zone leaves no route (fail closed), like choose_route
+    ghost = Rule(["liquid"], "ghost", "route_around", approved=True)
+    assert permitted_options(["liquid"], ROUTES, ZONES, [ghost]).routes == frozenset()
+
+def test_is_restrictive_accepts_shrinks_and_rejects_any_growth():
+    before = {("cup", "slot_1"): Permitted(frozenset(ROUTES), 1.0, 1.0),
+              ("block", "slot_1"): Permitted(frozenset(ROUTES), 1.0, 1.0)}
+    after = {("cup", "slot_1"): Permitted(frozenset({"via_left"}), 0.5, 1.0),
+             ("block", "slot_1"): Permitted(frozenset(ROUTES), 1.0, 1.0)}
+    ok, detail = is_restrictive(before, after)
+    assert ok and "routes 6 -> 4" in detail and "none added" in detail
+    assert is_restrictive(before, before)[0]  # equal is fine
+    assert is_restrictive(before, {})[0]  # everything removed is a shrink
+    grown = {**after, ("cup", "slot_1"): Permitted(frozenset(ROUTES) | {"teleport"}, 0.5, 1.0)}
+    ok, detail = is_restrictive(before, grown)
+    assert not ok and "teleport" in detail
+    raised = {**after, ("cup", "slot_1"): Permitted(frozenset({"via_left"}), 1.0, 1.0)}
+    assert is_restrictive({**before, ("cup", "slot_1"): Permitted(frozenset(ROUTES), 0.5, 1.0)},
+                          raised)[0] is False
+    new_carry = {**after, ("tea", "slot_1"): Permitted(frozenset(ROUTES), 1.0, 1.0)}
+    assert is_restrictive(before, new_carry)[0] is False

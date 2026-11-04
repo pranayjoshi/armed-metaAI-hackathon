@@ -1,0 +1,458 @@
+poses:
+  home:
+    taught: true
+    joints:
+      shoulder_pan: -14.68
+      shoulder_lift: -66.2
+      elbow_flex: 22.77
+      wrist_flex: 77.05
+      wrist_roll: -18.59
+      gripper: 17.48
+  tray_above:
+    taught: false
+    joints:
+      shoulder_pan: -77.98
+      shoulder_lift: -17.23
+      elbow_flex: -2.11
+      wrist_flex: 87.78
+      wrist_roll: -13.41
+      gripper: 26.18
+  tray_release:
+    taught: false
+    joints:
+      shoulder_pan: -78.42
+      shoulder_lift: 11.6
+      elbow_flex: -2.11
+      wrist_flex: 87.6
+      wrist_roll: -13.49
+      gripper: 26.18
+  bin_above:
+    taught: false
+    joints:
+      shoulder_pan: -77.98
+      shoulder_lift: -17.23
+      elbow_flex: -2.11
+      wrist_flex: 87.78
+      wrist_roll: -13.41
+      gripper: 26.18
+  bin_release:
+    taught: false
+    joints:
+      shoulder_pan: -78.42
+      shoulder_lift: 11.6
+      elbow_flex: -2.11
+      wrist_flex: 87.6
+      wrist_roll: -13.49
+      gripper: 26.18
+  jar_hold:
+    taught: false
+    joints:
+      shoulder_pan: 88.18
+      shoulder_lift: -39.65
+      elbow_flex: 9.58
+      wrist_flex: 39.08
+      wrist_roll: -96.75
+      gripper: 29.17
+  jar_hold_low:
+    taught: false
+    joints:
+      shoulder_pan: 88.7
+      shoulder_lift: -60.57
+      elbow_flex: 65.41
+      wrist_flex: 19.21
+      wrist_roll: 72.31
+      gripper: 46.31
+  jar_hold_high:
+    taught: false
+    joints:
+      shoulder_pan: 85.63
+      shoulder_lift: -59.69
+      elbow_flex: 16.88
+      wrist_flex: 44.62
+      wrist_roll: 72.31
+      gripper: 46.31
+  handover_above:
+    taught: false
+    joints:
+      shoulder_pan: 85.63
+      shoulder_lift: -59.69
+      elbow_flex: 16.88
+      wrist_flex: 44.62
+      wrist_roll: 72.31
+      gripper: 39.14
+  handover_release:
+    taught: false
+    joints:
+      shoulder_pan: 88.7
+      shoulder_lift: -60.57
+      elbow_flex: 65.41
+      wrist_flex: 19.21
+      wrist_roll: 72.31
+      gripper: 46.31
+  via_left:
+    taught: false
+    joints:
+      shoulder_pan: 18.73
+      shoulder_lift: -79.3
+      elbow_flex: 47.47
+      wrist_flex: 53.76
+      wrist_roll: 72.31
+      gripper: 46.31
+  via_high:
+    taught: false
+    joints:
+      shoulder_pan: 63.65
+      shoulder_lift: -54.24
+      elbow_flex: 25.14
+      wrist_flex: 26.77
+      wrist_roll: 72.31
+      gripper: 46.38
+  wave_up:
+    taught: false
+    joints:
+      shoulder_pan: 20.31
+      shoulder_lift: -59.52
+      elbow_flex: 18.64
+      wrist_flex: 26.95
+      wrist_roll: -14.99
+      gripper: 39.2
+  wave_left:
+    taught: false
+    joints:
+      shoulder_pan: 20.4
+      shoulder_lift: -59.34
+      elbow_flex: 18.55
+      wrist_flex: 26.86
+      wrist_roll: 34.95
+      gripper: 39.27
+  wave_right:
+    taught: false
+    joints:
+      shoulder_pan: 20.04
+      shoulder_lift: -59.25
+      elbow_flex: 18.64
+      wrist_flex: 26.95
+      wrist_roll: -44.97
+      gripper: 39.53
+  bow_down:
+    taught: false
+    joints:
+      shoulder_pan: -6.95
+      shoulder_lift: -77.23
+      elbow_flex: 23.65
+      wrist_flex: 65.04
+      wrist_roll: -13.14
+      gripper: 6.98
+  celebrate_up:
+    taught: false
+    joints:
+      shoulder_pan: -6.95
+      shoulder_lift: -22.23
+      elbow_flex: 23.65
+      wrist_flex: 70.04
+      wrist_roll: -13.14
+      gripper: 6.98
+  celebrate_left:
+    taught: false
+    joints:
+      shoulder_pan: -6.95
+      shoulder_lift: -22.23
+      elbow_flex: 23.65
+      wrist_flex: 70.04
+      wrist_roll: -33.14
+      gripper: 6.98
+  celebrate_right:
+    taught: false
+    joints:
+      shoulder_pan: -6.95
+      shoulder_lift: -22.23
+      elbow_flex: 23.65
+      wrist_flex: 70.04
+      wrist_roll: 6.86
+      gripper: 6.98
+  sorry_back:
+    taught: false
+    joints:
+      shoulder_pan: 10.73
+      shoulder_lift: -85.27
+      elbow_flex: 41.41
+      wrist_flex: 76.09
+      wrist_roll: 72.31
+      gripper: 46.25
+  sorry_low:
+    taught: false
+    joints:
+      shoulder_pan: 10.37
+      shoulder_lift: -86.07
+      elbow_flex: 55.82
+      wrist_flex: 76.09
+      wrist_roll: 72.31
+      gripper: 46.25
+  hold_up:
+    taught: false
+    joints:
+      shoulder_pan: 106.02
+      shoulder_lift: -60.31
+      elbow_flex: 15.03
+      wrist_flex: 37.93
+      wrist_roll: -86.46
+      gripper: 53.36
+  face_above:
+    taught: false
+    joints:
+      shoulder_pan: -6.95
+      shoulder_lift: -42.23
+      elbow_flex: -1.35
+      wrist_flex: 60.04
+      wrist_roll: -13.14
+      gripper: 6.98
+  face_near:
+    taught: false
+    joints:
+      shoulder_pan: -6.95
+      shoulder_lift: -32.23
+      elbow_flex: -11.35
+      wrist_flex: 55.04
+      wrist_roll: -13.14
+      gripper: 6.98
+  press_above:
+    taught: false
+    joints:
+      shoulder_pan: 23.05
+      shoulder_lift: -47.23
+      elbow_flex: 23.65
+      wrist_flex: 80.04
+      wrist_roll: -13.14
+      gripper: 6.98
+  press_down:
+    taught: false
+    joints:
+      shoulder_pan: 23.05
+      shoulder_lift: -39.23
+      elbow_flex: 23.65
+      wrist_flex: 80.04
+      wrist_roll: -13.14
+      gripper: 6.98
+routes:
+  direct: []
+  via_left:
+  - via_left
+  via_high:
+  - via_high
+slots:
+  cup_slot:
+    table_xy:
+    - 0.25
+    - 0.55
+    above:
+      taught: true
+      joints:
+        shoulder_pan: -19.43
+        shoulder_lift: -49.32
+        elbow_flex: 20.66
+        wrist_flex: 50.68
+        wrist_roll: 76.7
+        gripper: 46.31
+    grasp:
+      taught: true
+      joints:
+        shoulder_pan: -19.43
+        shoulder_lift: -56.09
+        elbow_flex: 78.95
+        wrist_flex: -0.48
+        wrist_roll: 76.97
+        gripper: 46.58
+    point:
+      taught: true
+      joints:
+        shoulder_pan: -19.52
+        shoulder_lift: -56.18
+        elbow_flex: 82.64
+        wrist_flex: -0.48
+        wrist_roll: 76.53
+        gripper: 35.35
+  pill_slot:
+    table_xy:
+    - 0.5
+    - 0.55
+    above:
+      taught: true
+      joints:
+        shoulder_pan: -15.21
+        shoulder_lift: -24.26
+        elbow_flex: -6.68
+        wrist_flex: 55.16
+        wrist_roll: -25.98
+        gripper: 20.86
+    grasp:
+      taught: true
+      joints:
+        shoulder_pan: -15.38
+        shoulder_lift: -5.8
+        elbow_flex: 17.49
+        wrist_flex: 67.38
+        wrist_roll: -26.07
+        gripper: 20.86
+    point:
+      taught: true
+      joints:
+        shoulder_pan: -14.86
+        shoulder_lift: -5.63
+        elbow_flex: 17.49
+        wrist_flex: 67.47
+        wrist_roll: -26.07
+        gripper: 8.64
+  marker_slot:
+    table_xy:
+    - 0.75
+    - 0.55
+    above:
+      taught: true
+      joints:
+        shoulder_pan: -31.47
+        shoulder_lift: -71.12
+        elbow_flex: 29.19
+        wrist_flex: 79.25
+        wrist_roll: -26.42
+        gripper: 22.92
+    grasp:
+      taught: true
+      joints:
+        shoulder_pan: -27.96
+        shoulder_lift: -45.71
+        elbow_flex: 70.68
+        wrist_flex: 70.73
+        wrist_roll: -26.42
+        gripper: 22.99
+    point:
+      taught: true
+      joints:
+        shoulder_pan: -27.78
+        shoulder_lift: -45.71
+        elbow_flex: 70.77
+        wrist_flex: 70.64
+        wrist_roll: -26.07
+        gripper: 16.21
+gestures:
+  nod:
+  - name: nod_down
+    taught: false
+    joints:
+      shoulder_pan: -9.05
+      shoulder_lift: -57.67
+      elbow_flex: 21.36
+      wrist_flex: 98.0
+      wrist_roll: -17.71
+      gripper: 4.58
+  - name: nod_up
+    taught: false
+    joints:
+      shoulder_pan: -9.05
+      shoulder_lift: -57.67
+      elbow_flex: 21.36
+      wrist_flex: 80.5
+      wrist_roll: -17.71
+      gripper: 4.58
+  - name: nod_home
+    taught: false
+    joints:
+      shoulder_pan: -9.05
+      shoulder_lift: -57.67
+      elbow_flex: 21.36
+      wrist_flex: 92.35
+      wrist_roll: -17.71
+      gripper: 4.58
+  tilt:
+  - name: tilt_left
+    taught: false
+    joints:
+      shoulder_pan: 0
+      shoulder_lift: -90
+      elbow_flex: 90
+      wrist_flex: 60
+      wrist_roll: 12
+      gripper: 5
+  - name: tilt_home
+    taught: false
+    joints:
+      shoulder_pan: 0
+      shoulder_lift: -90
+      elbow_flex: 90
+      wrist_flex: 60
+      wrist_roll: 0
+      gripper: 5
+  shake:
+  - name: shake_left
+    taught: false
+    joints:
+      shoulder_pan: 12
+      shoulder_lift: -90
+      elbow_flex: 90
+      wrist_flex: 60
+      wrist_roll: 0
+      gripper: 5
+  - name: shake_right
+    taught: false
+    joints:
+      shoulder_pan: -12
+      shoulder_lift: -90
+      elbow_flex: 90
+      wrist_flex: 60
+      wrist_roll: 0
+      gripper: 5
+  - name: shake_home
+    taught: false
+    joints:
+      shoulder_pan: 0
+      shoulder_lift: -90
+      elbow_flex: 90
+      wrist_flex: 60
+      wrist_roll: 0
+      gripper: 5
+  look_at_user:
+  - name: look_user
+    taught: false
+    joints:
+      shoulder_pan: 4.95
+      shoulder_lift: -57.67
+      elbow_flex: 21.36
+      wrist_flex: 84.35
+      wrist_roll: -17.71
+      gripper: 4.58
+  - name: look_user_home
+    taught: false
+    joints:
+      shoulder_pan: -9.05
+      shoulder_lift: -57.67
+      elbow_flex: 21.36
+      wrist_flex: 92.35
+      wrist_roll: -17.71
+      gripper: 4.58
+  thinking:
+  - name: think_a
+    taught: false
+    joints:
+      shoulder_pan: 8
+      shoulder_lift: -84
+      elbow_flex: 90
+      wrist_flex: 66
+      wrist_roll: 8
+      gripper: 5
+  - name: think_b
+    taught: false
+    joints:
+      shoulder_pan: -8
+      shoulder_lift: -84
+      elbow_flex: 90
+      wrist_flex: 66
+      wrist_roll: -8
+      gripper: 5
+  - name: think_home
+    taught: false
+    joints:
+      shoulder_pan: 0
+      shoulder_lift: -90
+      elbow_flex: 90
+      wrist_flex: 60
+      wrist_roll: 0
+      gripper: 5

@@ -39,7 +39,7 @@ def heard(h, text, *, echo=False, asr_ms=250, audio_s=0.4):
 
 # ── H1: echo ─────────────────────────────────────────────────────────────────
 def test_robot_voice_heard_back_never_confirms(h2m):
-    """Port of the review repro: the TTS line comes back through the mic."""
+    """Review repro: the TTS line comes back through the mic."""
     p = ask_cup(h2m, said=SAID)
     assert h2m.spoken == [SAID]
     p.announced_at = now() - LATE  # even past the reaction gate
@@ -81,7 +81,7 @@ def test_echo_text_match_needs_a_real_run_of_words():
 
 # ── H1: reaction-time gate on voice and typed confirms ───────────────────────
 def test_voice_confirm_that_began_before_the_question_is_rejected(h2m):
-    """Port of the review repro: "okay" whose audio began before the request existed."""
+    """Review repro: "okay" whose audio began before the request existed."""
     p = ask_cup(h2m)
     heard(h2m, "okay", asr_ms=300, audio_s=1.7)
     assert not started(h2m) and h2m.pending is p
@@ -176,7 +176,7 @@ def _person_frames(audio):
 
 
 def speak_over_robot(on_utterance, person_word, robot_until, person_from, person_to, total=4.0):
-    """Port of the re-review repro, through the real VAD + echo tagging + utterance
+    """Re-review repro, through the real VAD + echo tagging + utterance
     callback on the shipped speech config. The fake ASR hears ``person_word`` in any
     utterance holding the person's audio (after the robot's own words)."""
     from h2m.core import load_config
@@ -256,7 +256,7 @@ def test_a_failing_speaking_check_counts_as_speaking():
 
 # ── M7: request epoch ────────────────────────────────────────────────────────
 def test_never_mind_while_muse_answers_drops_the_reply(h2m):
-    """Port of the review repro."""
+    """Review repro."""
     prove_empty(h2m)
     h2m.llm = FakeLLM(
         ToolReply([("gesture", {"name": "nod"})]),
@@ -268,7 +268,7 @@ def test_never_mind_while_muse_answers_drops_the_reply(h2m):
 
 
 def test_stop_reset_and_rearm_while_muse_answers_drops_the_old_reply(h2m):
-    """Port of the review repro: re-arming must not resurrect a pre-stop request."""
+    """Review repro: re-arming must not resurrect a pre-stop request."""
     prove_empty(h2m)
 
     def stop_and_rearm():
@@ -309,3 +309,5 @@ def test_cancel_after_the_confirm_pop_drops_the_plan(h2m):
     ok, why = h2m.confirm(by="ui")
     assert not ok and "cancelled" in why
     assert not started(h2m) and h2m.arm.state is ArmState.READY
+
+# imports added with the tests below

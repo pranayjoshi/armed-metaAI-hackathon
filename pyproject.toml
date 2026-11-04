@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "h2m"
 version = "0.1.0"
-description = "Human2Machine: speech, pointing and EMG compiled into safety-gated robot step contracts"
+description = "Armed: a third arm that autocompletes you. Context, voice and one forearm muscle become safety-gated robot step contracts"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -20,12 +20,8 @@ dependencies = [
 
 [project.optional-dependencies]
 emg = ["brainflow>=5.13"]
-speech = [
-  "sounddevice>=0.5",
-  "parakeet-mlx>=0.5; sys_platform == 'darwin'",
-  "mlx-whisper>=0.4; sys_platform == 'darwin'",
-]
-vision = ["ultralytics>=8.4.0", "mediapipe>=0.10.30"]
+speech = ["sounddevice>=0.5", "websockets>=13"]
+vision = []  # SAM 3.1 is a Meta Model API call: httpx and opencv in the core deps cover it
 arm = ["lerobot[feetech]>=0.4"]
 dev = ["pytest>=8.3", "ruff>=0.6"]
 

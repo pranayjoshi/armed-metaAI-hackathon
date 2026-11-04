@@ -26,7 +26,7 @@ def client(h, base=LOCAL):
 
 
 def test_cross_origin_page_cannot_move_the_arm(h2m):
-    """Port of the review repro: a foreign page posting body-less requests."""
+    """Reproduction of a review finding: a foreign page posting body-less requests."""
     c = client(h2m)
     evil = {"Origin": "https://evil.example", **GOOD}  # even holding the token
     h2m.stop("x")
@@ -87,3 +87,14 @@ def test_origin_rules():
     assert origin_problem("127.0.0.1:8080", "http://localhost:8080")  # not the same origin
     assert origin_problem("127.0.0.1:8080", "null")
     assert origin_problem("evil.example", None) and origin_problem(None, None)
+
+# imports added with the tests below
+
+
+
+def test_card_page_is_served_with_the_session_token(h2m):
+    from h2m.server import TOKEN_META
+
+    res = client(h2m).get("/card")
+    assert res.status_code == 200 and f'name="{TOKEN_META}" content="{TOKEN}"' in res.text
+    assert "/web/card/card.js" in res.text and res.headers["cache-control"] == "no-store"

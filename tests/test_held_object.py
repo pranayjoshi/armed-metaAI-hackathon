@@ -75,7 +75,7 @@ def lower_started(h):
 
 # ── H2: place_near_user ──────────────────────────────────────────────────────
 def test_hand_arriving_during_the_carry_means_no_release(h2m):
-    """Port of the review repro: a hand lands on the spot during the multi-second carry.
+    """Review repro: a hand lands on the spot during the multi-second carry.
     The arm stops above the spot and never lowers or opens."""
     grip_cmd = held_at_home(h2m)
     _sees_past_arm(h2m)
@@ -311,7 +311,7 @@ def _pick_to(h, stage, what="cup"):
 
 
 def test_fault_mid_carry_means_holding_and_the_next_pick_holds(h2m):
-    """Port of the re-review repro: a stall mid-carry kept the grip but forgot the
+    """Re-review repro: a stall mid-carry kept the grip but forgot the
     object, so the next pick was allowed and its first waypoint opened the gripper."""
     _pick_to(h2m, "carry")
     run(h2m, 0.3)
@@ -372,7 +372,7 @@ def test_load_rising_before_the_confirm_blocks_the_pick(h2m):
 
 # ── F5: a stop while closing on an object never keeps squeezing ──────────────
 def test_brace_mid_grasp_freezes_the_gripper_at_its_measured_opening(h2m):
-    """Port of the re-review repro: a brace during the grasp kept the closing goal."""
+    """Re-review repro: a brace during the grasp kept the closing goal."""
     prove_empty(h2m)
     h2m.on_utterance("pick up the block firmly", source="typed")
     assert h2m.confirm(by="ui")[0]
@@ -472,7 +472,7 @@ def test_hand_arriving_mid_lower_stops_and_keeps_the_grip(h2m):
 
 
 def test_direct_arm_disarm_and_arm_during_the_recheck_also_drops_stage_two(h2m):
-    """Port of the re-review repro: even a disarm that bypasses the app (no epoch bump)
+    """Re-review repro: even a disarm that bypasses the app (no epoch bump)
     cannot let stage 2 continue, because the arm was re-armed since stage 1."""
     _above_and_waiting(h2m)
     h2m.arm.disarm()

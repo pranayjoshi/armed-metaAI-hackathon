@@ -11,7 +11,7 @@ burst onset freezes a moving arm first; a confirm race won by another answer kee
 task's contract; a brace or open hand on an idle arm dismisses, once per reaction; a brace
 during motion still freezes first and latches; a twitch never confirms another request, a
 stale card or a rule; the scanning baseline; degradation to scanning; per-task counters;
-the tokened UI endpoints. The reviewer repros R1-R4 and R6 are ported as positive tests
+the tokened UI endpoints. The reviewer repros R1-R4 and R6 are kept as positive tests
 (``test_R*``)."""
 
 from __future__ import annotations
@@ -1257,3 +1257,5 @@ def test_an_accepted_motion_that_never_completes_ends_the_task_when_idle(h):
     h._selection_tick()
     [ab] = kinds(h, "task.abandoned")
     assert ab["outcome"] == "incomplete" and ab["card"] == "pick_place:cup"
+
+# imports added with the tests below

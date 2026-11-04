@@ -40,6 +40,15 @@ clears the UI acknowledgement: the reaction clock restarts from the next ``ack``
 that names a generation (``highlight``) counts only for that generation, so a late ack
 of an earlier rendering of the same card never acks the current one.
 
+Veto ring (docs/PROACTIVE.md §3, the announce / do rungs): the app may open a menu with
+one pre-approved routine card and ``start_veto`` it. The card then shows a draining ring
+(``veto_until``, snapshot ``auto``); if the window passes with no input at all,
+``veto_due`` hands back a ticket (``by="veto_window"``) that the app runs through the same
+gate as any card. Any input during the ring cancels it: a brace or open hand dismisses
+the card quietly (``selection.auto_cancelled``, no incident), a twitch or step makes the
+card an ordinary one. The ring is only ever started by the app for a card whose rung is
+announce or do; nothing here turns time into an approval for an ``ask`` card.
+
 Modes: ``intent`` (up to three ranked cards; a Muse upgrade may reorder them only before
 the person's first input on the menu, and never changes the highlighted card) and
 ``scanning`` (every option in the fixed scene order, the baseline). ``degrade`` switches
@@ -70,6 +79,9 @@ from h2m.world import APPROACH
 INTENT, SCANNING = "intent", "scanning"
 MODES = (INTENT, SCANNING)
 INPUTS = ("twitch", "double_twitch", "brace", "open_hand", "ui_accept", "ui_step", "ui_dismiss")
+VETO_WINDOW = "veto_window"  # Ticket.by when a pre-approved card's ring ran out
+AUTO_RUNGS = frozenset({"announce", "do"})  # the only rungs a ring may be started for
+MIN_VETO_S, MAX_VETO_S = 3.0, 30.0
 VETOES = frozenset({"brace", "open_hand"})  # one flinch often fires both: one refusal
 ONE_STEP = frozenset({"say"})  # kinds that never move the arm: no "confirm?" step
 SELECT, ACCEPT = "select", "accept"  # Ticket.step
@@ -102,6 +114,10 @@ class Menu:
     confirming: Candidate | None = None  # selected motion card asking "confirm?"
     announce_t: float = math.inf  # when its announcement finished playing (inf: not yet)
     select_t: float = math.inf  # when it was selected (lapses from here if never announced)
+    # veto ring (pre-approved routine): the window and the card it is for
+    veto_until: float | None = None
+    veto_total_s: float = 0.0
+    veto_card: str | None = None
 
     @property
     def highlighted(self) -> Candidate | None:
@@ -118,6 +134,7 @@ class Task:
     contract_id: str | None = None  # the contract it became (bound before the confirm)
     accepted_t: float | None = None
     motion_t: float | None = None  # first arm.started for that contract
+    auto: dict[str, Any] | None = None  # {card_id, total_s}: taken by a veto window
 
     @property
     def selections(self) -> int:
@@ -134,6 +151,7 @@ class Task:
             "contract_id": self.contract_id,
             "elapsed_s": round(t - self.shown_t, 3),
             "to_motion_s": None if self.motion_t is None else round(self.motion_t - self.shown_t, 3),
+            "auto": self.auto is not None,
         }
 
 
@@ -344,6 +362,7 @@ class Selection:
             why = self._menu_problem(menu, menu_id)
             if why is not None or menu is None:
                 return False, str(why), self._refused("step", name, str(why))
+            cancelled = self._cancel_veto(menu, name)
             back = menu.confirming is not None
             if back:  # "confirm?" -> back to the menu, same card highlighted afresh
                 self._unselect(menu, t)
@@ -354,7 +373,7 @@ class Selection:
             assert card is not None
             data = {**self._ids(menu), "by": name, "ok": True, "cursor": menu.cursor,
                     "card": card.id, "label": card.label, "back": back}
-            return True, card.label, [("selection.step", data)]
+            return True, card.label, cancelled + [("selection.step", data)]
 
     def take(
         self,
@@ -373,6 +392,7 @@ class Selection:
             menu = self.menu
             why = self._menu_problem(menu, menu_id, card_id)
             card = menu.highlighted if menu is not None else None
+            cancelled = self._cancel_veto(menu, name) if menu is not None else []
             reset = False  # refuse AND restart the highlight (fresh ack + reaction)
             if why is None and menu is not None and card is not None:
                 if arm_count is not None and menu.arm_count is not None and (
@@ -414,7 +434,7 @@ class Selection:
             if why is not None or menu is None or card is None:
                 if reset and menu is not None:
                     self._unselect(menu, t)
-                return None, str(why), self._refused("accept", name, str(why))
+                return None, str(why), cancelled + self._refused("accept", name, str(why))
             if menu.confirming is None and card.kind not in ONE_STEP:
                 if self.require_ack:  # "confirm?" is a new rendering: the UI acks it again
                     self._highlight(menu, t)
@@ -422,9 +442,9 @@ class Selection:
                 data = {**self._ids(menu), "by": name, "ok": True, "card": card.id,
                         "label": card.label}
                 ticket = Ticket(menu.id, menu.task_id, card, name, SELECT)
-                return ticket, "selected", [("selection.select", data)]
+                return ticket, "selected", cancelled + [("selection.select", data)]
             menu.taken = card
-            return Ticket(menu.id, menu.task_id, card, name, ACCEPT), "taken", []
+            return Ticket(menu.id, menu.task_id, card, name, ACCEPT), "taken", cancelled
 
     def selected(self, ticket: Ticket) -> bool:
         """``ticket``'s card still asks "confirm?" and has not been announced yet."""
@@ -535,17 +555,100 @@ class Selection:
                 self._last_veto_t = t
             if why is not None or menu is None:
                 return False, str(why), self._refused("dismiss", name, str(why))
+            vetoed = menu.veto_until is not None and menu.veto_card == (
+                menu.highlighted.id if menu.highlighted else None
+            )
+            events: Events = self._cancel_veto(menu, name)
             menu.confirming, menu.announce_t, menu.select_t = None, math.inf, math.inf
             card = menu.cards.pop(menu.cursor)
             data = {**self._ids(menu), "by": name, "ok": True, "card": card.id,
-                    "remaining": len(menu.cards)}
-            events: Events = [("selection.dismiss", data)]
-            if not menu.cards:
+                    "remaining": len(menu.cards), "vetoed": vetoed}
+            events.append(("selection.dismiss", data))
+            if vetoed:  # a quiet no to a pre-approved routine: the task ends, no incident
+                events += self._close("task.abandoned", t, "vetoed", f"vetoed by {name}")
+            elif not menu.cards:
                 events += self._close("task.abandoned", t, "dismissed", "every card was refused")
             else:
                 menu.cursor %= len(menu.cards)
                 self._highlight(menu, t)
             return True, f"dismissed {card.label}", events
+
+    # ── veto ring: pre-approved routines ─────────────────────────────────────
+    def start_veto(
+        self, card_id: str, t: float, window_s: float, menu_id: int | None = None
+    ) -> Events:
+        """Open the veto window on the highlighted card. Only for a card whose rung is
+        announce or do (anything else is refused here too), on a menu nobody has touched.
+        The window is clamped to [MIN_VETO_S, MAX_VETO_S]."""
+        with self._lock:
+            menu = self.menu
+            why = self._menu_problem(menu, menu_id, card_id)
+            card = menu.highlighted if menu is not None else None
+            if why is None and menu is not None and card is not None:
+                if card.rung not in AUTO_RUNGS:
+                    why = "only a pre-approved routine gets a veto window"
+                elif menu.inputs or menu.confirming is not None or menu.veto_until is not None:
+                    why = "the person already answered these cards"
+                elif not _finite(window_s):
+                    why = "bad veto window"
+            if why is not None or menu is None or card is None:
+                return self._refused("auto_started", "app", str(why))
+            total = min(MAX_VETO_S, max(MIN_VETO_S, float(window_s)))
+            menu.veto_until, menu.veto_total_s, menu.veto_card = t + total, total, card.id
+            data = {**self._ids(menu), "card": card.id, "label": card.label, "total_s": total,
+                    "until": round(t + total, 3), "rung": card.rung, "routine": card.routine}
+            return [("selection.auto_started", data)]
+
+    def veto_due(self, t: float) -> Ticket | None:
+        """The ring ran out with no input: the card is taken (``by`` VETO_WINDOW) and the
+        app runs it through the gate. None while the window is open or after any input."""
+        with self._lock:
+            menu = self.menu
+            if (
+                menu is None
+                or menu.veto_until is None
+                or menu.taken is not None
+                or menu.inputs
+                or menu.confirming is not None
+            ):
+                return None
+            card = menu.highlighted
+            if card is None or card.id != menu.veto_card or card.rung not in AUTO_RUNGS:
+                menu.veto_until, menu.veto_card = None, None
+                return None
+            if t < menu.veto_until:
+                return None
+            menu.taken = card
+            menu.veto_until = None
+            if self.task is not None and self.task.id == menu.task_id:
+                self.task.auto = {"card_id": card.id, "total_s": menu.veto_total_s}
+            return Ticket(menu.id, menu.task_id, card, VETO_WINDOW, ACCEPT)
+
+    def veto_open(self) -> bool:
+        with self._lock:
+            return self.menu is not None and self.menu.veto_until is not None
+
+    def supersede(self, t: float, reason: str) -> Events:
+        """A trigger wants new cards: drop a menu nobody has touched so the next tick
+        shows them at once. A menu with any input, a card asking "confirm?" or a card
+        being checked is left alone (returns [])."""
+        with self._lock:
+            menu = self.menu
+            if menu is None or menu.inputs or menu.confirming is not None or menu.taken is not None:
+                return []
+            self._early = None
+            events = self._cancel_veto(menu, "superseded")
+            events += self._close("task.abandoned", t, "superseded", reason)
+            self._quiet_until = t
+            return events
+
+    def _cancel_veto(self, menu: Menu, by: str) -> Events:
+        """Any input on a ringing card ends the ring (under the lock)."""
+        if menu.veto_until is None:
+            return []
+        data = {**self._ids(menu), "card": menu.veto_card, "by": by}
+        menu.veto_until, menu.veto_card = None, None
+        return [("selection.auto_cancelled", data)]
 
     # ── the arm and the app ──────────────────────────────────────────────────
     def on_arm_started(self, contract_id: Any, t: float) -> Events:
@@ -655,11 +758,20 @@ class Selection:
                 clock = max(menu.highlighted_t, ack)
                 clock = max(clock, self._last_veto_t + self.after_veto_s - self.reaction_s)
                 accept_in = round(max(0.0, clock + self.reaction_s - t), 3)
+            auto: dict[str, Any] | None = None
+            if menu is not None and menu.veto_until is not None:
+                auto = {"card_id": menu.veto_card, "total_s": menu.veto_total_s,
+                        "remaining_s": round(max(0.0, menu.veto_until - t), 3)}
+            elif task is not None and task.auto is not None:
+                auto = {**task.auto, "remaining_s": 0.0}  # the routine is running
             return {
                 "mode": self.mode,
                 "configured_mode": self.configured_mode,
                 "degraded": self.degraded,
                 "k": self.k,
+                "veto_until": None if menu is None else menu.veto_until,
+                "auto": auto,
+                "asked_by": highlighted.asked_by if highlighted is not None else None,
                 "menu": menu.id if menu is not None else None,
                 "source": menu.source if menu is not None else None,
                 "cards": cards,
@@ -755,6 +867,7 @@ __all__ = [
     "ONE_STEP",
     "SCANNING",
     "SELECT",
+    "VETO_WINDOW",
     "Menu",
     "Selection",
     "Task",

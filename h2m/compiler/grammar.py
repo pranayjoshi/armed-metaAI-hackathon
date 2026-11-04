@@ -76,6 +76,9 @@ SKILL_PHRASES: tuple[tuple[str, str, bool], ...] = (
     ("take this", "take_this", False),
     ("hold up", "hold_up", True),
     ("lift up", "hold_up", True),
+    ("hold the jar", "hold_jar", False),
+    ("hold this jar", "hold_jar", False),
+    ("hold my jar", "hold_jar", False),
     ("sip", "sip", False),
     ("press the button", "press_button", False),
 )

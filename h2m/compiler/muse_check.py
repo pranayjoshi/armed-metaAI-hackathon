@@ -13,7 +13,7 @@ import numpy as np
 from h2m.incident import SAM_MODEL
 
 BASE = "https://api.meta.ai/v1"
-MODELS = ("muse-wonder-1.0", "muse-spark-1.1")
+MODELS = ("muse-wonder-1.0", "muse-spark-1.3")
 
 
 def main() -> int:

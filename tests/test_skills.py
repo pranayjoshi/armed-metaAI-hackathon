@@ -139,15 +139,6 @@ def test_near_person_flag_must_be_a_real_true():
     assert skill_facts(SKILLS["sip"], {"near_person_enabled": 1})["near_person_ok"] is False
 
 
-def test_near_person_skill_held_until_enabled():
-    assert SAFETY.get("near_person_enabled") is False  # ships off
-    facts = skill_facts(SKILLS["take_this"], SAFETY)
-    d = decide(skill_contract("take_this"), world(**facts), SAFETY)
-    assert d.verdict is Verdict.HOLD and "near_person_enabled" in d.reason
-    on = {**SAFETY, "near_person_enabled": True}
-    d = decide(skill_contract("take_this"), world(**skill_facts(SKILLS["take_this"], on)), on)
-    assert d.verdict is Verdict.ASK
-    assert skill_speed(SKILLS["take_this"], on) <= on["near_person_speed_cap"]
 
 
 def test_sip_needs_a_held_object_and_a_proven_route():
@@ -205,8 +196,11 @@ def test_skill_tool_validation_and_decisions():
     assert r.ok and r.decision.verdict is Verdict.ASK and r.contract.verb is Verb.SKILL
     assert r.contract.utterance == "wave" and r.contract.speed == SKILLS["wave"].speed
     r = emb.handle_tool_call("skill", {"name": "hold_up", "object_id": "cup"})
-    assert r.ok and r.decision.verdict is Verdict.HOLD  # near person, off by default
+    assert r.ok and r.decision.verdict is Verdict.ASK  # near person, shipped on (reviewed)
     assert r.contract.object_id == "cup" and r.contract.table_xy == (0.25, 0.55)
+    emb.safety_cfg = {**SAFETY, "near_person_enabled": False}
+    r = emb.handle_tool_call("skill", {"name": "hold_up", "object_id": "cup"})
+    assert r.ok and r.decision.verdict is Verdict.HOLD and "near_person_enabled" in r.decision.reason
 
 
 def test_move_tool_builds_a_targeted_contract():
@@ -303,15 +297,6 @@ def test_wave_while_holding_is_a_held_move(h2m):
         assert "holding" in last["decision"]["reason"]
 
 
-def test_typed_take_this_is_held_while_near_person_is_off(h2m):
-    from h2m.world import EMPTY, GripperState
-
-    h2m.gripper._state = GripperState(EMPTY, None, "test")  # unknown would hold first
-    h2m.on_utterance("take this", {}, "typed")
-    assert h2m.pending is None
-    last = events(h2m, "intent")[-1]
-    assert last["decision"]["verdict"] == "hold"
-    assert "near_person_enabled" in last["decision"]["reason"]
 
 
 def test_typed_move_to_an_occupied_slot_is_held(h2m):
@@ -335,3 +320,74 @@ def test_typed_move_runs_after_confirm_when_the_slot_is_free(h2m, monkeypatch):
     assert started["skill"] == "move" and started["destination"] == "slot_2"
     run_to_end(h2m)
     assert h2m.arm.state is ArmState.READY
+
+# added alongside today's changes
+def test_near_person_ships_on_for_the_real_arm_and_holds_when_off():
+    # REVIEWED RELAXATION for the Nov 3 shoot: the flag ships on, so near-person skills
+    # ask like any other skill, at the near-person speed cap. Off, they hold and say why.
+    assert SAFETY.get("near_person_enabled") is True
+    d = decide(skill_contract("take_this"), world(**skill_facts(SKILLS["take_this"], SAFETY)), SAFETY)
+    assert d.verdict is Verdict.ASK
+    assert skill_speed(SKILLS["take_this"], SAFETY) <= SAFETY["near_person_speed_cap"]
+    off = {**SAFETY, "near_person_enabled": False}
+    d = decide(skill_contract("take_this"), world(**skill_facts(SKILLS["take_this"], off)), off)
+    assert d.verdict is Verdict.HOLD and "near_person_enabled" in d.reason
+
+def test_place_near_user_still_held_on_an_unmeasured_or_unwatched_handover(h2m):
+    """The flag does not relax place_near_user: on hardware an unmeasured handover
+    polyline is dropped from the proof (no taught path), and a camera not checked to see
+    past the arm makes the spot unwatchable. Either way the gate holds."""
+    from dataclasses import replace
+
+    from h2m.routing import Handover, plan_handover
+
+    assert h2m.safety_cfg.get("near_person_enabled") is True
+    unmeasured = Handover("home", [(0.5, 0.7), (0.15, 0.85)], (0.15, 0.85), 0.1,
+                          measured=False, camera_sees_past_arm=True)
+    routes = replace(h2m.routes, handover=unmeasured)
+    assert routes.for_proof(hardware=True).handover is None
+    shaping = plan_handover([], [], routes.for_proof(hardware=True))
+    assert shaping.problem and "taught path" in shaping.problem
+    unwatched = replace(unmeasured, measured=True, camera_sees_past_arm=False)
+    h2m.routes = replace(h2m.routes, handover=unwatched)
+    watchable, why = h2m._spot_watchable()
+    assert watchable is False and "camera" in why
+    c = StepContract(verb=Verb.PLACE_NEAR_USER, confidence=0.9)
+    d = decide(c, world(holding=True, spot_watchable=watchable, spot_clear=True, watch_reason=why), SAFETY)
+    assert d.verdict is Verdict.HOLD and "camera" in d.reason
+
+def test_typed_take_this_asks_with_near_person_on_and_holds_when_off(h2m):
+    from h2m.world import EMPTY, GripperState
+
+    h2m.gripper._state = GripperState(EMPTY, None, "test")  # unknown would hold first
+    h2m.on_utterance("take this", {}, "typed")
+    pending = h2m.pending
+    assert pending is not None and pending.decision.verdict is Verdict.ASK
+    assert pending.decision.checks["near_person_ok"] is True
+    assert pending.contract.speed <= SAFETY["near_person_speed_cap"]
+    h2m.cancel("test")
+    h2m.safety_cfg["near_person_enabled"] = False  # the one gate config, shared with embodied
+    h2m.on_utterance("take this", {}, "typed")
+    assert h2m.pending is None
+    last = events(h2m, "intent")[-1]
+    assert last["decision"]["verdict"] == "hold"
+    assert "near_person_enabled" in last["decision"]["reason"]
+
+
+def test_touch_close_uses_the_taught_point_jaws_and_falls_back_when_untaught(h2m):
+    from h2m.robot.arm import Grip
+
+    slot = h2m.arm.poses.slots["slot_1"]
+    grip = Grip(0.5, 12.5, 0.3)
+    h2m.cfg["arm"]["use_taught_touch_close"] = True
+    h2m.cfg["arm"]["touch_squeeze_pct"] = 8
+    assert not slot.point.taught
+    assert h2m._touch_close_pct(slot, grip) == 12.5  # untaught point: the effort-mapped close
+    taught = type(slot.point)(
+        slot.point.name, {**slot.point.joints, "gripper": 35.0}, True
+    )
+    slot = type(slot)(slot.slot_id, slot.table_xy, slot.above, slot.grasp, taught)
+    assert h2m._touch_close_pct(slot, grip) == 31.0  # touch 35 less 8 x 0.5
+    h2m.cfg["arm"]["use_taught_touch_close"] = False
+    assert h2m._touch_close_pct(slot, grip) == 12.5
+    assert h2m._touch_close_pct(None, grip) == 12.5

@@ -211,7 +211,7 @@ def test_measured_flag_must_be_exactly_true(tmp_path):
 
 
 def test_app_on_hardware_holds_a_rule_shaped_carry_with_placeholder_routes(tmp_path, monkeypatch):
-    """Port of the review repro (untaught via on hardware): the carry holds at the gate,
+    """Review repro (untaught via on hardware): the carry holds at the gate,
     with a reason, before any untaught via pose could matter."""
     from h2m.app import H2M
     from h2m.rules import RuleStore
@@ -229,3 +229,88 @@ def test_app_on_hardware_holds_a_rule_shaped_carry_with_placeholder_routes(tmp_p
     h.on_utterance("pick up the cup", source="typed")
     d = h.last["decision"]
     assert d["verdict"] == "hold" and "measured route" in d["reason"] and h.pending is None
+
+# imports added with the tests below
+from h2m.routing import (  # noqa: E402
+    Checks,
+    applied_detail,
+    check_proposal,
+    load_routes,
+    permitted_table,
+    rehearsal_routes,
+    tags_for,
+)
+
+# added alongside today's changes
+OBJECTS = {"cup": ["liquid", "fragile"], "block": [], "ball": ["rigid"]}
+
+HELD = ["liquid", "fragile"]  # the paper cup, picked from slot_1 on the direct route
+
+def check(r, rules=(), **kw):
+    return check_proposal(r, list(rules), ROUTES, ALL, OBJECTS, HELD, "slot_1", "direct", **kw)
+
+def test_checker_passes_the_rule_that_keeps_liquids_off_the_laptop():
+    c = check(rule("route_around", approved=False))
+    assert isinstance(c, Checks) and c.ok and c.restrictive and c.prevented
+    assert "none added" in c.detail["restrictive"] and "via_left" in c.detail["prevented"]
+    assert c.as_dict()["restrictive"] is True and c.problems() == []
+
+def test_checker_replay_fails_when_the_rule_does_not_cover_what_was_held():
+    c = check(rule("route_around", tags=("rigid",), approved=False))
+    assert c.restrictive and not c.prevented and "rigid" in c.detail["prevented"]
+    assert any("not prevented" in p for p in c.problems())
+
+def test_checker_replay_fails_when_the_incident_route_never_crossed_the_zone():
+    c = check_proposal(rule("route_around", approved=False), [], ROUTES, ALL, OBJECTS, HELD,
+                       "slot_1", "via_left")
+    assert not c.prevented and "never crosses" in c.detail["prevented"]
+
+def test_checker_caps_count_as_prevention_and_say_so():
+    slow = check(rule("slow_down", approved=False))
+    assert slow.ok and "50%" in slow.detail["prevented"] and "still passes" in slow.detail["prevented"]
+    gentle = check(rule("grip_gentler", approved=False))
+    assert gentle.ok and "60%" in gentle.detail["prevented"]
+    high = check(rule("lift_higher", approved=False))
+    assert high.ok and "via_high" in high.detail["prevented"]
+
+def test_checker_fails_closed_without_a_route_map_and_holds_count_as_prevented():
+    c = check_proposal(rule("route_around", approved=False), [], None, ALL, OBJECTS, HELD, "slot_1")
+    assert not c.restrictive and not c.prevented
+    everywhere = RouteConfig(routes=ROUTES.routes, zones={"laptop": (-1.0, -1.0, 2.0, 2.0)})
+    c = check_proposal(rule("route_around", approved=False), [], everywhere, ALL, OBJECTS, HELD,
+                       "slot_1", "direct")
+    assert c.restrictive and c.prevented and "hold" in c.detail["prevented"]
+
+def test_permitted_table_covers_every_object_and_slot():
+    table = permitted_table(ROUTES, [rule("route_around")], ALL, OBJECTS)
+    assert set(table) == {(o, s) for o in OBJECTS for s in ("slot_1", "slot_2", "slot_3")}
+    assert "direct" not in table[("cup", "slot_1")].routes
+    assert table[("block", "slot_1")].routes == frozenset(ALL)
+
+def test_liquid_rule_learned_on_the_cup_applies_to_the_tea():
+    r = rule("route_around")  # when_holding: liquid
+    cup, tea = tags_for("cup", ROUTES, {}), tags_for("tea", ROUTES, {})
+    assert "liquid" in cup and tea == ["liquid"]
+    for tags in (cup, tea):
+        s = plan_carry(tags, [r], ROUTES, ALL, slot_id="slot_1")
+        assert s.route == "via_left" and s.applied == [r.id]
+    detail = applied_detail([r.id], [r], tea)
+    assert detail == [{"id": r.id, "index": 1, "tags": ["liquid"], "response": "route_around",
+                       "avoid": "laptop"}]
+
+def test_cup_only_rule_does_not_transfer_to_the_tea():
+    fragile = rule("route_around", tags=("fragile",))  # only the cup carries fragile
+    assert plan_carry(tags_for("cup", ROUTES, {}), [fragile], ROUTES, ALL, slot_id="slot_1").route == "via_left"
+    s = plan_carry(tags_for("tea", ROUTES, {}), [fragile], ROUTES, ALL, slot_id="slot_1")
+    assert s.route == "direct" and s.applied == []
+    assert applied_detail([fragile.id], [fragile], ["liquid"]) == [
+        {"id": fragile.id, "index": 1, "tags": [], "response": "route_around", "avoid": "laptop"}
+    ]
+
+def test_rehearsal_routes_are_the_slot_polylines_marked_unmeasured():
+    rh = rehearsal_routes(ROUTES, "slot_1", "direct", "via_left")
+    assert rh["old_route"][0] == [0.25, 0.55] and rh["new_route"][-1] == [0.5, 0.4]
+    assert rh["old_route_name"] == "direct" and rh["new_route_name"] == "via_left"
+    assert rh["source"] == {"file": "configs/routes.yaml", "measured": False}
+    assert rehearsal_routes(ROUTES, None, "direct", "via_left")["old_route"] is None
+    assert rehearsal_routes(None, "slot_1", "direct", "via_left")["new_route"] is None

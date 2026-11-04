@@ -1,18 +1,29 @@
-"""Microphone -> voice activity -> on-device speech recognition -> utterances.
+"""Microphone -> echo tagging -> Muse Voice Transcribe (realtime WebSocket) -> utterances.
 
-ASR runs locally: NVIDIA Parakeet TDT 0.6B v3 on MLX (200-320 ms per 1-2 s
-command on an M1 Pro), with mlx-whisper as the fallback. Audio never leaves
-the machine.
+Speech to text is Muse Voice Transcribe 1.0 through ``h2m.sensors.voice`` (the only
+speech model in the runtime; docs/COMPLIANCE.md section 2). The mic's PCM streams to the
+socket; the server's endpointing and diarization decide where a turn ends and who spoke.
+Every final comes back as one utterance with metadata: ``speaker`` (the diarization label
+mapped through ``speech.speakers``), ``asked_by`` (set when the speaker is not the wearer),
+``ms`` (measured latency from the end of the spoken audio to the final) and ``echo``.
 
-Echo window: while the robot is speaking (``is_speaking``) and for ``echo_tail_ms``
-after, the mic hears the robot. Any utterance with audio from that window is tagged
-``echo: True`` in its metadata; the app acts on nothing from it except stop and cancel
-(so a spoken "stop" over the robot's voice still freezes the arm). Each frame carries
-its own capture-time tag, so an utterance is echo exactly when any of its audio is.
-An utterance in progress when the window closes is never discarded: it finishes
-naturally, tagged echo, so a "stop" overlapping the end of the robot's voice still
-reaches the app. Between utterances, the quiet echo pre-roll is dropped at the window
-edge so the person's next words start a clean (untagged) utterance.
+Echo window: while the robot is speaking (``is_speaking``) and for ``echo_tail_ms`` after,
+the mic hears the robot. Every captured frame carries its own capture-time tag; a final
+whose audio overlaps any tagged frame (widened by ``echo_margin_ms``, since the server's
+stream positions are not acoustic boundaries) is tagged ``echo: True``, and the app acts on
+nothing from it except stop and cancel (so a spoken "stop" over the robot's voice still
+freezes the arm). Anything the ledger cannot place is tagged echo: it fails closed.
+
+Speaker identity: diarization labels are session-scoped letters, not identities. The wearer
+is the label that gave the first "yes" of the session or was claimed through
+``POST /api/speaker/claim``; ``speech.speakers`` names the labels. Labels start over on every
+socket session, so a reconnect clears the claim (``speech.wearer`` in the config survives).
+
+Stops: the brace, the open hand and the e-stop are the fast stops and owe nothing to this
+module. A spoken "stop" arrives through the socket, round trip included. ``local_stop`` is
+an optional ENERGY BURST detector (a short loud sound, no keyword model of any kind): when
+enabled it feeds the app's existing stop handling as source ``local_stop``, never in the echo
+window, and it is off by default because a cough or a clap would stop the arm too.
 """
 
 from __future__ import annotations
@@ -25,51 +36,23 @@ from typing import Any
 
 import numpy as np
 
+from h2m.compiler.grammar import parse
+from h2m.contract import Verb
 from h2m.core import EventLog, now
+from h2m.sensors.voice import DEFAULT_MODEL, Final, VoiceTranscribe, keyword_list, pcm16
 
 Transcriber = Callable[[np.ndarray, int], str]
-
-
-def make_parakeet() -> Transcriber:
-    import mlx.core as mx
-    from parakeet_mlx import from_pretrained
-    from parakeet_mlx.audio import get_logmel
-
-    model = from_pretrained("mlx-community/parakeet-tdt-0.6b-v3")
-    rate = int(model.preprocessor_config.sample_rate)
-    # Warm up on speech-length noise: the first real call otherwise costs ~2.5 s.
-    noise = np.random.default_rng(0).normal(0, 0.01, rate * 2).astype(np.float32)
-    for length in (rate, rate * 2):
-        model.generate(get_logmel(mx.array(noise[:length]), model.preprocessor_config))
-
-    def transcribe(audio: np.ndarray, sample_rate: int) -> str:
-        if sample_rate != rate:
-            n = int(len(audio) * rate / sample_rate)
-            audio = np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)), audio)
-        mel = get_logmel(mx.array(audio.astype(np.float32)), model.preprocessor_config)
-        return str(model.generate(mel)[0].text).strip()
-
-    return transcribe
-
-
-def make_whisper() -> Transcriber:
-    import mlx_whisper
-
-    def transcribe(audio: np.ndarray, sample_rate: int) -> str:
-        result = mlx_whisper.transcribe(
-            audio.astype(np.float32),
-            path_or_hf_repo="mlx-community/whisper-small-mlx",
-            language="en",
-        )
-        return str(result.get("text", "")).strip()
-
-    return transcribe
+TAIL_LEN = 12  # transcript_tail entries kept for the UI
 
 
 class EnergyVad:
     """Adaptive-noise-floor voice activity detection with pre-roll. Each frame may be
     tagged (``echo``); ``echo`` on the VAD is the tag of the last finished utterance:
-    True when any of its frames, pre-roll included, was tagged."""
+    True when any of its frames, pre-roll included, was tagged.
+
+    With the socket doing the endpointing this drives the level meter, the ``speaking``
+    flag and the optional local stop; its utterance boundaries are used only by an injected
+    local ``transcriber`` (tests and offline replays)."""
 
     def __init__(
         self,
@@ -129,13 +112,59 @@ class EnergyVad:
         return None
 
 
+class BurstStop:
+    """LOCAL STOP, ENERGY BURST ONLY: a run of loud frames (RMS above ``ratio`` times the
+    noise floor) lasting between ``min_ms`` and ``max_ms`` fires once, on its falling edge.
+    It hears no words: any short loud sound (a shouted "stop", a clap, a cough) counts.
+    Never fed echo-tagged frames. Not a keyword spotter and not a learned model."""
+
+    def __init__(self, cfg: dict[str, Any], frame_ms: int = 30):
+        self.enabled = cfg.get("enabled") is True
+        self.ratio = float(cfg.get("ratio", 8.0))
+        self.min_frames = max(1, int(cfg.get("min_ms", 150)) // frame_ms)
+        self.max_frames = max(self.min_frames, int(cfg.get("max_ms", 700)) // frame_ms)
+        self.refractory_frames = max(1, int(cfg.get("refractory_ms", 1500)) // frame_ms)
+        self.frame_ms = frame_ms
+        self.loud = 0
+        self.cooldown = 0
+        self.peak = 0.0
+        self.fired = 0
+
+    def push(self, rms: float, noise: float, echo: bool) -> dict[str, Any] | None:
+        """One frame; returns the burst's facts when a burst just ended, else None."""
+        if self.cooldown:
+            self.cooldown -= 1
+        if echo:  # the robot's own voice is a loud burst: never count it
+            self.loud, self.peak = 0, 0.0
+            return None
+        ratio = rms / max(noise, 1e-6)
+        if ratio > self.ratio:
+            self.loud += 1
+            self.peak = max(self.peak, ratio)
+            return None
+        frames, peak = self.loud, self.peak
+        self.loud, self.peak = 0, 0.0
+        if not frames or self.cooldown or not (self.min_frames <= frames <= self.max_frames):
+            return None
+        self.cooldown = self.refractory_frames
+        self.fired += 1
+        return {
+            "detector": "energy_burst",
+            "burst_ms": frames * self.frame_ms,
+            "peak_ratio": round(peak, 1),
+        }
+
+
 class SpeechService:
     def __init__(
         self,
         cfg: dict[str, Any],
-        log: EventLog,
-        on_utterance: Callable[[str, dict], None],
+        log: EventLog | None,
+        on_utterance: Callable[[str, dict], None] | None,
         is_speaking: Callable[[], bool] | None = None,
+        catalog: list[dict[str, Any]] | None = None,
+        voice: VoiceTranscribe | None = None,
+        on_local_stop: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.cfg, self.log, self.on_utterance = cfg, log, on_utterance
         self.is_speaking = is_speaking or (lambda: False)
@@ -150,8 +179,32 @@ class SpeechService:
             int(cfg.get("preroll_ms", 250)),
             int(cfg.get("max_utterance_ms", 6000)),
         )
+        self.keywords = keyword_list(
+            [o.get("name") or o.get("prompt") or o.get("id") for o in (catalog or [])],
+            cfg.get("keywords") or [],
+        )
+        # The socket client is built here and connected in start(); nothing touches the
+        # network before then. A local ``transcriber`` (tests, offline replays) bypasses it.
+        self.voice: VoiceTranscribe | None = voice
+        if self.voice is None:
+            self.voice = VoiceTranscribe(cfg, self.keywords, self._on_final, log)
         self.transcriber: Transcriber | None = None
-        self.backend: str | None = None
+        self.backend: str = self.voice.model if self.voice else DEFAULT_MODEL
+        self.local_stop = BurstStop(cfg.get("local_stop") or {})
+        self.on_local_stop = on_local_stop
+        # Speaker identity (session-scoped diarization labels -> names).
+        self.speakers: dict[str, str] = {
+            str(k): str(v) for k, v in (cfg.get("speakers") or {}).items() if v is not None
+        }
+        self.configured_wearer = cfg.get("wearer")
+        self.wearer_label: str | None = (
+            None if self.configured_wearer is None else str(self.configured_wearer)
+        )
+        self._claim_session: str | None = None
+        self.transcript_tail: deque[dict[str, Any]] = deque(maxlen=TAIL_LEN)
+        self.last_speaker: str | None = None
+        self.last_speaker_label: str | None = None
+        self.last_asked_by: str | None = None
         self._audio: queue.Queue[tuple[np.ndarray, bool]] = queue.Queue(maxsize=200)
         self._stream: Any = None
         self.listening = False
@@ -160,28 +213,11 @@ class SpeechService:
         self.error: str | None = None
         self.muted = False
 
+    # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
         threading.Thread(target=self._run, name="speech", daemon=True).start()
 
-    def _load_asr(self) -> None:
-        order = (
-            ["parakeet", "whisper"]
-            if self.cfg.get("asr", "parakeet") == "parakeet"
-            else ["whisper"]
-        )
-        for name in order:
-            try:
-                self.transcriber = make_parakeet() if name == "parakeet" else make_whisper()
-                self.backend = name
-                return
-            except Exception as exc:
-                self.error = f"{name} unavailable: {exc}"
-
     def _run(self) -> None:
-        self._load_asr()
-        if self.transcriber is None:
-            self.log.emit("speech.error", detail=self.error)
-            return
         try:
             import sounddevice as sd
 
@@ -196,37 +232,79 @@ class SpeechService:
             self._stream.start()
         except Exception as exc:
             self.error = f"microphone unavailable: {exc}"
-            self.log.emit("speech.error", detail=self.error)
+            self._emit("speech.error", detail=self.error)
             return
+        if self.voice is not None and self.transcriber is None:
+            if not self.voice.available:
+                self.error = "MODEL_API_KEY not set: voice transcription off (typed commands work)"
+                self._emit("speech.error", detail=self.error)
+            else:
+                self.voice.start()
         self.listening = True
-        self.log.emit("speech.started", asr=self.backend)
+        self._emit("speech.started", asr=self.backend, keywords=len(self.keywords))
         while self.listening:
             frame, frame_echo = self._audio.get()
             if self.muted:
+                # Keep the stream paced: the server closes a socket whose audio stops.
+                if self.voice is not None and self.transcriber is None:
+                    self.voice.send_audio(pcm16(np.zeros_like(frame)), frame_echo)
                 continue
             self.handle_frame(frame, frame_echo)
 
+    def stop(self) -> None:
+        self.listening = False
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+        if self.voice is not None:
+            self.voice.stop()
+
+    # ── frames ───────────────────────────────────────────────────────────────
     def handle_frame(self, frame: np.ndarray, frame_echo: bool) -> None:
-        """One captured frame: VAD, then ASR and ``on_utterance`` when an utterance ends."""
+        """One captured frame: VAD (level, speaking, local stop), echo tagging, then the
+        socket; or, with a local ``transcriber`` injected, the VAD's utterance through it."""
         audio, echo = self.push_frame(frame, frame_echo)
-        if audio is None or self.transcriber is None:
+        if self.local_stop.enabled:
+            burst = self.local_stop.push(self.vad.level, self.vad.noise, frame_echo)
+            if burst is not None:
+                self._fire_local_stop(burst)
+        if self.transcriber is not None:
+            if audio is not None:
+                self._local_utterance(audio, echo)
             return
+        if self.voice is not None:
+            self.voice.send_audio(pcm16(frame), frame_echo)
+
+    def _fire_local_stop(self, burst: dict[str, Any]) -> None:
+        meta = {**burst, "source": "local_stop", "echo": False}
+        self._emit("speech.local_stop", **burst)
+        if self.on_local_stop is not None:
+            self.on_local_stop(meta)
+        elif self.on_utterance is not None:
+            self.on_utterance("stop", meta)
+
+    def _local_utterance(self, audio: np.ndarray, echo: bool) -> None:
+        """Tests and offline replays only: a local function stands in for the socket."""
+        assert self.transcriber is not None
         started = now()
         try:
             text = self.transcriber(audio, self.rate)
         except Exception as exc:
-            self.log.emit("speech.error", detail=f"ASR failed: {exc}")
+            self._emit("speech.error", detail=f"transcriber failed: {exc}")
             return
-        self.last_latency_ms = round((now() - started) * 1000)
+        ms = round((now() - started) * 1000)
         if text:
-            self.last_text = text
-            self.on_utterance(
+            self._deliver(
                 text,
                 {
                     "asr": self.backend,
-                    "asr_ms": self.last_latency_ms,
+                    "ms": ms,
+                    "asr_ms": ms,
                     "audio_s": round(len(audio) / self.rate, 2),
                     "echo": bool(echo),  # the app drops anything not tagged literally False
+                    "speaker": None,
+                    "speaker_label": None,
+                    "asked_by": None,
                 },
             )
 
@@ -266,22 +344,134 @@ class SpeechService:
         except queue.Full:
             pass
 
-    def stop(self) -> None:
-        self.listening = False
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
+    # ── finals from the socket ───────────────────────────────────────────────
+    def speaker_name(self, label: str | None) -> str | None:
+        if label is None:
+            return None
+        return self.speakers.get(str(label), f"speaker {label}")
+
+    def _on_final(self, final: Final) -> None:
+        """One finished turn from Muse Voice Transcribe (voice thread)."""
+        if final.session_id != self._claim_session:
+            # Labels start over with every socket session: the claim does too.
+            if self._claim_session is not None and self.wearer_label is not None:
+                self._emit("speech.wearer_reset", session=final.session_id)
+            self._claim_session = final.session_id
+            self.wearer_label = (
+                None if self.configured_wearer is None else str(self.configured_wearer)
+            )
+        text = final.text.strip()
+        if not text:
+            return
+        echo = bool(final.echo) if final.echo is not None else True  # unknown = echo
+        label = final.speaker
+        if (
+            self.wearer_label is None
+            and label is not None
+            and not echo
+            and parse(text, {}).verb is Verb.CONFIRM
+        ):
+            self.wearer_label = str(label)
+            self._emit("speech.wearer_claimed", label=self.wearer_label, by="first yes")
+        name = self.speaker_name(label)
+        asked_by = (
+            name
+            if self.wearer_label is not None
+            and label is not None
+            and str(label) != self.wearer_label
+            else None
+        )
+        self._deliver(
+            text,
+            {
+                "asr": self.backend,
+                "ms": final.ms,
+                "asr_ms": final.ms,
+                "audio_s": final.audio_s,
+                "echo": echo,
+                "speaker": name,
+                "speaker_label": label,
+                "asked_by": asked_by,
+                "turn_id": final.turn_id,
+                "session_id": final.session_id,
+            },
+        )
+
+    def _deliver(self, text: str, meta: dict[str, Any]) -> None:
+        self.last_text = text
+        self.last_latency_ms = meta.get("ms")
+        self.last_speaker = meta.get("speaker")
+        self.last_speaker_label = meta.get("speaker_label")
+        self.last_asked_by = meta.get("asked_by")
+        self.transcript_tail.append(
+            {
+                "speaker": meta.get("speaker"),
+                "text": text,
+                "t": round(now(), 3),
+                "echo": meta.get("echo"),
+            }
+        )
+        if self.on_utterance is not None:
+            self.on_utterance(text, meta)
+
+    # ── speaker claim ────────────────────────────────────────────────────────
+    def claim(self, label: str | None = None, name: str | None = None) -> tuple[bool, str]:
+        """Make ``label`` (default: the label of the last utterance) the wearer, and name
+        it if ``name`` is given. The claim lasts for the current socket session."""
+        label = str(label) if label else self.last_speaker_label
+        if not label:
+            return False, "no speaker label yet: say something first, or send a label"
+        if name:
+            self.speakers[label] = str(name)
+        self.wearer_label = label
+        if self.voice is not None and self.voice.session_id:
+            self._claim_session = self.voice.session_id  # the claim is for this session
+        self._emit(
+            "speech.wearer_claimed", label=label, by="operator", name=self.speakers.get(label)
+        )
+        return True, f"wearer is {self.speaker_name(label)}"
+
+    # ── snapshot ─────────────────────────────────────────────────────────────
+    def transcript(self) -> dict[str, Any] | None:
+        """The last speaker-labelled line, for the Card."""
+        if not self.transcript_tail:
+            return None
+        last = self.transcript_tail[-1]
+        return {"speaker": last["speaker"], "text": last["text"]}
+
+    def calls(self) -> list[dict[str, Any]]:
+        """Recent model calls, newest last: {model, for: "speech", ms, t}."""
+        return list(self.voice.calls) if self.voice is not None else []
 
     def snapshot(self) -> dict[str, Any]:
+        voice = self.voice.snapshot() if self.voice is not None else {}
         return {
             "listening": self.listening and not self.muted,
             "asr": self.backend,
+            "connected": bool(voice.get("connected")),
+            "session_id": voice.get("session_id"),
+            "reconnects": voice.get("reconnects", 0),
             "speaking": bool(self.vad.active),
             "level": round(self.vad.level / max(self.vad.noise * self.vad.start_ratio, 1e-6), 2),
             "last_text": self.last_text,
+            "partial": voice.get("partial", ""),
+            "ms": self.last_latency_ms,
             "asr_ms": self.last_latency_ms,
-            "error": self.error,
+            "speaker": self.last_speaker,
+            "speaker_label": self.last_speaker_label,
+            "asked_by": self.last_asked_by,
+            "wearer": self.speaker_name(self.wearer_label),
+            "wearer_label": self.wearer_label,
+            "speakers": dict(self.speakers),
+            "transcript_tail": list(self.transcript_tail),
+            "keywords": len(self.keywords),
+            "local_stop": self.local_stop.enabled,
+            "error": self.error or voice.get("error"),
         }
+
+    def _emit(self, kind: str, **data: Any) -> None:
+        if self.log is not None:
+            self.log.emit(kind, **data)
 
 
 def build_speech(
@@ -289,7 +479,15 @@ def build_speech(
     log: EventLog,
     on_utterance,
     is_speaking: Callable[[], bool] | None = None,
+    catalog: list[dict[str, Any]] | None = None,
 ) -> SpeechService | None:
     if cfg.get("source", "mic") == "off":
         return None
-    return SpeechService(cfg, log, on_utterance, is_speaking)
+    return SpeechService(
+        cfg,
+        log,
+        on_utterance,
+        is_speaking,
+        catalog=catalog,
+        on_local_stop=lambda meta: on_utterance("stop", meta, "local_stop"),
+    )

@@ -322,3 +322,4 @@ def test_teach_saves_gesture_keyframe(tmp_path):
     assert by_name["gesture.nod.nod_down"].joints["shoulder_lift"] == -88.0
     assert steps[-1].name == "gesture.nod.nod_extra"  # appended last
     assert not by_name["gesture.nod.nod_up"].taught  # others untouched
+

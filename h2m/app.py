@@ -66,7 +66,7 @@ from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NamedTuple
 
 from h2m.compiler.grammar import Parsed, build_vocabulary, parse
 from h2m.compiler.llm import build_llm
@@ -83,8 +83,21 @@ from h2m.embodied import (
     skill_facts,
     skill_speed,
 )
+from h2m.grasp import (
+    GraspConfig,
+    GraspConfigError,
+    GraspParams,
+    JawCalibration,
+    grasp_params,
+    load_grasp,
+    roll_for_axis,
+    roll_from_mask,
+    to_table,
+    width_across_jaws,
+)
 from h2m.intent import IntentRanker, RankResult, SparkClient, scanning_candidates
 from h2m.learning import Learner
+from h2m.proactive import build_proposer
 from h2m.recorder import Recorder
 from h2m.robot import ArmState, build_arm
 from h2m.robot.skills import (
@@ -92,6 +105,7 @@ from h2m.robot.skills import (
     Pose,
     plan_home,
     plan_move,
+    plan_pick_approach,
     plan_pick_place,
     plan_point,
     plan_skill,
@@ -108,7 +122,7 @@ from h2m.routing import (
 )
 from h2m.rules import RuleStore, RulesUnavailable
 from h2m.safety import CONFIRM, Decision, Verdict, decide
-from h2m.selection import INTENT, SCANNING, SELECT, Selection, Ticket, announcement
+from h2m.selection import INTENT, SCANNING, SELECT, VETO_WINDOW, Selection, Ticket, announcement
 from h2m.sensors.emg import build_emg
 from h2m.sensors.speech import build_speech
 from h2m.sensors.vision import build_vision
@@ -192,6 +206,19 @@ class Pending:
     popped: bool = False  # set (under the app lock) by the confirm that took it
 
 
+class GraspJob(NamedTuple):
+    """A pick waiting at ``slot.above`` for its measured grasp (stage 2): the request as
+    the gate approved it, and the request epoch and arm_count at stage 1."""
+
+    contract: StepContract
+    decision: Decision
+    meta: dict[str, Any]
+    epoch: int
+    armed: int
+    effort: float
+    via: tuple
+
+
 @dataclass(frozen=True)
 class ReleaseOffer:
     """An operator gripper release shown to the operator, waiting for the second step.
@@ -215,12 +242,24 @@ class H2M:
         self.vocab = build_vocabulary(cfg.get("objects", []))
         self.safety_cfg = cfg.get("safety", {})
         self.arm = build_arm(cfg.get("arm", {}), self.log)
+        # Meta-measured grasp (h2m/grasp.py): off unless grasp.sam_width is literally true.
+        # A bad grasp section fails closed to the defaults, which are off.
+        self.grasp_error: str | None = None
+        try:
+            self.grasp_cfg, self.jaw_cal = load_grasp(cfg)
+        except GraspConfigError as exc:
+            self.grasp_cfg, self.jaw_cal = GraspConfig(), JawCalibration()
+            self.grasp_error = str(exc)
         self.emg = build_emg(cfg.get("emg", {}), self.log)
         self.vision = build_vision(cfg.get("vision", {}), cfg.get("objects", []), self.log)
         # The mic is told when the robot is talking (echo window); read lazily because
         # the voice is built below and may be swapped.
         self.speech = build_speech(
-            cfg.get("speech", {}), self.log, self.on_utterance, is_speaking=self._speaking
+            cfg.get("speech", {}),
+            self.log,
+            self.on_utterance,
+            is_speaking=self._speaking,
+            catalog=cfg.get("objects", []),  # keyword biasing on the object names
         )
         self.llm = build_llm(cfg.get("compiler", {}))
         self.rules_cfg = cfg.get("rules", {}) or {}
@@ -275,6 +314,10 @@ class H2M:
         # place_near_user stage 2 waiting for stage 1 to arrive: (contract, epoch, the
         # arm's arm_count at stage 1: any re-arming since, however it came, drops it)
         self._handover_job: tuple[StepContract, int, int] | None = None
+        # A pick waiting at slot.above for its measured grasp (grasp.sam_width only).
+        self._grasp_job: GraspJob | None = None
+        self._grasp_chip: dict[str, Any] | None = None  # last measurement, for the snapshot
+        self._grasp_profiles: dict[str, str] = {}  # object id -> classified profile (cached)
         self._release_offer: ReleaseOffer | None = None  # operator release, step 1 done
         # Embodied gesture runs by contract id: (started, needs confirmation, reason).
         self._gesture_outcomes: dict[str, tuple[bool, bool, str]] = {}
@@ -285,6 +328,10 @@ class H2M:
         if self.emg is not None:
             self.arm.guards.append(self._emg_problem)  # no motion without a live EMG stop
         self._build_selection(cfg)
+        # Proactive cards (h2m/proactive.py, docs/PROACTIVE.md): None unless
+        # proactive.enabled is literally true. It reads sensors and the selection; the
+        # arm is only ever reached through the card path, gate and confirmation below.
+        self.proactive = build_proposer(self, cfg)
         # The stop handler subscribes before the Recorder so the freeze runs before
         # any disk I/O on the same event.
         self.log.subscribe(self._on_event)
@@ -308,6 +355,7 @@ class H2M:
             llm=bool(self.llm),
             muse_wonder=self.learner.muse is not None,
             routes_error=self.routes_error,
+            grasp_error=self.grasp_error,
         )
 
     def shutdown(self) -> None:
@@ -341,7 +389,8 @@ class H2M:
         return self.vision.pointing if self.vision else {"active": 0.0, "candidates": []}
 
     def _world(self, contract: StepContract) -> dict[str, Any]:
-        visible_ids = {o["id"] for o in self.visible_objects()}
+        # A stale object (its SAM scan older than vision.stale_s) is not visible to the gate.
+        visible_ids = {o["id"] for o in self.visible_objects() if o.get("stale") is not True}
         slot = self.arm.slot_for(contract.table_xy) if contract.table_xy else None
         world = {
             "arm_ready": self.arm.state is ArmState.READY,
@@ -356,6 +405,8 @@ class H2M:
             )
         )
         world.update(self._emg_facts())
+        if self.proactive is not None:  # the person's trust rung for this action (never -> reject)
+            world["rung"] = self.proactive.action_rung(contract)
         if contract.verb is Verb.PICK_PLACE:
             problem = self._shape_carry(contract)
             world["route_clear"] = problem is None
@@ -444,6 +495,47 @@ class H2M:
         if not (isinstance(age, (int, float)) and 0 <= age < max_age):
             return "EMG stopped streaming (no fresh samples)"
         return None
+
+    def _slot_open_pct(self, slot: Any) -> float:
+        """Jaw opening for a pick at ``slot``: the value taught at its grasp pose, kept
+        inside ``taught_jaws_range``; the one ``gripper_open`` when that is switched off,
+        there is no slot, or the taught value is unusable."""
+        default = float(self.arm.settings.gripper_open)
+        arm_cfg = self.cfg.get("arm", {})
+        if slot is None or arm_cfg.get("use_taught_grasp_jaws") is not True:
+            return default
+        taught = slot.grasp.joints.get("gripper")
+        if not isinstance(taught, (int, float)) or isinstance(taught, bool) or taught != taught:
+            return default
+        low, high = (float(v) for v in arm_cfg.get("taught_jaws_range", (20, 60)))
+        return max(low, min(high, float(taught)))
+
+    def _touch_close_pct(self, slot: Any, grip: Any) -> float:
+        """Where the jaws close to: the opening taught at the slot's ``point`` pose (the
+        jaws touching the object there), less a small squeeze scaled by the grip effort, so
+        a fragile object gets less. The torque limit still bounds the force. Falls back to
+        the effort-mapped ``grip.close_pct`` when it is switched off or the pose is untaught."""
+        arm_cfg = self.cfg.get("arm", {})
+        if slot is None or arm_cfg.get("use_taught_touch_close") is not True:
+            return grip.close_pct
+        touch = slot.point.joints.get("gripper")
+        if (
+            not slot.point.taught
+            or not isinstance(touch, (int, float))
+            or isinstance(touch, bool)
+            or not 0.0 <= touch <= 100.0
+        ):
+            return grip.close_pct
+        squeeze = max(0.0, float(arm_cfg.get("touch_squeeze_pct", 8.0)))
+        return max(float(self.arm.settings.gripper_hard_close), float(touch) - squeeze * grip.effort)
+
+    def _tray_open_pct(self, slot: Any) -> float:
+        """Opening for a pick that releases at the tray: the slot's taught jaws, never above
+        ``arm.tray_release_max_pct`` (the widest opening known to clear the tray wall at
+        tray_release; the release opens to max(gripper_open, this), so a wider grasp would
+        open the jaws against the wall there)."""
+        cap = float(self.cfg.get("arm", {}).get("tray_release_max_pct", self.arm.settings.gripper_open))
+        return min(self._slot_open_pct(slot), cap)
 
     def _gripper_proven_empty(self) -> bool:
         """Tracker EMPTY and no load reading against it. Small lock, no I/O: the arm
@@ -542,6 +634,7 @@ class H2M:
         )
         contract.route = shaping.route
         contract.applied_rules = list(shaping.applied)
+        self.learner.note_applied(list(shaping.applied), tags)  # "rule 1 applied · liquid"
         contract.speed = min(contract.speed, shaping.speed_cap)
         if shaping.grip_cap < 1.0:
             ceiling = float(obj.get("max_grip", 1.0)) * shaping.grip_cap
@@ -599,6 +692,9 @@ class H2M:
         )
         contract.route = shaping.route
         contract.applied_rules = list(shaping.applied)
+        self.learner.note_applied(
+            list(shaping.applied), tags_for(held.object_id, self.routes, self.catalog)
+        )
         contract.speed = min(contract.speed, shaping.speed_cap)
         if shaping.problem is not None:
             return shaping.problem
@@ -646,6 +742,13 @@ class H2M:
             pending = self.pending
             proposal = self.learner.proposal
         if parsed.verb is Verb.CONFIRM:
+            if meta.get("asked_by"):
+                # Diarized as someone other than the wearer: only the wearer answers.
+                self.log.emit(
+                    "speech.confirm_rejected", reason="not the wearer", asked_by=meta["asked_by"]
+                )
+                self.reply = f"{meta['asked_by']} said yes; waiting for you."
+                return
             if pending is not None and proposal is not None:
                 self.log.emit("speech.ambiguous", reason="a request and a rule are both waiting")
                 self.reply = "Do you mean the request or the rule? Click the one you mean."
@@ -1012,6 +1115,7 @@ class H2M:
         with self._lock:
             self.pending = None
             self._handover_job = None  # stage 2 never follows a stop
+            self._grasp_job = None
             self._release_offer = None
             self._epoch += 1
         self.arm.stop(reason)
@@ -1024,6 +1128,7 @@ class H2M:
             had = self.pending is not None
             self.pending = None
             self._handover_job = None
+            self._grasp_job = None
             self._release_offer = None
             self._epoch += 1
         self.arm.disarm()
@@ -1039,7 +1144,7 @@ class H2M:
 
     def _release_state_problem(self) -> str | None:
         """Why no release may start now (app state only), or None."""
-        if self._in_flight > 0 or self._handover_job is not None:
+        if self._in_flight > 0 or self._handover_job is not None or self._grasp_job is not None:
             return "a request is in flight; stop first"
         state = self.arm.state
         if state is not ArmState.READY:
@@ -1333,14 +1438,14 @@ class H2M:
                     effort = float(self.safety_cfg.get("default_grip", 0.5))
                 ceiling = float(self.catalog.get(contract.object_id or "", {}).get("max_grip", 1.0))
                 grip = arm.grip_for(min(effort, SKILL_GRIP_MAX), ceiling)
-                close_pct = grip.close_pct
+                close_pct = self._touch_close_pct(slot, grip)
                 meta["requested_effort"] = round(effort, 3)
             meta["skill_name"] = skill.name
             meta["closes"] = skill.closes
             last_jaw = next((st.gripper for st in reversed(skill.steps) if st.gripper), None)
             meta["releases"] = last_jaw == "open"
             try:
-                plan = plan_skill(arm.poses, skill, arm.settings.gripper_open, close_pct, slot)
+                plan = plan_skill(arm.poses, skill, self._slot_open_pct(slot), close_pct, slot)
             except KeyError as exc:
                 return False, f"skill {skill.name} uses an undefined pose {exc}"
         elif contract.verb is Verb.MOVE:
@@ -1366,7 +1471,9 @@ class H2M:
             ceiling = float(self.catalog.get(contract.object_id or "", {}).get("max_grip", 1.0))
             grip = arm.grip_for(effort, ceiling)
             meta["requested_effort"] = round(effort, 3)
-            plan = plan_move(arm.poses, slot, dest, arm.settings.gripper_open, grip.close_pct, via)
+            plan = plan_move(
+                arm.poses, slot, dest, self._slot_open_pct(slot), self._touch_close_pct(slot, grip), via
+            )
         elif contract.verb not in (Verb.POINT, Verb.PICK_PLACE):
             return False, f"{contract.verb} is not a motion"
         else:
@@ -1392,16 +1499,34 @@ class H2M:
                 ceiling = float(self.catalog.get(contract.object_id or "", {}).get("max_grip", 1.0))
                 grip = arm.grip_for(effort, ceiling)
                 meta["requested_effort"] = round(effort, 3)
-                plan = plan_pick_place(
-                    arm.poses, slot, arm.settings.gripper_open, grip.close_pct, via
-                )
+                if self.grasp_cfg.sam_width is True:
+                    # Two stages like the handover: the approach to slot.above now, the
+                    # grasp once SAM has measured the object from there (_continue_grasp).
+                    plan = plan_pick_approach(arm.poses, slot, self._tray_open_pct(slot))
+                    meta["phase"] = APPROACH
+                    grip = None  # the close is set by stage 2
+                else:
+                    plan = plan_pick_place(
+                        arm.poses, slot, arm.settings.gripper_open,
+                        self._touch_close_pct(slot, grip), via,
+                        grasp_open_pct=self._tray_open_pct(slot),
+                    )
         tags = tags_for(contract.object_id, self.routes, self.catalog)
-        self.learner.set_active({**meta, "object_name": contract.object_name, "tags": tags})
+        self.learner.set_active({
+            **meta, "object_name": contract.object_name, "tags": tags,
+            "slot_id": decision.slot_id,
+        })
         if epoch is None:
             epoch = self._epoch
+        two_stage = contract.verb is Verb.PICK_PLACE and meta.get("phase") == APPROACH
         if contract.verb is Verb.PLACE_NEAR_USER:
             with self._lock:  # set before the start: arrival may come on the next tick
                 self._handover_job = (contract, epoch, arm.arm_count)
+        elif two_stage:
+            with self._lock:
+                self._grasp_job = GraspJob(
+                    contract, decision, dict(meta), epoch, arm.arm_count, effort, via
+                )
         ok, reason = arm.execute(
             plan, meta, grip, speed=contract.speed, still_wanted=lambda: not self._stale(epoch)
         )
@@ -1409,6 +1534,9 @@ class H2M:
             if contract.verb is Verb.PLACE_NEAR_USER:
                 with self._lock:
                     self._handover_job = None
+            elif two_stage:
+                with self._lock:
+                    self._grasp_job = None
             self.log.emit("intent.blocked", reason=reason, contract_id=contract.id)
         elif contract.verb is Verb.SKILL and (line := self.embodied.skills[contract.utterance].say):
             self._say(line)  # gated speech only; the plan is already running
@@ -1437,6 +1565,194 @@ class H2M:
             self._say(
                 f"I'm holding the {name} above the spot: {why}. Say go home to bring it back."
             )
+
+    # ── pick stage 2: the measured grasp (grasp.sam_width) ───────────────────
+    def _continue_grasp(self, contract_id: Any, arrived_t: float) -> None:
+        """Stage 1 arrived at ``slot.above``. Measure the object from there, rebuild the
+        pick with the clamped opening and roll, and run it, only if the request, the arm's
+        arming and the gate's decision are all still the ones stage 1 started under.
+        Runs on its own thread: never on the control thread, never under the arm lock,
+        and a stop does not wait for it."""
+        with self._lock:
+            job, self._grasp_job = self._grasp_job, None
+            if job is None or job.contract.id != contract_id:
+                return
+            self._in_flight += 1  # same section as the pop: a brace in between still stops
+        try:
+            ok, why = self._grasp_lower(job, arrived_t)
+        finally:
+            with self._lock:
+                self._in_flight -= 1
+        if not ok:
+            self.log.emit("intent.blocked", reason=why, contract_id=job.contract.id)
+            if not self._stale(job.epoch):
+                name = job.contract.object_name or "it"
+                self._say(f"I stopped above the {name}: {why}. Say go home to bring me back.")
+
+    def _grasp_gate(self, job: GraspJob) -> tuple[Decision, str]:
+        """The gate's answer for the same request now that the arm is above the slot, and
+        why it no longer stands ("" if it does). The request was confirmed (or approved) as
+        stage 1's decision, so the new decision must be that verdict or better (an ask a person
+        already answered counts as met), with the same checks and slot. The object under the arm may be hidden from the overhead camera, so
+        its visibility is carried over from stage 1."""
+        cfg = {**self.safety_cfg, "always_confirm": False, "auto_approve": 0.0}
+        world = self._world(job.contract)
+        world["target_visible"] = job.decision.checks.get("target_visible", True)
+        decision = decide(job.contract, world, cfg)
+        allowed = {Verdict.APPROVE, job.decision.verdict}
+        if job.meta.get("confirmed_by") != "auto":
+            allowed.add(Verdict.ASK)  # a person already answered the question it asks
+        if decision.verdict not in allowed:
+            return decision, decision.reason
+        if decision.slot_id != job.decision.slot_id:
+            return decision, "the target slot changed"
+        if decision.checks != job.decision.checks:
+            return decision, "the checks changed while I approached"
+        return decision, ""
+
+    def _grasp_lower(self, job: GraspJob, arrived_t: float) -> tuple[bool, str]:
+        contract, arm = job.contract, self.arm
+        raw = self.cfg.get("grasp") or {}
+        deadline = now() + float(raw.get("recheck_s", 2.0))
+
+        def wanted() -> bool:  # no cancel, stop, brace or disarm, and not re-armed since
+            return not self._stale(job.epoch) and arm.arm_count == job.armed
+
+        while True:  # the arm is READY a tick after its completed event
+            if not wanted():
+                return False, "the request was cancelled"
+            decision, why = self._grasp_gate(job)
+            if not why:
+                break
+            if now() >= deadline:
+                self._publish(contract, decision, stage="grasp")
+                return False, why
+            time.sleep(0.05)
+        slot = arm.poses.slots.get(job.decision.slot_id or "")
+        if slot is None:
+            return False, "no reachable slot"
+        ceiling = float(self.catalog.get(contract.object_id or "", {}).get("max_grip", 1.0))
+        params = self._measure_grasp(contract, slot, arrived_t, ceiling)
+        if params is not None and params.source == "sam":
+            grasp_open, grasp_roll = params.open_pct, params.roll_deg
+        else:  # the taught plan, exactly as without grasp.sam_width
+            grasp_open, grasp_roll = self._tray_open_pct(slot), None
+        if params is not None:
+            ceiling = min(ceiling, params.close_cap)
+        grip = arm.grip_for(job.effort, ceiling)
+        try:
+            plan = plan_pick_place(
+                arm.poses, slot, arm.settings.gripper_open, grip.close_pct, job.via,
+                grasp_open_pct=grasp_open,
+                grasp_roll_deg=grasp_roll,
+                roll_envelope_deg=self.grasp_cfg.roll_envelope_deg,
+            )
+        except (KeyError, ValueError) as exc:  # PoseError is a ValueError
+            return False, f"could not plan the grasp: {exc}"
+        self._grasp_chip = {
+            "text": params.chip if params else "taught",
+            "source": params.source if params else "fallback",
+            "width_mm": params.width_mm if params else None,
+            "open_pct": round(grasp_open, 1),
+            "roll_deg": grasp_roll,
+            "close_cap": round(ceiling, 3),
+            "object_id": contract.object_id,
+            "t": round(now(), 3),
+        }
+        self.log.emit("grasp.params", contract_id=contract.id, **self._grasp_chip)
+        if not wanted():
+            return False, "the request was cancelled"
+        decision, why = self._grasp_gate(job)  # once more, right before it moves
+        if why:
+            self._publish(contract, decision, stage="grasp")
+            return False, why
+        self._publish(contract, decision, stage="grasp")
+        meta = {k: v for k, v in job.meta.items() if k != "phase"}
+        meta["grasp_open_pct"] = round(grasp_open, 1)
+        meta["grasp_roll_deg"] = grasp_roll
+        meta["requested_effort"] = round(job.effort, 3)
+        return arm.execute(
+            plan, meta, grip, speed=contract.speed, still_wanted=wanted
+        )
+
+    def _measure_grasp(
+        self, contract: StepContract, slot: Any, arrived_t: float, catalog_max_grip: float
+    ) -> GraspParams | None:
+        """Opening, roll and close cap for this pick from one SAM call and one profile
+        classification. Any failure (no key, no frame, timeout, no match, no homography)
+        leaves the measurement out and gives the taught values; None only when even that
+        cannot be built (the caller then runs the taught plan)."""
+        cfg, raw = self.grasp_cfg, self.cfg.get("grasp") or {}
+        taught_roll = slot.grasp.joints["wrist_roll"]
+        taught_open = self._slot_open_pct(slot)
+        width = roll = None
+        profile = "unknown"
+        try:
+            frame = self._grasp_frame(arrived_t, float(raw.get("frame_wait_s", 1.0)))
+            profile = self._grasp_profile(contract)
+            muse = self.learner.muse
+            homography = self.vision.homography if self.vision is not None else None
+            if frame is not None and muse is not None and homography is not None:
+                found = muse.segment_mask(
+                    muse.sam_model, frame, contract.object_name,
+                    timeout=float(raw.get("sam_timeout_s", 2.0)),
+                )
+                if found is not None:
+                    box, polygon = found
+                    if cfg.roll_sign_verified is True and polygon is not None:
+                        axis = roll_from_mask(to_table(polygon, homography), cfg.round_aspect)
+                        roll = roll_for_axis(
+                            axis, cfg.jaw_axis_deg.get(slot.slot_id), taught_roll, cfg.roll_sign
+                        )
+                    width = width_across_jaws(
+                        polygon if polygon is not None else box,
+                        homography, slot.slot_id, taught_roll, roll, cfg,
+                    )
+        except Exception as exc:  # noqa: BLE001  # a measurement never stops a pick; it falls back
+            self.log.emit("grasp.error", reason=type(exc).__name__, contract_id=contract.id)
+            width = roll = None
+        try:
+            return grasp_params(
+                width, roll, taught_roll, profile, cfg, self.jaw_cal,
+                catalog_max_grip=catalog_max_grip, taught_open_pct=taught_open,
+            )
+        except ValueError:
+            return None
+
+    def _grasp_frame(self, arrived_t: float, wait_s: float) -> Any:
+        """An overhead frame taken after the arm arrived (the arm is above the slot now),
+        waiting up to ``wait_s`` for one; None if there is none."""
+        if self.vision is None:
+            return None
+        end = now() + wait_s
+        while True:
+            item = self.vision.scene.latest()
+            if item is not None and item[1] > arrived_t:
+                return item[0]
+            if now() >= end:
+                return None
+            time.sleep(0.05)
+
+    def _grasp_profile(self, contract: StepContract) -> str:
+        """Muse Spark's grip profile for the target (rigid / fragile / liquid), cached per
+        object. ``unknown`` (no model, no frame, an error, an unclear reply) is not cached
+        and takes the softest cap."""
+        oid = contract.object_id or ""
+        cached = self._grasp_profiles.get(oid)
+        if cached is not None:
+            return cached
+        if self.llm is None or self.vision is None:
+            return "unknown"
+        jpeg = self.vision.scene.jpeg()
+        if jpeg is None:
+            return "unknown"
+        try:
+            profile = self.llm.classify_profile(contract.object_name or oid, jpeg)
+        except Exception:  # noqa: BLE001
+            return "unknown"
+        if profile in ("rigid", "fragile", "liquid") and oid:
+            self._grasp_profiles[oid] = profile
+        return profile
 
     def _handover_world(self, contract: StepContract, arrived_t: float) -> dict[str, Any]:
         """Gate facts for lowering onto the spot (the arm is above it now)."""
@@ -1588,6 +1904,7 @@ class H2M:
         if (
             self._in_flight > 0
             or self._handover_job is not None
+            or self._grasp_job is not None
             or arm.state is ArmState.MOVING
             or arm.releasing
         ):
@@ -1626,6 +1943,8 @@ class H2M:
         if rearmed:
             self.ranker.cancel()
         self._emit_selection(events)
+        if blocked is None and self.proactive is not None:
+            self.proactive.tick(state)  # veto rings and pre-approved routines (h2m/proactive.py)
         if blocked is not None or not self.selection.wants_menu(now()):
             return
         cards, source, gen = self._selection_cards(state)
@@ -1661,6 +1980,9 @@ class H2M:
             rules = []  # context only; the gate still enforces whatever is stored
         head = getattr(self.vision, "head_third", None)
         table_x = self.selection_cfg.get("table_x")
+        extra, call_for, context = (
+            self.proactive.extras(state) if self.proactive is not None else ([], "rank", None)
+        )
         gen, first = self.ranker.request(
             scene,
             self.selection.recent_history(),
@@ -1675,7 +1997,12 @@ class H2M:
             table_x=tuple(table_x) if isinstance(table_x, (list, tuple)) and len(table_x) == 2
             else None,
             deadline_s=float(self.selection_cfg.get("deadline_s", 2.5)),
+            extra=extra,
+            context=context,
+            call_for=call_for,
         )
+        if self.proactive is not None:
+            self.proactive.remember(first.candidates)
         return first.candidates, "fallback", gen
 
     def _card_reachable(self, entry: Any) -> bool:
@@ -1837,7 +2164,7 @@ class H2M:
     def _accept_card(self, ticket: Ticket, epoch: int) -> tuple[bool, str]:
         """Run a taken card through the same path as any tool request, then answer the
         question it raised with this accept. Never on the EMG or event thread."""
-        by = "twitch" if ticket.by == "twitch" else "ui_card"
+        by = ticket.by if ticket.by in ("twitch", VETO_WINDOW) else "ui_card"
         self._tls.epoch = epoch  # _set_pending drops the request if anything bumped since
         try:
             ok, why, motion, answered = self._run_card(ticket, epoch, by)
@@ -1882,7 +2209,10 @@ class H2M:
             pending = self.pending
         if pending is None or pending.contract is not contract:
             return False, self.reply or result.decision.reason, False, False
-        if pending.decision.reason != CONFIRM or pending.decision.clarify:
+        plain = {CONFIRM}
+        if contract.verb is Verb.SKILL:  # the card named the skill: its plain question is "<skill>? confirm"
+            plain.add(f"{contract.utterance.replace('_', ' ')}? {CONFIRM}")
+        if pending.decision.reason not in plain or pending.decision.clarify:
             return True, pending.decision.reason, True, False  # waits for its own answer
         self._tls.popped = None
         ok, why = self.confirm(by=by, expected=pending)
@@ -2057,12 +2387,20 @@ class H2M:
                     name="h2m-handover",
                     daemon=True,
                 ).start()
+            elif data.get("verb") == str(Verb.PICK_PLACE) and data.get("phase") == APPROACH:
+                threading.Thread(  # the pick's measured-grasp stage 2, same reasons
+                    target=self._continue_grasp,
+                    args=(data.get("contract_id"), event.t),
+                    name="h2m-grasp",
+                    daemon=True,
+                ).start()
         elif event.kind == "arm.gripper_released":
             self.gripper.released_by_operator()  # the measured opening reached open
         elif event.kind in ("arm.stopped", "arm.fault"):
             # Emitted after the freeze write, under the arm lock: plain assignments (no app
             # lock) void stage 2 and any release offer; the tracker takes its own lock.
             self._handover_job = None
+            self._grasp_job = None
             self._release_offer = None
             self.gripper.interrupted(
                 event.data.get("stage"), event.kind == "arm.fault", str(event.data.get("reason"))
@@ -2207,6 +2545,8 @@ class H2M:
                 "incident.saved",
                 "incident.explained",
                 "incident.error",
+                "incident.tool",
+                "incident.investigated",
                 "rule.approved",
                 "rule.rejected",
                 "rule.expired",
@@ -2234,9 +2574,21 @@ class H2M:
                 "selection.error",
                 "task.completed",
                 "task.abandoned",
+                "grasp.params",
+                "grasp.error",
+                "vision.scan",
+                "selection.auto_started",
+                "selection.auto_cancelled",
+                "routine.proposed",
+                "routine.announced",
+                "routine.auto_run",
+                "routine.refused",
+                "routine.done",
+                "sound.event",
+                "scene.event",
             },
         )
-        return {
+        out = {
             "t": round(now(), 3),
             "arm": self.arm.snapshot(),
             "emg": self.emg.snapshot() if self.emg else None,
@@ -2250,6 +2602,7 @@ class H2M:
                 "frame_size": None,
             },
             "speech": self.speech.snapshot() if self.speech else None,
+            "transcript": self.speech.transcript() if self.speech else None,
             "llm": {
                 "enabled": bool(self.llm),
                 "model": self.llm.model if self.llm else None,
@@ -2272,6 +2625,13 @@ class H2M:
             "last": self.last,
             "reply": self.reply,
             "learning": {**self.learner.snapshot(), "routes_error": self.routes_error},
+            "grasp": {
+                "enabled": self.grasp_cfg.sam_width is True,
+                "calibrated": self.jaw_cal.calibrated is True,
+                "chip": (self._grasp_chip or {}).get("text"),
+                "last": self._grasp_chip,
+                "error": self.grasp_error,
+            },
             "operator_release": self._release_snapshot(),
             "selection": self.selection_snapshot(),
             "session": self.recorder.snapshot(),
@@ -2280,4 +2640,41 @@ class H2M:
                 for o in self.cfg.get("objects", [])
             ],
             "events": [e.as_dict() for e in events],
+            **self._scene_fields(),
+        }
+        return self._with_proactive(out)
+
+    def _with_proactive(self, out: dict[str, Any]) -> dict[str, Any]:
+        """Additive snapshot fields from the proactive layer (UI_RUNTIME_FIELDS.md):
+        ``context`` (the packet, with ``lit``), ``scene.packet`` (merged into whatever
+        ``scene`` another sensor published), ``calls``, ``quiet``, ``routines``."""
+        if self.proactive is None:
+            return out
+        try:
+            fields = self.proactive.snapshot_fields(now(), out)
+        except Exception as exc:  # noqa: BLE001  # the snapshot must always render
+            out["proactive"] = {"error": type(exc).__name__}
+            return out
+        calls = [*(out.get("calls") or []), *(fields.get("calls") or [])]  # vision, speech, Wonder, Spark
+        out.update(fields)
+        out["calls"] = calls[-24:]
+        scene = out.get("scene")
+        out["scene"] = {**(scene if isinstance(scene, dict) else {}), "packet": fields["context"]}
+        return out
+
+    def _scene_fields(self) -> dict[str, Any]:
+        """Additive snapshot fields for the Card and Context views (docs/UI_RUNTIME_FIELDS.md):
+        ``scene`` = {masks, scan_age_s, scan_ms, stale, limit_s} from the SAM 3.1 scans and
+        ``calls`` = [{model: "sam-3.1", for: "scan", ms}], newest last. None / [] without a camera."""
+        scene_fn = getattr(self.vision, "scene_snapshot", None)
+        calls_fn = getattr(self.vision, "calls", None)
+        calls = list(calls_fn()) if callable(calls_fn) else []
+        if self.speech is not None:
+            # {model: "muse-voice-transcribe-1.0", for: "speech", ms}, one per final utterance
+            calls.extend(self.speech.calls())
+            calls.sort(key=lambda c: c.get("t") or 0)
+        return {
+            "scene": scene_fn() if callable(scene_fn) else None,
+            # plus the learner's Muse Wonder / SAM calls from the investigation tool loop
+            "calls": (calls + self.learner.snapshot()["calls"])[-24:],
         }

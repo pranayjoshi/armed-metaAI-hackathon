@@ -92,7 +92,7 @@ CALIB = {"phase": "rest", "windows": []}  # what EmgService.calibrate sets while
 
 
 def test_brace_and_open_hand_are_not_detected_while_calibrating(monkeypatch):
-    """Port of the re-review repro: why a calibration must count as not live."""
+    """Re-review repro: why a calibration must count as not live."""
     from tests.test_brace import Rig
 
     r = Rig(monkeypatch)

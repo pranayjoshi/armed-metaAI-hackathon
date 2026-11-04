@@ -53,6 +53,22 @@ question in one or two short spoken sentences. Describe only what is visible in 
 If you cannot tell, say so."""
 
 
+PROFILE_SYSTEM = """You look at a photo of a tabletop robot workspace and classify ONE named object
+for the gripper. Reply with ONLY one word: rigid (hard, holds its shape: a phone, a box, a
+metal tool), fragile (can be crushed or broken: paper, a thin cup, glass, food), liquid (holds
+liquid that can spill: a mug, a bottle, a jar of liquid), or unknown if you cannot tell."""
+PROFILE_WORDS = ("rigid", "fragile", "liquid")
+
+
+def parse_profile(text: Any) -> str:
+    """The one profile word of a reply; anything else (two words, none, not a string) is
+    ``unknown``, the softest cap, so a rambling reply can never pick a firmer grip."""
+    if not isinstance(text, str):
+        return "unknown"
+    found = {w for w in PROFILE_WORDS if re.search(rf"\b{w}\b", text.lower())}
+    return found.pop() if len(found) == 1 else "unknown"
+
+
 @dataclass
 class ToolReply:
     calls: list[tuple[str, Any]]  # (tool name, raw arguments): untrusted, validated later
@@ -62,7 +78,7 @@ class ToolReply:
 class MuseCompiler:
     def __init__(self, cfg: dict[str, Any]):
         self.base_url = cfg.get("base_url", "https://api.meta.ai/v1").rstrip("/")
-        self.model = cfg.get("model", "muse-spark-1.1")
+        self.model = cfg.get("model", "muse-spark-1.3")
         self.timeout = float(cfg.get("timeout_s", 4.0))
         self.send_image = bool(cfg.get("send_image", True))
         self.key = os.environ.get("MODEL_API_KEY", "")
@@ -188,6 +204,24 @@ class MuseCompiler:
             return str(self._post(body).get("content") or "").strip()
         finally:
             self.last_ms = round((time.monotonic() - started) * 1000)
+
+    def classify_profile(self, name: str, jpeg: bytes) -> str:
+        """Grip profile of the object called ``name`` in one frame: rigid, fragile, liquid
+        or unknown (``parse_profile``). Raises on a transport failure (the caller treats it
+        as unknown)."""
+        body = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": PROFILE_SYSTEM},
+                {
+                    "role": "user",
+                    "content": self._content(f"Object: {name}", jpeg, force_image=True),
+                },
+            ],
+            "temperature": 0,
+            "max_tokens": 20,
+        }
+        return parse_profile(self._post(body).get("content"))
 
     def _content(
         self, text: str, jpeg: bytes | None, force_image: bool = False

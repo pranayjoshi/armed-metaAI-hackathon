@@ -15,7 +15,7 @@ a route cannot use that route when a rule needs proving. Polylines carry a
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -23,7 +23,19 @@ from typing import Any
 import yaml
 
 from h2m.core import clamp
-from h2m.rules import Point, Rule, RulesUnavailable, Zone, _zone_ok, choose_route, matching_rules
+from h2m.rules import (
+    Permitted,
+    Point,
+    Rule,
+    RulesUnavailable,
+    Zone,
+    _zone_ok,
+    choose_route,
+    crosses,
+    is_restrictive,
+    matching_rules,
+    permitted_options,
+)
 
 MIN_SPEED = 0.1  # a slow_down cap below this would stall the arm into a timeout fault
 
@@ -303,3 +315,190 @@ def tags_for(
     tags = list(routes.tags.get(object_id, [])) if routes else []
     tags += [str(t) for t in (catalog.get(object_id, {}).get("tags") or []) if t not in tags]
     return tags
+
+
+# ── the checker (docs/ARMED_IDEA.md section 4: "proven monotone, replayed against the incident")
+
+
+@dataclass(frozen=True)
+class Checks:
+    """The two ticks on a proposed rule. ``restrictive``: the permitted set of
+    (route, speed cap, grip cap) over every catalog object and pick slot shrank or
+    stayed equal, never grew. ``prevented``: the incident's carry, replayed through
+    ``plan_carry`` with the proposed rule, no longer crosses the zone the
+    investigation named (or the cap applies, or the carry holds)."""
+
+    restrictive: bool
+    prevented: bool
+    detail: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def ok(self) -> bool:
+        return self.restrictive and self.prevented
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"restrictive": self.restrictive, "prevented": self.prevented,
+                "detail": dict(self.detail)}
+
+    def problems(self) -> list[str]:
+        out = []
+        if not self.restrictive:
+            out.append(f"checker: not restrict-only ({self.detail.get('restrictive', '')})")
+        if not self.prevented:
+            out.append(f"checker: incident not prevented ({self.detail.get('prevented', '')})")
+        return out
+
+
+def _candidates(routes: RouteConfig, executable: Collection[str], slot_id: str | None):
+    return {
+        n: per[slot_id]
+        for n, per in routes.routes.items()
+        if n in executable and slot_id is not None and slot_id in per
+    }
+
+
+def permitted_table(
+    routes: RouteConfig,
+    rules: Sequence[Rule],
+    executable: Collection[str],
+    objects_tags: Mapping[str, Sequence[str]],
+    slow_speed: float = 0.5,
+    gentle_grip: float = 0.6,
+) -> dict[tuple[str, str], Permitted]:
+    """The permitted set of every (catalog object, pick slot) carry under ``rules``."""
+    slots = sorted({slot for per in routes.routes.values() for slot in per})
+    table: dict[tuple[str, str], Permitted] = {}
+    for obj, tags in objects_tags.items():
+        for slot in slots:
+            table[(obj, slot)] = permitted_options(
+                tags, _candidates(routes, executable, slot), routes.zones, rules,
+                routes.high_routes, clamp(slow_speed, MIN_SPEED, 1.0),
+                clamp(gentle_grip, 0.0, 1.0),
+            )
+    return table
+
+
+def check_proposal(
+    rule: Rule,
+    rules: Sequence[Rule],
+    routes: RouteConfig | None,
+    executable: Collection[str],
+    objects_tags: Mapping[str, Sequence[str]],
+    held_tags: Sequence[str],
+    slot_id: str | None,
+    old_route: str | None = None,
+    avoid: str | None = None,
+    slow_speed: float = 0.5,
+    gentle_grip: float = 0.6,
+) -> Checks:
+    """Both ticks for ``rule`` (taken as approved for the replay). Pure. ``old_route``
+    is the route the incident's carry was on; ``avoid`` the zone the investigation
+    named (defaults to the rule's). Fails closed: no route map = both ticks false."""
+    if routes is None:
+        return Checks(False, False, {"restrictive": "no route map", "prevented": "no route map"})
+    approved = [r for r in rules if r.approved and r.id != rule.id]
+    proposed = replace(rule, approved=True)
+    before = permitted_table(routes, approved, executable, objects_tags, slow_speed, gentle_grip)
+    after = permitted_table(
+        routes, [*approved, proposed], executable, objects_tags, slow_speed, gentle_grip
+    )
+    restrictive, r_detail = is_restrictive(before, after)
+    zone_name = avoid or rule.avoid
+    zone = routes.zones.get(zone_name)
+    held_str = ", ".join(held_tags) or "no tags"
+    if not matching_rules(held_tags, [proposed]):
+        return Checks(restrictive, False, {
+            "restrictive": r_detail,
+            "prevented": f"the rule needs {', '.join(rule.when_holding)}; what was held "
+                         f"carried {held_str}, so the incident would recur",
+        })
+    shaping = plan_carry(
+        held_tags, [*approved, proposed], routes, executable, slow_speed, gentle_grip,
+        slot_id=slot_id,
+    )
+    if shaping.problem is not None:
+        return Checks(restrictive, True, {
+            "restrictive": r_detail,
+            "prevented": "every route is removed: the carry would hold and ask",
+        })
+    candidates = _candidates(routes, executable, slot_id)
+    if rule.response in ("route_around", "lift_higher"):
+        if zone is None:
+            return Checks(restrictive, False, {
+                "restrictive": r_detail, "prevented": f"unknown zone {zone_name!r}"
+            })
+        old_poly = candidates.get(old_route or "")
+        if old_poly is not None and not crosses(old_poly, zone):
+            return Checks(restrictive, False, {
+                "restrictive": r_detail,
+                "prevented": f"the {old_route} route never crosses the {zone_name} as mapped; "
+                             "the rule would not change this carry",
+            })
+        new_poly = candidates.get(shaping.route or "")
+        if new_poly is None:
+            return Checks(restrictive, False, {
+                "restrictive": r_detail,
+                "prevented": f"no polyline for {shaping.route} from {slot_id}",
+            })
+        clear = not crosses(new_poly, zone)
+        what = f"{shaping.route} from {slot_id}"
+        return Checks(restrictive, clear, {
+            "restrictive": r_detail,
+            "prevented": f"{what} clears the {zone_name}" if clear
+            else f"{what} still crosses the {zone_name}",
+        })
+    if rule.response == "slow_down":
+        ok = shaping.speed_cap < 1.0
+        note = ""
+        if zone is not None and shaping.route in candidates and crosses(candidates[shaping.route], zone):
+            note = f"; the {shaping.route} route still passes the {zone_name}, slower"
+        return Checks(restrictive, ok, {
+            "restrictive": r_detail,
+            "prevented": f"speed capped at {round(shaping.speed_cap * 100)}%{note}" if ok
+            else "no speed cap applied",
+        })
+    ok = shaping.grip_cap < 1.0
+    return Checks(restrictive, ok, {
+        "restrictive": r_detail,
+        "prevented": f"grip capped at {round(shaping.grip_cap * 100)}% of the object's maximum"
+        if ok else "no grip cap applied",
+    })
+
+
+def rehearsal_routes(
+    routes: RouteConfig | None, slot_id: str | None, old_route: str | None, new_route: str | None
+) -> dict[str, Any]:
+    """The twin's picture: the incident's polyline and the proposed one from the same
+    pick slot, in table coordinates, with whether they were measured or are placeholders."""
+    out: dict[str, Any] = {"old_route": None, "new_route": None,
+                           "source": {"file": "configs/routes.yaml", "measured": False}}
+    if routes is None or slot_id is None:
+        return out
+    measured = True
+    for key, name in (("old_route", old_route), ("new_route", new_route)):
+        per = routes.routes.get(name or "")
+        if per and slot_id in per:
+            out[key] = [[round(x, 4), round(y, 4)] for x, y in per[slot_id]]
+            out[f"{key}_name"] = name
+            measured = measured and (name, slot_id) not in routes.unmeasured
+    out["source"]["measured"] = bool(measured and (out["old_route"] or out["new_route"]))
+    return out
+
+
+def applied_detail(
+    applied: Sequence[str], rules: Sequence[Rule], held_tags: Sequence[str]
+) -> list[dict[str, Any]]:
+    """Why each applied rule applied: its 1-based index in the store, the held tags
+    that matched it, and what it does. For the stage view's "rule 1 applied - liquid"."""
+    held = set(held_tags)
+    by_id = {r.id: (i + 1, r) for i, r in enumerate(rules)}
+    out = []
+    for rid in applied:
+        if rid not in by_id:
+            continue
+        index, r = by_id[rid]
+        out.append({
+            "id": r.id, "index": index, "tags": [t for t in r.when_holding if t in held],
+            "response": r.response, "avoid": r.avoid,
+        })
+    return out

@@ -1,4 +1,4 @@
-"""Replay mode and the scripted software demo (REFLEX_BUILD_PLAN item 0), on the virtual
+"""Replay mode and the scripted software demo, on the virtual
 arm. Covers: replay is read-only (no actuation route exists, with or without the token)
 and keeps the local-API rules; recordings are labelled by provenance and a missing
 explanation is shown as canned, never as model output; the scripted scenario runs only
@@ -377,7 +377,7 @@ def test_scenario_plays_the_whole_story(full_run):
 def test_scenario_used_only_its_own_stores_and_the_canned_client(full_run):
     sc, _, _, work = full_run
     h = sc.h2m
-    assert h.learner.muse.calls == 1 and h.llm is None
+    assert h.learner.muse.calls == h.learner.muse.turns >= 1 and h.llm is None
     assert Path(h.rules.path).is_relative_to(work) and h.learner.root.is_relative_to(work)
     assert h.emg.profile.name == "synthetic-sim" and h.arm.backend.is_hardware is False
     inc = load_incident(work / "incidents" / sc.incident_id)
@@ -452,3 +452,6 @@ def test_scenario_close_stops_its_threads(tmp_path):
     thread.join(10)
     assert not thread.is_alive() and sc.h2m is None
     assert threading.active_count() < 50
+
+# added alongside today's changes
+ZONES, TAGS = ["laptop"], ["fragile", "liquid"]

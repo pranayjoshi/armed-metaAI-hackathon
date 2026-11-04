@@ -10,7 +10,7 @@ import pytest
 
 from h2m import intent as intent_mod
 from h2m.contract import StepContract, Verb
-from h2m.head import head_third, landmarks_to_yaw, third_of_x, yaw_to_third
+from h2m.head import face_centre_x, face_third, third_of_x
 from h2m.intent import (
     DEFAULT_MODEL,
     IntentRanker,
@@ -60,30 +60,31 @@ def ids(cands):
     return [c.id for c in cands]
 
 
-# ── head direction ─────────────────────────────────────────────────────────────
+# ── head direction (from the SAM 3.1 face mask) ──────────────────────────────
 
 
-def face(nose_x, left=0.4, right=0.6):
-    return {1: {"x": nose_x, "y": 0.5, "z": 0}, 234: {"x": left, "y": 0.5}, 454: {"x": right, "y": 0.5}}
+def face(centre_x, half=0.08):
+    """A face box centred at ``centre_x`` in normalized image coordinates."""
+    return [centre_x - half, 0.3, centre_x + half, 0.6]
 
 
 def test_head_centre_left_right():
-    assert head_third(face(0.5)) == "centre"
-    assert head_third(face(0.58)) == "right"
-    assert head_third(face(0.42)) == "left"
+    assert face_third(face(0.5)) == "centre"
+    assert face_third(face(0.8)) == "right"
+    assert face_third(face(0.2)) == "left"
 
 
-def test_head_invert_and_offset():
-    assert head_third(face(0.58), invert=True) == "left"
-    yaw = landmarks_to_yaw(face(0.58))
-    assert yaw is not None and yaw > 15
-    assert yaw_to_third(yaw, offset_deg=yaw) == "centre"
+def test_head_invert():
+    assert face_third(face(0.8), invert=True) == "left"
+    assert face_third(face(0.2), invert=True) == "right"
 
 
-def test_head_accepts_sequence_landmarks():
-    pts = [{"x": 0.0, "y": 0.0}] * 468
-    pts[1], pts[234], pts[454] = {"x": 0.5, "y": 0.5}, {"x": 0.4, "y": 0.5}, {"x": 0.6, "y": 0.5}
-    assert head_third(pts) == "centre"
+def test_head_accepts_an_outline_and_a_mask_dict():
+    outline = [[0.42, 0.3], [0.58, 0.3], [0.58, 0.6], [0.42, 0.6]]
+    assert face_third(outline) == "centre"
+    assert face_third({"phrase": "face", "polygon": outline}) == "centre"
+    assert face_third({"phrase": "face", "bbox": face(0.85)}) == "right"
+    assert face_centre_x(outline) == pytest.approx(0.5)
 
 
 @pytest.mark.parametrize(
@@ -92,28 +93,24 @@ def test_head_accepts_sequence_landmarks():
         None,
         {},
         "face",
-        {1: {"x": 0.5, "y": 0.5}},  # no cheeks
-        face(0.5, left=0.5, right=0.5),  # zero width
-        face(0.5, left=0.6, right=0.4),  # inverted order
-        face(float("nan")),
-        {1: {"x": True, "y": 0}, 234: {"x": 0.4, "y": 0}, 454: {"x": 0.6, "y": 0}},
-        {1: {"x": "0.5", "y": 0}, 234: {"x": 0.4, "y": 0}, 454: {"x": 0.6, "y": 0}},
+        [0.5, 0.5],  # too short
+        [0.6, 0.3, 0.4, 0.6],  # inverted order
+        [float("nan"), 0.3, 0.5, 0.6],
+        [True, 0.3, 0.5, 0.6],
+        ["0.4", 0.3, "0.6", 0.6],
+        [[0.4, 0.3], [0.6, 0.3]],  # an outline needs three points
+        [1.5, 0.3, 1.9, 0.6],  # off the image
     ],
 )
-def test_head_unusable_landmarks_give_none(bad):
-    assert head_third(bad) is None
-
-
-def test_yaw_to_third_rejects_non_numbers():
-    assert yaw_to_third(None) is None
-    assert yaw_to_third(float("inf")) is None
-    assert yaw_to_third(True) is None
+def test_head_unusable_masks_give_none(bad):
+    assert face_third(bad) is None
 
 
 def test_third_of_x():
     assert [third_of_x(x, 0, 1) for x in (0.1, 0.5, 0.9)] == ["left", "centre", "right"]
     assert third_of_x(0.1, 0, 1, flip=True) == "right"
     assert third_of_x(0.5, 1, 1) is None
+    assert third_of_x(True, 0, 1) is None
 
 
 # ── option list: dropped targets ───────────────────────────────────────────────

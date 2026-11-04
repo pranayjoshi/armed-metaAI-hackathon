@@ -1,0 +1,20 @@
+# Bed profile: `h2m run --profile bed` (and `h2m --profile bed arm teach <pose>`) merges this
+# onto configs/h2m.yaml. The arm is clamped to the headboard: its own poses file, the bedside
+# objects in slot order (cup, pill cup, marker), and the bed routines.
+arm:
+  poses_file: configs/poses_bed.yaml
+proactive:
+  profile: bed
+objects:
+  - id: cup              # the id stays: the routines and the liquid tag key on it
+    name: water bottle
+    prompt: water bottle
+    max_grip: 0.5
+  - id: pill_cup
+    name: pill cup
+    prompt: pill cup
+    max_grip: 0.4
+  - id: marker
+    name: marker
+    prompt: marker
+    max_grip: 0.6

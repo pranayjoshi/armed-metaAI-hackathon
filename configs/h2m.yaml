@@ -20,8 +20,37 @@ objects:
 
 speech:
   source: mic            # mic | off  (typed commands always work)
-  asr: parakeet          # parakeet | whisper
-  sample_rate_hz: 16000
+  # Speech to text is Muse Voice Transcribe 1.0 over its realtime WebSocket
+  # (h2m/sensors/voice.py, needs MODEL_API_KEY); it replaced the local ASR models and
+  # their `asr:` key. Endpoint, model, encodings, mode and event names were checked against
+  # dev.meta.ai/docs/api-reference/voice/{realtime,schemas} on Nov 3, 2026.
+  model: muse-voice-transcribe-1.0
+  endpoint: wss://api.meta.ai/v1/asr/realtime
+  mode: DIARIZATION      # DIARIZATION (speaker labels + endpointing) | ENDPOINTING | PUSH_TO_TALK
+  sample_rate_hz: 16000  # 16000 (PCM_16KHZ) or 24000 (PCM_24KHZ, the model's native rate)
+  language_bias: [English]  # language names, not codes; [] lets the model detect
+  keywords: []           # extra biasing words; the catalog names and yes/no/stop/cancel/wait are always sent
+  # A final's audio overlapping the echo window within this margin is tagged echo (stream
+  # positions are not acoustic boundaries; wider = more finals can only stop or cancel).
+  echo_margin_ms: 300
+  reconnect_min_s: 1.0   # backoff after a dropped socket, doubling up to reconnect_max_s
+  reconnect_max_s: 30.0
+  session_max_s: 3300    # rotate the session before the server's 60-minute cap
+  # Diarization labels (A, B, ...) are session-scoped letters. The wearer is whoever gives the
+  # first "yes" of a socket session, or the label claimed with POST /api/speaker/claim; set
+  # `wearer:` to pin a label for every session. `speakers:` names labels for the Card.
+  speakers: {}           # e.g. {A: Pranay, B: Sam}
+  wearer: null
+  # LOCAL STOP (energy burst only, no keyword model): a short loud sound (ratio x noise floor
+  # for min_ms..max_ms) fires the app's stop handling as source "local_stop" without waiting
+  # on the socket. Off by default: a clap or a cough would stop the arm too. The brace, the
+  # open hand and the e-stop are the fast stops; a spoken "stop" arrives through the socket.
+  local_stop:
+    enabled: false
+    ratio: 8.0
+    min_ms: 150
+    max_ms: 700
+    refractory_ms: 1500
   device: null           # sounddevice name or index; null = default input
   vad_start_ratio: 3.0   # speech when frame RMS > ratio x noise floor
   silence_end_ms: 450
@@ -40,12 +69,28 @@ vision:
   wrist_camera: 1        # wrist camera index, null to disable
   width: 1280
   height: 720
-  detector: yoloe        # yoloe | none
-  detector_model: yoloe-26s-seg.pt
-  min_confidence: 0.25
-  pointing: true         # MediaPipe hand landmarks -> pointing target
-  publish_hz: 10
-  stale_ms: 800          # objects unseen this long are dropped
+  # Perception is SAM 3.1 over the Meta Model API (h2m/sensors/sam.py), prompted with the
+  # catalog prompts above plus `hand` and `face`. It replaced the local detector and the
+  # hand-landmark model and their detector / detector_model / pointing / publish_hz keys.
+  sam_model: sam-3.1
+  sam_timeout_s: 4.0     # per phrase call; a slow scan fails and the scene ages into stale
+  scan_parallel: 6       # phrase calls in flight within one scan
+  scan_width: 960        # frames are downscaled to this width before upload
+  scan_every_s: 10       # cadence when nothing happens on the desk
+  scan_change: 0.06      # mean grey change (0..1 on a 32x18 thumbnail) that triggers a scan
+  scan_min_gap_s: 1.0    # never two scans closer than this
+  scan_retry_s: 3.0      # after a failed scan (offline, rate limited) wait this long before the next
+  min_confidence: 0.25   # a SAM match below this confidence is dropped
+  hands: true            # ask for `hand`: hands near the spot (HandsSeen), coarse pointing
+  face: true             # ask for `face`: head third, a ranker tie-breaker only
+  face_invert: false     # true when image-right is the table's left
+  person_side: bottom    # image edge the person sits at; a pointing hand points away from it
+  # A scan older than this is stale: state.scene.stale, every object is flagged, and the
+  # gate refuses to move toward any of them. Nothing is invented while SAM is slow or offline.
+  stale_s: 15
+  # A hand pass older than this cannot prove the handover spot clear (h2m/world.py). With
+  # SAM at 1-2 s a call this is met only right after a scan; unchanged pending safety review.
+  stale_ms: 800
   # Image -> table homography from `h2m calibrate-table`; null = normalized image coords.
   table_homography: null
 
@@ -142,7 +187,7 @@ emg:
 compiler:
   llm: auto              # auto (use if MODEL_API_KEY set) | on | off
   base_url: https://api.meta.ai/v1
-  model: muse-spark-1.1
+  model: muse-spark-1.3
   timeout_s: 4.0
   send_image: true
   tools: true            # Muse answers with h2m.embodied tool calls (false = old JSON verb path)
@@ -164,7 +209,7 @@ safety:
   # Taught skills (configs/skills.yaml) always confirm. Those flagged near_person (hold_up,
   # take_this, sip) go near a face or a hand: HELD until this is true (REVIEWED RELAXATION
   # when switched on), and capped at near_person_speed_cap.
-  near_person_enabled: false
+  near_person_enabled: true   # REVIEWED RELAXATION, ships on for the real arm (Nov 3 shoot); tests/test_skills.py asserts on
   near_person_speed_cap: 0.3
   # A gripper load reading above this vetoes "gripper empty" (can only veto, never prove).
   # UNVERIFIED on hardware: check the idle STS3215 load at home before relying on it.
@@ -246,7 +291,24 @@ incident:
   sample_hz: 10          # sampler thread rate (frames, joints, contract, EMG)
   after_s: 1.0           # keep recording this long after the freeze
   downscale: 320         # longest image side kept in the buffer
-  sam_model: sam-3.1     # SAM model id for the blame highlight (unverified live; env H2M_SAM_MODEL also works)
+  sam_model: sam-3.1     # SAM model id for the blame highlight and track() (unverified live; env H2M_SAM_MODEL also works)
+  timeout_s: 20.0        # one Muse Wonder call (the one-shot explanation and each loop turn)
+  # The investigation as a tool loop (h2m/incident.py Investigator): Muse Wonder gets the
+  # clip and may call track (SAM 3.1 across the clip's frames), measure, arm_trace,
+  # body_trace and propose_rule. The only way a rule reaches the proposal is propose_rule,
+  # through validate_rule and the checker (removes options only; incident prevented on
+  # replay). Capped; over the cap or on any failure the one-shot explanation runs, then the
+  # fixed question. Nothing here is on the freeze path and nothing moves the arm.
+  tools: true            # false = the one-shot explanation only
+  max_tool_calls: 12     # tool calls per investigation
+  budget_s: 45           # wall clock per investigation; the arm stays stopped either way
+  track_frames: 4        # frames SAM looks at per track() call
+  track_timeout_s: 4.0   # per SAM call inside the loop
+  video: true            # send the clip as mp4 (Responses input_video); false = keyframes as images
+  video_max_mb: 8        # a larger clip is sent as keyframes instead
+  reasoning_effort: low  # Wonder reasoning.effort for the loop; null = the API default
+  max_output_tokens: 4000
+  rehearsal_s: 4.0       # the twin plays the proposed route over this long (twin only, no arm)
 
 arm:
   backend: virtual       # virtual | lerobot
@@ -277,7 +339,12 @@ arm:
   # Open to the jaw value taught at each slot's grasp pose (clamped to the range below)
   # instead of the one gripper_open for every object. Off: every pick opens to gripper_open.
   use_taught_grasp_jaws: true
-  taught_jaws_range: [20, 60]
+  taught_jaws_range: [20, 95]   # slot_3 (iPhone 13, 71 mm wide) opens to 95
+  # Close to the opening taught at each slot's `point` pose (the jaws touching the object),
+  # less touch_squeeze_pct x the grip effort, so a grab is a little firmer than a touch.
+  # An untaught point pose falls back to the effort-mapped close. The torque limit still applies.
+  use_taught_touch_close: true
+  touch_squeeze_pct: 8
   # UNMEASURED: the widest opening known to clear the tray wall at tray_release. A pick to the
   # tray opens no wider than this; measure 38 and 57 at the arm, then raise it.
   tray_release_max_pct: 30
@@ -291,6 +358,76 @@ arm:
     wrist_flex: [-100, 100]
     wrist_roll: [-150, 150]
     gripper: [0, 100]
+
+grasp:
+  # Meta-measured grasp parameters (h2m/grasp.py, docs/COMPLIANCE.md section 7). SAFETY
+  # REVIEW: a SAM 3.1 width sets the jaw opening and the mask's axis the wrist roll, each
+  # through the clamps below. The close is bounded by the gripper servo's torque-limit
+  # register, not by a load-based stop; gripper load is only logged and used for the
+  # empty proof. Off by default: only a YAML boolean true enables it, and note that YAML
+  # also reads `on` and `yes` (unquoted) as true. When on, a pick is two-stage (approach to
+  # slot.above, one SAM call, then the grasp); every failure falls back to the taught plan.
+  sam_width: false
+  sam_timeout_s: 2.0     # the one SAM call at slot.above
+  frame_wait_s: 1.0      # wait for an overhead frame taken after the arm arrived
+  recheck_s: 2.0         # stage 2 waits this long for the gate to read the same as at stage 1
+  # Gripper percent -> jaw opening in mm at three openings, measured with a ruler
+  # (docs/hardware/calibrate.md). PLACEHOLDER numbers: until calibrated is the
+  # literal true, every pick opens to the slot's taught opening. calibrated: true with
+  # these placeholder points is refused at load: measure them first.
+  jaw_calibration:
+    calibrated: false
+    points: [[23.3, 40], [58.2, 90], [90.4, 110]]
+  margin_mm: 12          # opening = measured width + this, before the clamp
+  open_min_pct: 30       # never open less than this or the slot's taught opening, whichever is wider ...
+  open_max_pct: 100      # ... or more than this
+  roll_envelope_deg: 25  # roll stays within this of the slot's taught roll (0..45, enforced in code)
+  round_aspect: 1.3      # mask length / width under this = round: keep the taught roll
+  table_unit_mm: 1000    # mm per table unit after the homography (slot table_xy is metres). UNVERIFIED
+  roll_sign: 1           # +1 if a larger wrist_roll turns the jaws counter-clockwise from above. UNVERIFIED
+  roll_sign_verified: false  # until true, the width is the widest extent in any direction (jaw axis not trusted)
+  jaw_axis_deg: {}       # slot_id -> jaw face direction at the taught grasp, table frame; unmeasured = widest width, taught roll
+  # Close cap per grip profile (Muse Spark's class for the target). The cap used is
+  # min(catalog max_grip, profile max_grip): a profile only lowers it. Anything not
+  # listed is unknown, and unknown is forced to the softest cap in code.
+  profiles:
+    rigid: {max_grip: 0.9}
+    fragile: {max_grip: 0.35}
+    liquid: {max_grip: 0.5}
+    unknown: {max_grip: 0.3}
+
+proactive:
+  # Cards from the clock, the room and the routines (docs/PROACTIVE.md, h2m/proactive.py).
+  # Off unless literally true. Needs selection.enabled too (a routine only ever becomes a
+  # card). Nothing here moves the arm: every card still goes through the gate and the
+  # person's confirmation; the one relaxation is the announce rung under `trust` below.
+  enabled: false
+  routines_file: configs/routines.yaml
+  state_dir: data/proactive   # "don't propose" entries written by refusals
+  profile: desk               # desk | bed: which routines apply
+  packet_every_s: 1.0         # context packet refresh while idle
+  propose_min_gap_s: 120      # at most one unsolicited card this often (sounds, other people and overdue routines excepted)
+  refuse_cooldown_min: 30     # a refused routine is not re-proposed this long ...
+  dont_propose_hours: 24      # ... and its "don't propose <action> <context>" entry lasts this long
+  quiet_hours: null           # HH:MM-HH:MM; the routines file's quiet_hours wins when set
+  veto_window_s: 5.0          # the announce rung's veto ring (clamped 3..30 in code)
+  request_only: false         # "stop proposing": the robot answers requests only
+  speak: true                 # say the announce line ("... Brace to cancel.")
+
+trust:
+  # The trust ladder (docs/PROACTIVE.md §3, h2m/safety.py::ladder). Per-action rungs:
+  # never | ask | announce | do. Unlisted actions are `ask`. `never` is enforced in the
+  # gate for every path (typed, spoken, Muse, card). `do` only applies to actions with no
+  # motion (say); motion asked as `do` is announced instead.
+  # REVIEWED RELAXATION: announce_enabled true lets a routine the person set to
+  # `announce` run after a 5 s veto ring with no twitch. Never near a person, never
+  # carrying, never in quiet hours, never within safety.after_stop_s of a brace; the gate
+  # and the brace freeze are unchanged. Off by default.
+  announce_enabled: false
+  actions:
+    sip: ask
+    take_this: ask
+    hold_up: ask
 
 server:
   host: 127.0.0.1

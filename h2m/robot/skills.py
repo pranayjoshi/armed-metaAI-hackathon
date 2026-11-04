@@ -13,6 +13,7 @@ from typing import Any
 
 import yaml
 
+from h2m.grasp import ROLL_ENVELOPE_MAX_DEG
 from h2m.robot.backend import GRIPPER, JOINTS, Joints
 
 
@@ -175,29 +176,88 @@ def plan_point(lib: PoseLibrary, slot: Slot, gripper: bool = False) -> Plan:
     )
 
 
+def _with_roll_delta(pose: Pose, delta: float) -> Pose:
+    """``pose`` with ``delta`` (already clamped to the envelope) added to its own taught
+    wrist_roll; the same object for 0. Keeps the name and taught flag: every joint is the
+    taught value except the roll, which moves by ``delta`` from the taught one."""
+    if delta == 0.0:
+        return pose
+    roll = pose.joints["wrist_roll"] + delta
+    return Pose(pose.name, {**pose.joints, "wrist_roll": roll}, pose.taught)
+
+
+def plan_pick_approach(lib: PoseLibrary, slot: Slot, open_pct: float) -> Plan:
+    """Stage 1 of a pick whose jaw opening is measured at ``above``: the approach to
+    ``slot.above`` only, at the taught opening. The rest of the pick is rebuilt by
+    ``plan_pick_place`` once the measurement is in (h2m/grasp.py), or not run at all."""
+    return Plan(
+        "pick_place",
+        (_move(f"{slot.slot_id}.above", slot.above, "approach", gripper=open_pct),),
+        (slot.above,),
+    )
+
+
 def plan_pick_place(
     lib: PoseLibrary,
     slot: Slot,
     open_pct: float,
     close_pct: float,
     via: tuple[Pose, ...] = (),
+    *,
+    grasp_open_pct: float | None = None,
+    grasp_roll_deg: float | None = None,
+    roll_envelope_deg: float = 25.0,
 ) -> Plan:
     """``via``: taught poses of the chosen carry route (``lib.routes[name]``),
-    visited in order between the lift and the tray."""
+    visited in order between the lift and the tray.
+
+    SAFETY REVIEW (h2m/grasp.py): app.py may pass these (it passes grasp_open_pct from
+    the slot's taught jaws; the SAM-measured values only through ``grasp_params``).
+    ``grasp_open_pct`` replaces ``open_pct`` for the approach and the grasp, and the
+    release at the tray opens to ``max(open_pct, grasp_open_pct)`` (taught or grasp,
+    whichever is wider) so a wide object is let go; that is pending a measured
+    ``arm.tray_release_max_pct``, whose measurement and refusal app.py owns.
+    ``grasp_roll_deg`` is the target wrist roll at the slot's ``grasp`` pose (as
+    ``GraspParams.roll_deg`` gives it): its difference from the taught grasp roll,
+    clamped to +- ``roll_envelope_deg`` (itself in 0..ROLL_ENVELOPE_MAX_DEG), is added
+    as one delta to the taught roll of ``above``, ``grasp`` and the lift, so taught
+    poses keep their roll difference. Both None: the plan is exactly the taught one. A
+    bool or non-finite value, or an opening outside 0..100, raises PoseError (a
+    ValueError; no plan)."""
+    for name, value in (
+        ("grasp_open_pct", grasp_open_pct),
+        ("grasp_roll_deg", grasp_roll_deg),
+        ("roll_envelope_deg", roll_envelope_deg),
+    ):
+        if isinstance(value, bool):
+            raise PoseError(f"{name} must be a number, not a bool")
+        if value is not None and not math.isfinite(value):
+            raise PoseError(f"{name} must be finite")
+    envelope = max(0.0, min(float(roll_envelope_deg), ROLL_ENVELOPE_MAX_DEG))
+    if grasp_open_pct is not None and not 0.0 <= grasp_open_pct <= 100.0:
+        raise PoseError("grasp_open_pct must be within 0..100")
+    approach_open = open_pct if grasp_open_pct is None else grasp_open_pct
+    release_open = open_pct if grasp_open_pct is None else max(open_pct, grasp_open_pct)
+    delta = 0.0
+    if grasp_roll_deg is not None:
+        delta = grasp_roll_deg - slot.grasp.joints["wrist_roll"]
+        delta = max(-envelope, min(envelope, delta))
+    above = _with_roll_delta(slot.above, delta)
+    grasp = _with_roll_delta(slot.grasp, delta)
     home, tray_above, tray_release = (lib.pose(n) for n in ("home", "tray_above", "tray_release"))
     return Plan(
         "pick_place",
         (
-            _move(f"{slot.slot_id}.above", slot.above, "approach", gripper=open_pct),
+            _move(f"{slot.slot_id}.above", above, "approach", gripper=approach_open),
             # Settle before the jaws move: arrival only means within arrive_tolerance.
-            _move(f"{slot.slot_id}.grasp", slot.grasp, "approach", gripper=open_pct, dwell_s=0.4),
+            _move(f"{slot.slot_id}.grasp", grasp, "approach", gripper=approach_open, dwell_s=0.4),
             Waypoint("close", {GRIPPER: close_pct}, "grasp", gripper_only=True, dwell_s=0.4),
-            _move("lift", slot.above, "carry", gripper=close_pct),
+            _move("lift", above, "carry", gripper=close_pct),
             *(_move(f"via.{p.name}", p, "carry", gripper=close_pct) for p in via),
             _move("tray_above", tray_above, "carry", gripper=close_pct),
             _move("tray_release", tray_release, "release", gripper=close_pct, dwell_s=0.4),
-            Waypoint("open", {GRIPPER: open_pct}, "release", gripper_only=True, dwell_s=0.3),
-            _move("retreat", tray_above, "return", gripper=open_pct),
+            Waypoint("open", {GRIPPER: release_open}, "release", gripper_only=True, dwell_s=0.3),
+            _move("retreat", tray_above, "return", gripper=release_open),
             _move("home", home, "return"),
         ),
         (slot.above, slot.grasp, *via, tray_above, tray_release, home),

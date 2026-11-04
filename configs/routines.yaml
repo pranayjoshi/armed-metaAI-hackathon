@@ -1,0 +1,50 @@
+# Routines: what the arm offers on its own, when (docs/PROACTIVE.md §5, h2m/routines.py).
+# Editable here or through GET/POST /api/routines. A routine only ever becomes a card:
+# `mode` is the trust rung the person set for it, and h2m/safety.py::ladder can only
+# lower it (anything near a person or carrying is always a card; `announce` needs
+# trust.announce_enabled in configs/h2m.yaml).
+#
+#   action      a skill id from configs/skills.yaml, or pick_place / look_at / say
+#   object      the catalog object (configs/h2m.yaml objects) when the action takes one
+#   every / at / on   exactly one: an interval, wall-clock times, or an event
+#                     (phone_buzz, knock, door, sit_down, lie_down, stand_up, lights_off,
+#                     new_object, hand_out, person_arrived)
+#   mode        never | ask | announce | do   (aliases: off, auto, does)
+#   window      how long the card waits before it lapses
+#   profile     desk | bed  (offered only in that profile; proactive.profile)
+#   conditions  "hand not at keyboard", "hand at keyboard", "present", "holding",
+#               "not holding", "object visible <name>", "object not visible <name>",
+#               "heard <label>"  (a fact the packet does not have fails the condition)
+#   label / say  the card's text and the one line spoken when it is announced
+#   first_after  for `every`: when the first one is due after start (default: the interval)
+routines:
+  water:
+    action: pick_place
+    object: cup
+    every: 60m
+    mode: ask
+    window: 5m
+    label: "Water?"
+  desk_check:
+    action: bow
+    every: 30m
+    mode: announce
+    window: 2m
+    profile: desk
+    conditions: ["hand not at keyboard"]
+    label: "Check the desk?"
+    say: "Checking the desk."
+  phone:
+    action: hold_up
+    object: ball
+    "on": phone_buzz
+    mode: ask
+    window: 90s
+    label: "Show you the phone?"
+  knock:
+    action: wave
+    "on": knock
+    mode: ask
+    window: 60s
+    label: "Say you're coming?"
+quiet_hours: "23:00-07:00"

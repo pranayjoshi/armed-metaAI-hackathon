@@ -39,6 +39,10 @@ class Decision:
 
 HELD_MOVE_VERBS = frozenset({Verb.HOME, Verb.POINT})  # carries whenever not proven empty
 CONFIRM = "squeeze, say yes, or click to confirm"
+# The trust ladder (docs/PROACTIVE.md §3), lowest to highest. A per-action setting the
+# person controls; ``ladder`` decides what a proposal is allowed to become.
+RUNGS = ("never", "ask", "announce", "do")
+NEVER_SET = "that action is set to never"
 
 
 def decide(contract: StepContract, world: dict[str, Any], cfg: dict[str, Any]) -> Decision:
@@ -57,6 +61,11 @@ def decide(contract: StepContract, world: dict[str, Any], cfg: dict[str, Any]) -
     checks: dict[str, bool] = {}
     if contract.verb is Verb.UNKNOWN:
         return Decision(Verdict.HOLD, "no robot action recognized", checks)
+    # The trust ladder's lowest rung (world["rung"], set by the app from the person's
+    # per-action trust settings, never from a model): "never" is refused however it was asked.
+    if world.get("rung") == "never":
+        checks["trust_rung"] = False
+        return Decision(Verdict.REJECT, NEVER_SET, checks)
 
     # A skill is targeted when its definition takes an object (world["targeted"], set
     # from the skills file, never from the model).
@@ -257,3 +266,71 @@ def _gesture(
     if not checks["gripper_empty"]:
         return None  # holding or unknown: confirm like any carrying motion
     return Decision(Verdict.APPROVE, "gesture: armed, gripper empty, inside envelope", checks)
+
+
+# ── the trust ladder ───────────────────────────────────────────────────────────
+
+
+@dataclass
+class Rung:
+    rung: str  # the effective rung: one of RUNGS
+    reason: str
+    asked: str  # the rung that was asked for
+
+
+def ladder(
+    rung: Any,
+    *,
+    motion: bool,
+    near_person: bool = False,
+    carries: bool = False,
+    asked_by: str | None = None,
+    quiet: bool = False,
+    cfg: dict[str, Any] | None = None,
+) -> Rung:
+    """The rung a proposal is allowed to run at: a pure function of the rung the person
+    set for the action, what the action is, who asked and the clock (docs/PROACTIVE.md §3).
+    It only ever lowers a rung. ``cfg`` is the ``trust`` section.
+
+    - unknown or ``never``: never (quiet hours too: nothing is proposed at night).
+    - a request from another person (``asked_by``): at most ``ask``; the wearer decides.
+    - ``do`` is for actions with no motion; motion asked as ``do`` becomes ``announce``.
+    - ``announce`` (REVIEWED RELAXATION) needs ``trust.announce_enabled`` literally true
+      and never applies near a person or to a carry: those stay ``ask``.
+    """
+    cfg = cfg or {}
+    asked = str(rung) if isinstance(rung, str) else "never"
+    if asked not in RUNGS:
+        return Rung("never", "unknown rung", asked)
+    if asked == "never":
+        return Rung("never", NEVER_SET, asked)
+    if quiet:
+        return Rung("never", "quiet hours", asked)
+    if asked_by:
+        return Rung("ask", f"{asked_by} asked; the wearer decides", asked)
+    if asked == "ask":
+        return Rung("ask", "a card", asked)
+    want = asked
+    if want == "do" and motion:
+        want = "announce"
+    if want == "announce":
+        if near_person:
+            return Rung("ask", "near a person: always a card", asked)
+        if carries:
+            return Rung("ask", "carrying: always a card", asked)
+        if cfg.get("announce_enabled") is not True:
+            return Rung("ask", "announce-then-do is switched off (trust.announce_enabled)", asked)
+        return Rung("announce", "pre-approved routine: announced, veto window, then it runs", asked)
+    return Rung("do", "no motion: done, with a note", asked)
+
+
+def action_rung(action_id: str, kind: str | None, settings: dict[str, Any] | None, default: str = "ask") -> str:
+    """The person's rung for an action from ``trust.actions`` (``{"bow": "announce",
+    "sip": "never", "pick_place": "ask"}``): the exact id first, then its kind, then the
+    default. Anything that is not a rung reads as ``never``."""
+    settings = settings or {}
+    for key in (action_id, kind):
+        if key is not None and key in settings:
+            value = settings[key]
+            return value if isinstance(value, str) and value in RUNGS else "never"
+    return default if default in RUNGS else "never"

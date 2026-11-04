@@ -8,8 +8,9 @@
 tags:            # object id -> tags; rules generalize through tags
   cup: [liquid, fragile]
   block: []
-  ball: []
+  ball: [rigid]    # the phone (h2m.yaml object id `ball`)
   bottle: [liquid]
+  tea: [liquid]    # a rule learned on the cup applies to the tea through `liquid`
 
 # name -> pick slot (poses.yaml slots) -> table polyline (x, y) from that slot to the
 # drop zone. Route proof is per (route, slot): a slot with no polyline for a route

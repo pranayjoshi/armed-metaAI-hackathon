@@ -1,0 +1,15 @@
+# Shoot profile: `h2m run --profile shoot --i-have-the-estop` merges this onto
+# configs/h2m.yaml (h2m/core.py deep_merge). Only the switches the shoot flips live
+# here; every threshold stays in h2m.yaml. Before starting, `run` refuses without
+# MODEL_API_KEY in the environment and while a route the film needs is still a
+# placeholder (`h2m calibrate check`).
+arm:
+  backend: lerobot       # the real SO-101 follower (needs --i-have-the-estop)
+selection:
+  enabled: true          # Reflex cards answered by a twitch (safety review done for the shoot)
+emg:
+  source: ganglion       # the band on the forearm
+speech:
+  source: mic
+vision:
+  source: camera

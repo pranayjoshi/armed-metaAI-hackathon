@@ -33,6 +33,7 @@ from h2m.app import H2M, RELEASE_DISABLED
 from h2m.core import ROOT
 from h2m.replay import ReplayError, ReplayLibrary, source_label
 from h2m.robot import ArmState
+from h2m.routines import RoutineError
 from h2m.routing import RoutesUnavailable, catalog_tags, load_routes
 from h2m.rules import RulesUnavailable
 from h2m.scenario import SIM_NOTE, Scenario
@@ -45,6 +46,7 @@ MODE_META = "h2m-mode"  # "replay" on the replay / demo server
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # Stopping is always safe: the STOP button must work even from a page without the token.
 TOKENLESS = frozenset({"/api/stop"})
+PROACTIVE_OFF = "the proactive layer is off (set proactive.enabled: true in configs/h2m.yaml)"
 
 
 def _host_name(host: str | None) -> str | None:
@@ -89,9 +91,9 @@ def _local_only(app: FastAPI, token: str | None) -> None:
         return await call_next(request)
 
 
-def _page(web: Path, token: str, mode: str | None = None) -> HTMLResponse:
+def _page(web: Path, token: str, mode: str | None = None, rel: str = "index.html") -> HTMLResponse:
     # The token goes into the page itself: readable only by this origin's scripts.
-    html = (web / "index.html").read_text()
+    html = (web / rel).read_text()
     meta = f'<meta name="{TOKEN_META}" content="{token}" />'
     if mode is not None:
         meta += f'\n  <meta name="{MODE_META}" content="{mode}" />'
@@ -300,6 +302,21 @@ def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
             h2m.speech.muted = muted
         return {"ok": True}
 
+    @app.post("/api/speaker/claim")
+    async def speaker_claim(request: Request) -> dict[str, Any]:
+        """Make a diarization label the wearer: ``{label?, name?}``; no label = the last
+        speaker heard. Only the wearer's "yes" confirms; others show as "asked by X"."""
+        if h2m.speech is None:
+            raise HTTPException(409, "speech is off")
+        body = await _json_object(request)
+        label, name = body.get("label"), body.get("name")
+        if label is not None and not isinstance(label, str):
+            raise HTTPException(400, "label must be a string")
+        if name is not None and not isinstance(name, str):
+            raise HTTPException(400, "name must be a string")
+        ok, detail = h2m.speech.claim(label, name)
+        return {**result(ok, detail), "speech": h2m.speech.snapshot()}
+
     # cameras
     @app.get("/api/camera/{name}.jpg")
     def camera(name: str) -> Response:
@@ -381,6 +398,46 @@ def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
     def incident_latest() -> dict[str, Any]:
         return {"incident": h2m.learner.snapshot()["incident"]}
 
+    # routines (docs/PROACTIVE.md §5): the person's schedule, editable at runtime.
+    # Editing a routine never moves anything: a routine only ever becomes a card.
+    @app.get("/api/routines")
+    def routines_list() -> dict[str, Any]:
+        if h2m.proactive is None:
+            return {"enabled": False, "routines": [], "detail": PROACTIVE_OFF}
+        return {"enabled": True, **h2m.proactive.book.snapshot()}
+
+    @app.post("/api/routines")
+    async def routines_edit(request: Request) -> dict[str, Any]:
+        """``{"name": ..., <fields>}`` edits or adds one routine; ``{"name", "delete": true}``
+        removes it; ``{"request_only": bool}`` toggles "stop proposing"; ``{"run_now": name}``
+        makes one due (it still only becomes a card). Saved to the routines file."""
+        if h2m.proactive is None:
+            raise HTTPException(409, PROACTIVE_OFF)
+        body = await _json_object(request)
+        book = h2m.proactive.book
+        try:
+            if "request_only" in body:
+                h2m.proactive.set_request_only(body["request_only"] is True)
+            elif "run_now" in body:
+                if book.get(str(body["run_now"])) is None:
+                    raise HTTPException(404, "no such routine")
+                book.force_due(str(body["run_now"]))
+            else:
+                name = body.get("name")
+                if not isinstance(name, str):
+                    raise HTTPException(400, "send the routine's name")
+                if body.get("delete") is True:
+                    if not book.remove(name):
+                        raise HTTPException(404, "no such routine")
+                else:
+                    fields = {k: v for k, v in body.items() if k not in ("name", "delete")}
+                    book.update(name, fields)
+                book.save()
+        except RoutineError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        h2m.log.emit("routine.edited", **{k: v for k, v in body.items() if k != "token"})
+        return {"ok": True, **book.snapshot()}
+
     @app.get("/api/incident/{incident_id}")
     def incident_get(incident_id: str) -> dict[str, Any]:
         if not INCIDENT_ID.fullmatch(incident_id):
@@ -401,6 +458,11 @@ def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
     @app.get("/")
     def index() -> HTMLResponse:
         return _page(web, app.state.token)
+
+    @app.get("/card")
+    def card_page() -> HTMLResponse:
+        """The Card: one page for the desktop window, the bedside screen and the hosted replay."""
+        return _page(web, app.state.token, rel="card/index.html")
 
     app.mount("/web", StaticFiles(directory=web), name="web")
     return app
@@ -468,7 +530,14 @@ def create_replay_app(
             },
             "scenario": scenario.snapshot() if scenario is not None else None,
         }
-        return {**h.snapshot(), **out} if h is not None else out
+        if h is None:
+            return out
+        snap = {**h.snapshot(), **out}
+        fields = scenario.scene_fields() if scenario is not None else None
+        if fields is not None:  # the simulation's own boxes, merged over the packet
+            base = snap.get("scene") if isinstance(snap.get("scene"), dict) else {}
+            snap["scene"] = {**base, **fields}
+        return snap
 
     @app.get("/api/state")
     def state() -> dict[str, Any]:
@@ -574,6 +643,13 @@ def create_replay_app(
             raise HTTPException(503, str(exc)) from exc
         return {"rules": [asdict(r) for r in rules], "zones": zones, **labels()}
 
+    @app.get("/api/routines")
+    def routines_list() -> dict[str, Any]:
+        h = scenario.h2m if scenario is not None else None
+        if h is None or getattr(h, "proactive", None) is None:
+            return {**labels(), "enabled": False, "routines": []}
+        return {**labels(), "enabled": True, **h.proactive.book.snapshot()}
+
     @app.get("/api/rules/proposal")
     def proposal() -> dict[str, Any]:
         h = scenario.h2m if scenario is not None else None
@@ -595,6 +671,10 @@ def create_replay_app(
     @app.get("/")
     def index() -> HTMLResponse:
         return _page(web, app.state.token, mode="replay")
+
+    @app.get("/card")
+    def card_page() -> HTMLResponse:
+        return _page(web, app.state.token, mode="replay", rel="card/index.html")
 
     app.mount("/web", StaticFiles(directory=web), name="web")
     return app
