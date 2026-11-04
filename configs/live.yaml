@@ -12,6 +12,11 @@ vision:
   assume_slots: true
 speech:
   source: mic
+  other_speakers: false  # solo: every voice is the wearer's (labels drift; see h2m.yaml)
+  # ENDPOINTING closes a turn at the end of speech; DIARIZATION held "get me my pills" open
+  # for 16 s with room noise (Nov 4), so everything had to be said twice. Labels are not
+  # needed solo; switch back with other_speakers for a second person.
+  mode: ENDPOINTING
 compiler:
   llm: "on"
 selection:

@@ -8,6 +8,10 @@
 #   - {pose: <name>, gripper: open|soft|keep, dwell: <s>}   move the arm (gripper optional)
 #   - {gripper: open|soft, dwell: <s>}                       gripper only
 # `{slot}` in a pose name is the slot of the requested object (requires_object: true).
+# `{handover}` is the pose set for that object (arm.handover_sets in configs/h2m.yaml):
+# `{handover}_above` / `{handover}_release`. Both must be taught; the gate checks the
+# object's own hand spot (routes handover.sets) and the hand watchdog runs while lowering.
+# A {handover} skill needs requires_object and near_person.
 #
 # Flags (all default false / 1.0):
 #   requires_object  the tool takes an object_id; the object must be visible and on a slot
@@ -111,3 +115,21 @@ skills:
       - {pose: press_above}
       - {pose: press_down, dwell: 0.3}
       - {pose: press_above}
+  hand_over:
+    # Pick the object from its slot and hand it to the person's hand: carry to the object's
+    # handover pose set, lower, wait a moment, open, retreat. The close reaches the object
+    # (the slot's taught point jaws). The marker's run stops at the lift (arm.handover_two_stage).
+    requires_object: true
+    needs_empty: true
+    carries: true
+    near_person: true
+    speed: 0.4
+    steps:
+      - {pose: "{slot}.above", gripper: open}
+      - {pose: "{slot}.grasp", gripper: open, dwell: 0.4}
+      - {gripper: soft, dwell: 0.4}
+      - {pose: "{slot}.above"}
+      - {pose: "{handover}_above"}
+      - {pose: "{handover}_release", dwell: 1.0}
+      - {gripper: open, dwell: 0.5}
+      - {pose: "{handover}_above"}

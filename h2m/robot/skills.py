@@ -275,11 +275,13 @@ SKILL_KEYS = frozenset(
 )
 STEP_KEYS = frozenset({"pose", "gripper", "dwell"})
 MAX_DWELL_S = 30.0
+HANDOVER_TOKEN = "{handover}"
+PART_ALL, PART_PICK, PART_CARRY = "all", "pick", "carry"
 
 
 @dataclass(frozen=True)
 class SkillStep:
-    pose: str | None  # None: gripper-only step; may contain "{slot}" for object skills
+    pose: str | None  # None: gripper-only step; may contain "{slot}" / "{handover}" (object skills)
     gripper: str | None = None  # open | soft | None (keep)
     dwell_s: float = 0.0
 
@@ -299,6 +301,18 @@ class Skill:
     @property
     def closes(self) -> bool:
         return any(s.gripper == "soft" for s in self.steps)
+
+    @property
+    def uses_handover(self) -> bool:
+        """A step names ``{handover}_...``: the pose set for the object's hand spot."""
+        return any(s.pose and HANDOVER_TOKEN in s.pose for s in self.steps)
+
+    @property
+    def handover_cut(self) -> int | None:
+        """Index of the first ``{handover}`` step: a two-stage run stops just before it."""
+        return next(
+            (i for i, s in enumerate(self.steps) if s.pose and HANDOVER_TOKEN in s.pose), None
+        )
 
 
 def load_skills(path: Path) -> dict[str, Skill]:
@@ -337,6 +351,12 @@ def load_skills(path: Path) -> dict[str, Skill]:
         requires_object = bool(raw.get("requires_object", False))
         if uses_slot and not requires_object:
             raise PoseError(f"skill {name} uses {{slot}} but requires_object is false")
+        if any(s.pose and HANDOVER_TOKEN in s.pose for s in steps):
+            # The set comes from the object, and its hand spot is next to a person.
+            if not requires_object:
+                raise PoseError(f"skill {name} uses {{handover}} but requires_object is false")
+            if raw.get("near_person") is not True:
+                raise PoseError(f"skill {name} uses {{handover}} so it must be near_person")
         out[str(name)] = Skill(
             str(name),
             tuple(steps),
@@ -351,22 +371,62 @@ def load_skills(path: Path) -> dict[str, Skill]:
     return out
 
 
+def handover_poses(lib: PoseLibrary, prefix: str) -> tuple[Pose, Pose]:
+    """The ``<prefix>_above`` / ``<prefix>_release`` pair of a handover set. Both must
+    exist, and every set but the original ``handover`` must have both taught, or the set
+    is refused (PoseError). (The original set's placeholders still run on the virtual arm,
+    as before; the real arm refuses any untaught pose when it starts a plan.)"""
+    pair = []
+    for suffix in ("above", "release"):
+        name = f"{prefix}_{suffix}"
+        pose = lib.poses.get(name)
+        if pose is None:
+            raise PoseError(f"handover set {prefix!r} has no {name} pose")
+        if not pose.taught and prefix != "handover":
+            raise PoseError(f"handover set {prefix!r}: {name} is not taught yet")
+        pair.append(pose)
+    return pair[0], pair[1]
+
+
 def plan_skill(
-    lib: PoseLibrary, skill: Skill, open_pct: float, soft_pct: float, slot: Slot | None = None
+    lib: PoseLibrary,
+    skill: Skill,
+    open_pct: float,
+    soft_pct: float,
+    slot: Slot | None = None,
+    handover: str | None = None,
+    part: str = PART_ALL,
 ) -> Plan:
     """Build the skill's waypoints from taught poses only, then return to home. A
     gripper step is gripper-only; a pose step with a gripper commands both. Raises
-    KeyError for an undefined pose and PoseError when an object skill has no slot."""
+    KeyError for an undefined pose and PoseError when an object skill has no slot, or
+    its ``{handover}`` set is missing or untaught.
+
+    ``part`` splits a ``{handover}`` skill at its first ``{handover}`` step: ``pick`` is
+    everything before it (no trip home: the arm stops holding at the lift) and ``carry``
+    is the rest, run from there with the object already held."""
     if skill.requires_object and slot is None:
         raise PoseError(f"skill {skill.name} needs an object on a taught slot")
+    steps = skill.steps
+    holding = skill.needs_holding
+    if skill.uses_handover:
+        if not handover:
+            raise PoseError(f"skill {skill.name} needs a handover set")
+        handover_poses(lib, handover)
+    if part != PART_ALL:
+        cut = skill.handover_cut
+        if cut is None:
+            raise PoseError(f"skill {skill.name} has no {{handover}} step to split at")
+        steps, holding = (steps[:cut], holding) if part == PART_PICK else (steps[cut:], True)
     pct = {"open": open_pct, "soft": soft_pct}
     waypoints: list[Waypoint] = []
     poses: list[Pose] = []
     # Stages drive the freeze's grip policy (arm._keep_grip): a close is "grasp", every
     # step between a close and the next open is "carry" (the grip is kept on a stop),
-    # the open is "release", and the rest is "approach" / "return".
-    holding = skill.needs_holding
-    for i, step in enumerate(skill.steps):
+    # the open is "release", and the rest is "approach" / "return". Going down onto the
+    # hand spot with the object is "lower": the hand watchdog runs there and on release.
+    first = skill.handover_cut or 0 if part == PART_CARRY else 0  # labels keep the skill's numbering
+    for i, step in enumerate(steps, first):
         if step.pose is None:
             if step.gripper == "soft":
                 stage, holding = "grasp", True
@@ -378,6 +438,7 @@ def plan_skill(
             )
             continue
         name = step.pose.replace("{slot}", slot.slot_id) if slot else step.pose
+        name = name.replace(HANDOVER_TOKEN, handover or HANDOVER_TOKEN)
         pose = lib.pose(name)
         poses.append(pose)
         if step.gripper is None:
@@ -385,10 +446,14 @@ def plan_skill(
         else:
             joints = {**pose.joints, GRIPPER: pct[step.gripper]}
         stage = "carry" if holding else "approach"
+        if holding and HANDOVER_TOKEN in step.pose and name.endswith("_release"):
+            stage = "lower"
         waypoints.append(Waypoint(f"{i}.{name}", joints, stage, dwell_s=step.dwell_s))
-    home = lib.pose("home")
-    waypoints.append(_arm_only("home", home, "carry" if holding else "return"))
-    return Plan(f"skill.{skill.name}", tuple(waypoints), (*poses, home))
+    if part != PART_PICK:
+        home = lib.pose("home")
+        waypoints.append(_arm_only("home", home, "carry" if holding else "return"))
+        poses.append(home)
+    return Plan(f"skill.{skill.name}", tuple(waypoints), tuple(poses))
 
 
 def plan_move(

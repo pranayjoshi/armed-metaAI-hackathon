@@ -76,6 +76,12 @@ class GripperTracker:
                 self._state = GripperState(EMPTY, None, f"released after {meta.get('verb')}")
             elif meta.get("verb") == str(Verb.SKILL) and meta.get("releases") is True:
                 self._state = GripperState(EMPTY, None, f"released after {meta.get('skill_name')}")
+            elif meta.get("verb") == str(Verb.SKILL) and meta.get("holds") and meta.get("object_id"):
+                # a skill's first stage closed on the object and stopped holding it (the
+                # marker at the lift): the jaws stay shut, the next stage is a separate card
+                self._state = GripperState(
+                    HOLDING, str(meta["object_id"]), f"holding after {meta.get('skill_name')}"
+                )
             # home / point / gesture never command the gripper on an object, and the
             # handover approach stops above the spot: the state is unchanged
 
@@ -121,6 +127,16 @@ class GripperTracker:
             if self._state is not expected:
                 return False
             self._state = prior
+            return True
+
+    def seen_empty(self, why: str) -> bool:
+        """The wrist camera check (H2M.check_gripper_by_wrist) saw nothing between the jaws
+        with no plan running and nothing tracked as held: EMPTY. Refused (False, unchanged)
+        while a plan is active or an object is tracked as held."""
+        with self._lock:
+            if self._active is not None or self._state.status == HOLDING:
+                return False
+            self._state = GripperState(EMPTY, None, why)
             return True
 
     def released_by_operator(self) -> bool:

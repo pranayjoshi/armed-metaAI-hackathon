@@ -72,7 +72,7 @@ def test_a_suggestion_waits_for_one_confirmation_and_its_question_is_spoken(h2m)
                       "ask": "Clear the empty cup?", "why": "empty since lunch"}
     t.think("heartbeat")
     assert h2m.pending is not None and h2m.pending.contract.object_id == "cup"
-    assert any("Clear the empty cup? Say yes" in s for s in h2m.spoken)
+    assert "Clear the empty cup?" in h2m.spoken
     assert h2m.arm.state is ArmState.READY  # nothing moved: it waits for the person
     note = t.snapshot()["notes"][-1]
     assert note["notice"] == "an empty cup by the laptop" and note["suggest"]["queued"] is True
@@ -122,7 +122,7 @@ def test_voice_arms_after_one_yes_and_disarms_at_once(h2m):
     h2m.on_utterance("stand down", {"echo": False})
     assert h2m.arm.state is ArmState.DISARMED
     h2m.on_utterance("arm yourself", {"echo": False})
-    assert h2m.arm.state is ArmState.DISARMED and "Arm and start helping? Say yes." in h2m.spoken
+    assert h2m.arm.state is ArmState.DISARMED and "Arm and start helping?" in h2m.spoken
     h2m.on_utterance("yes", {"echo": False, "asked_by": "Sam"})
     assert h2m.arm.state is ArmState.DISARMED  # only the wearer
     h2m.on_utterance("yes", {"echo": False})
@@ -151,3 +151,13 @@ def test_its_own_voice_is_not_heard_as_the_person(h2m):
     assert not t._wake.is_set()
     t.think("heartbeat")
     assert t.client.sent[-1]["heard"] == []
+
+
+def test_a_yes_right_after_the_arm_question_still_arms(h2m):
+    t = thinker(h2m)
+    h2m.disarm("test")
+    t._wake.clear()
+    h2m.on_utterance("arm yourself", {"echo": False})
+    h2m.on_utterance("yes", {"echo": True})  # heard as the question ended
+    assert h2m.arm.state is ArmState.READY
+    assert not t._wake.is_set()  # commands are not the thinker's turn

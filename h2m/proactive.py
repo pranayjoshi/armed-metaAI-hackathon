@@ -72,6 +72,14 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
+def spoken_time(wall: float) -> str:
+    """Local time as it is said: "8 pm", "8:30 pm", "12 am"."""
+    t = time.localtime(wall)
+    hour = t.tm_hour % 12 or 12
+    clock = f"{hour}" if t.tm_min == 0 else f"{hour}:{t.tm_min:02d}"
+    return f"{clock} {'am' if t.tm_hour < 12 else 'pm'}"
+
+
 class CallLog:
     """Live Meta API calls for the chips: in flight (no ``ms``) and just landed."""
 
@@ -181,6 +189,7 @@ class Proposer:
         self._note: tuple[str, float] | None = None
         self._lock = threading.Lock()
         self._seen_due: set[str] = set()
+        self._spoken: dict[str, float | None] = {}  # routine -> last_proposed of the line said
         self._reasons: dict[str, str] = {}  # card id -> Spark's reason for the menu that is up
         ranker = getattr(app, "ranker", None)
         if ranker is not None:
@@ -468,12 +477,19 @@ class Proposer:
             name = str(entry.get("name") or "").lower()
             oid = str(entry.get("id") or "").lower()
             if (name and name in text) or (oid and oid in text):
-                opt = self._option_for("pick_place", entry.get("id"), scene,
-                                       label=f"{tr.asked_by} asked: bring {name or oid}",
+                # An object that is handed over in two stages (the marker, to X's hand) is
+                # offered as that hand over; the second card says whose hand.
+                hand = self.app._two_stage(oid) and "hand_over" in self.app.embodied.skills
+                opt = self._option_for("hand_over" if hand else "pick_place", entry.get("id"), scene,
+                                       label=f"{tr.asked_by} asked: {name or oid}" if hand
+                                       else f"{tr.asked_by} asked: bring {name or oid}",
                                        trigger=True, evidence=tuple(tr.evidence),
                                        asked_by=tr.asked_by, why=f"{tr.asked_by} asked for the {name or oid}")
                 if opt is not None:
-                    rung = self._rung(opt, None, tr.asked_by)
+                    if hand:
+                        self.app._asked_by[str(oid)] = str(tr.asked_by)
+                    rung = self._rung(opt, self.app.embodied.skills.get("hand_over") if hand else None,
+                                      tr.asked_by)
                     return None if rung.rung == "never" else replace(opt, rung=rung.rung)
         for name, skill in self.app.embodied.skills.items():
             if not skill.requires_object and name.replace("_", " ") in text:
@@ -552,10 +568,13 @@ class Proposer:
         return out[:3], row, context
 
     def remember(self, cards: Sequence[Candidate]) -> None:
-        """The cards that went up: keep the extras so their outcome reaches the book."""
+        """The cards that went up: keep the extras so their outcome reaches the book, and
+        speak a routine's line once for the ask card that was raised."""
         for c in cards:
             if c.routine or c.asked_by or c.evidence:
                 self._cards[c.id] = c
+            if c.routine and not c.asked_by and c.rung not in AUTO_RUNGS:
+                self._speak_card_line(c.routine)
         while len(self._cards) > 32:
             self._cards.pop(next(iter(self._cards)))
 
@@ -628,6 +647,22 @@ class Proposer:
                              name="h2m-announce-routine", daemon=True).start()
         return True
 
+    def _speak_card_line(self, name: str) -> None:
+        """Say a routine's ``say`` line once per proposal when its ask card is raised.
+        Speech only: nothing moves, and the card still needs the person's confirmation.
+        Silent in quiet hours, when the mic is muted or ``proactive.speak`` is off."""
+        routine = self.book.get(name)
+        if routine is None or not routine.say or self.cfg.get("speak", True) is False:
+            return
+        if self.quiet_now() or getattr(getattr(self.app, "speech", None), "muted", False):
+            return
+        stamp = routine.last_proposed
+        if self._spoken.get(name) == stamp:
+            return  # this proposal's line was already spoken
+        self._spoken[name] = stamp
+        line = routine.say.replace("{time}", spoken_time(self.wall()))
+        threading.Thread(target=self._say, args=(line,), name="h2m-routine-say", daemon=True).start()
+
     def _say(self, text: str) -> None:
         try:
             self.app._say(text)
@@ -663,4 +698,4 @@ def build_proposer(app: Any, cfg: Mapping[str, Any], **kw: Any) -> Proposer | No
     return Proposer(app, cfg, **kw)
 
 
-__all__ = ["RUNGS", "CallLog", "Proposer", "Trigger", "build_proposer"]
+__all__ = ["RUNGS", "CallLog", "Proposer", "Trigger", "build_proposer", "spoken_time"]

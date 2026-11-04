@@ -40,7 +40,18 @@ def test_mock_is_refused_with_the_real_band_and_for_unknown_gestures():
     with pytest.raises(ValueError):
         emg_service(EventLog(), hardware=True).mock("twitch")
     with pytest.raises(ValueError):
-        emg_service(EventLog()).mock("squeeze")
+        emg_service(EventLog()).mock("wave")
+
+
+def test_the_emg_source_switches_live_and_disarms_first(h2m):
+    c = TestClient(create_app(h2m, token=TOKEN), base_url="http://127.0.0.1")
+    r = c.post("/api/emg/source", json={"source": "synthetic"}, headers=GOOD)
+    assert r.json()["changed"] is True and h2m.emg.source.name == "synthetic"
+    assert h2m.arm.state is ArmState.DISARMED and h2m._emg_problem in h2m.arm.guards
+    assert c.post("/api/emg/mock/twitch", headers=GOOD).status_code == 200
+    assert c.post("/api/emg/source", json={"source": "synthetic"}, headers=GOOD).json()["changed"] is False
+    assert c.post("/api/emg/source", json={"source": "myo"}, headers=GOOD).status_code == 409
+    h2m.emg.stop(wait_s=1.0)
 
 
 def test_a_mock_brace_freezes_a_moving_arm(h2m):
@@ -106,3 +117,31 @@ def test_a_profile_can_lift_the_routines_files_quiet_hours(h2m, tmp_path):
     assert make().book.quiet is not None  # configs/routines.yaml: 23:00-07:00
     off = make(quiet_hours="off")
     assert off.book.quiet is None and not off.quiet_now()
+
+
+class _Wrist:
+    def jpeg(self):
+        return b"\xff\xd8jpeg"
+
+
+class _Jaws:
+    model = "muse-spark-1.3"
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+
+    def chat(self, model, messages):
+        return '{"jaws": "%s"}' % self.answers.pop(0)
+
+
+@pytest.mark.parametrize("answers, empty", [
+    (("empty", "empty", "unsure"), True),
+    (("empty", "unsure", "unsure"), False),  # the cable hides the jaws: fail closed
+    (("empty", "empty", "holding"), False),
+])
+def test_the_wrist_camera_proves_the_gripper_empty_only_on_agreement(h2m, answers, empty):
+    h2m.vision = FakeVision([])
+    h2m.vision.wrist = _Wrist()
+    h2m._wrist_client = _Jaws(*answers)
+    ok, _ = h2m.check_gripper_by_wrist()
+    assert ok is empty and h2m.gripper.state().empty is empty

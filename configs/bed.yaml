@@ -3,18 +3,56 @@
 # objects in slot order (cup, pill cup, marker), and the bed routines.
 arm:
   poses_file: configs/poses_bed.yaml
+  # On the headboard the elbow lifts the bottle against gravity: at LeRobot's soft default (16)
+  # it stalled 20 deg behind at cup_slot.above and the tracking guard faulted (Nov 4). Same
+  # fix as shoulder_lift (configs/h2m.yaml); mappings merge, so shoulder_lift stays 28.
+  p_gains:
+    elbow_flex: 28
+  # On the bed the arm hands the pill cup, then the water bottle, to the wearer's hand and
+  # the marker to X's hand: each object has its own taught pose pair and its own hand spot
+  # (routes_bed.yaml handover.sets). The marker stops at the lift for a second confirmation.
+  handover_sets:
+    default: handover          # the pill cup
+    cup: handover_bottle       # the water bottle
+    marker: x_hand
+  handover_two_stage: [marker]
+  handover_then: {pill_cup: cup}   # water is offered right after the pills
+  # Bed only: no scene camera sees the hand past the arm, so the hand check cannot pass. The wearer
+  # holds a hand out where the arm lowers and keeps the e-stop; speed stays at near_person_speed_cap.
+  handover_hand_check: false
+  # Bed only: no tray here, so "hand me the water" hands the named object over (hand_over).
+  give_hands_over: true
+  # Bed only: the hand-over paths in routes_bed.yaml are unmeasured placeholders (no table
+  # calibration on the bed). They may carry a hand over while no rule applies to the object;
+  # a rule that needs the path as proof (avoid zone, lift higher, slow down) still holds.
+  handover_path_unmeasured_ok: true
+safety:
+  # Bed only (no tray): after a start the gripper can't be proven empty, which holds every
+  # hand over. The operator release opens the jaws at home, ready, after two confirms within
+  # operator_release_confirm_s (the arm panel's "Gripper empty"); anything held drops on the bed.
+  operator_release: true
+  operator_release_poses: [home]
 proactive:
   profile: bed
+rules:
+  routes_file: configs/routes_bed.yaml   # the bed's own handover spot and routes (measured separately from the desk)
 objects:
   - id: cup              # the id stays: the routines and the liquid tag key on it
     name: water bottle
     prompt: water bottle
-    max_grip: 0.5
+    aliases: [water, bottle, my water]
+    # The plastic bottle gives and slipped at the skill's soft grip (0.4, ~10% past touch):
+    # grab it at 0.7 and squeeze 30% x effort past the taught touch (~21%). Torque stays capped.
+    max_grip: 0.7
+    skill_grip: 0.7
+    touch_squeeze_pct: 30
   - id: pill_cup
     name: pill cup
-    prompt: pill cup
+    prompt: plastic box    # SAM 3.1 finds nothing for "pill cup" / "pill box"; this is the clear pill box (Nov 4)
+    aliases: [pills, my pills, pill box, medicine, tablets]
     max_grip: 0.4
   - id: marker
     name: marker
     prompt: marker
+    aliases: [highlighter, pen]
     max_grip: 0.6

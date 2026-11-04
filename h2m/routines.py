@@ -613,6 +613,8 @@ class RoutineBook:
             for r in self._routines.values():
                 if not r.enabled or r.mode == "never" or r.next_due is None:
                     continue
+                if r.profile is not None and r.profile != self.profile:
+                    continue  # the other setting's routine never fires here
                 left = r.next_due - wall
                 if left > 3600:
                     continue

@@ -22,7 +22,16 @@ import yaml
 from h2m.contract import StepContract, Verb
 from h2m.core import ROOT
 from h2m.robot.backend import GRIPPER, JOINTS
-from h2m.robot.skills import Plan, Pose, PoseError, PoseLibrary, Skill, Waypoint, load_skills
+from h2m.robot.skills import (
+    Plan,
+    Pose,
+    PoseError,
+    PoseLibrary,
+    Skill,
+    Waypoint,
+    handover_poses,
+    load_skills,
+)
 from h2m.safety import Decision, Verdict, decide
 from h2m.speech_out import SpeechOut
 
@@ -168,30 +177,46 @@ def plan_gesture(name: str, steps: Sequence[Pose], home: Pose) -> Plan:
     return Plan(f"gesture.{name}", tuple(waypoints), (*steps, home))
 
 
-def plan_place_near_user(lib: PoseLibrary, open_pct: float) -> Plan:
+DEFAULT_HANDOVER = "handover"  # the pose set (handover_above / handover_release) of no mapping
+
+
+def handover_set(arm_cfg: Mapping[str, Any], object_id: str | None) -> str:
+    """The pose set (a prefix: ``<set>_above`` / ``<set>_release``) used to hand over
+    ``object_id``: ``arm.handover_sets[object_id]``, else its ``default``, else the
+    original ``handover``."""
+    sets = arm_cfg.get("handover_sets") or {}
+    for key in (object_id, "default"):
+        value = sets.get(key) if key else None
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return DEFAULT_HANDOVER
+
+
+def plan_place_near_user(lib: PoseLibrary, open_pct: float, prefix: str = DEFAULT_HANDOVER) -> Plan:
     """Stage 1 of the handover: carry the held object from the start pose to above the
     marked spot and stop there. The gripper is not commanded. Lowering and release are
     a separate plan (``plan_place_lower``) that only runs after a fresh look at the spot.
-    ``open_pct`` is unused here; it is kept so both stages are built the same way."""
+    ``open_pct`` is unused here; it is kept so both stages are built the same way.
+    ``prefix`` names the pose set; both its poses must exist and be taught (PoseError)."""
     del open_pct
-    above = lib.pose("handover_above")
-    lib.pose("handover_release")  # both stages must be defined before stage 1 may start
+    above, _release = handover_poses(lib, prefix)  # both stages must be taught before stage 1
     lib.pose("home")
     return Plan(
         "place_near_user",
-        (Waypoint("handover_above", _arm_joints(above), "carry"),),
+        (Waypoint(f"{prefix}_above", _arm_joints(above), "carry"),),
         (above,),
     )
 
 
-def plan_place_lower(lib: PoseLibrary, open_pct: float) -> Plan:
+def plan_place_lower(lib: PoseLibrary, open_pct: float, prefix: str = DEFAULT_HANDOVER) -> Plan:
     """Stage 2: lower onto the spot, open, retreat and go home. The gripper only opens
     at the taught release pose; it never goes toward a hand."""
-    above, release, home = (lib.pose(n) for n in ("handover_above", "handover_release", "home"))
+    above, release = handover_poses(lib, prefix)
+    home = lib.pose("home")
     return Plan(
         "place_near_user.lower",
         (
-            Waypoint("handover_release", _arm_joints(release), "lower"),
+            Waypoint(f"{prefix}_release", _arm_joints(release), "lower"),
             Waypoint("open", {GRIPPER: open_pct}, "release", gripper_only=True, dwell_s=0.3),
             Waypoint("retreat", _arm_joints(above), "return"),
             Waypoint("home", dict(home.joints), "return"),
@@ -277,8 +302,10 @@ class Embodied:
         run_plan: RunPlanFn | None = None,
         speech: SpeechOut | None = None,
         vision: VisionFn | None = None,
+        held_fn: Callable[[], str | None] | None = None,
     ):
         self.lib = lib
+        self.held_fn = held_fn or (lambda: None)  # the object in the gripper (proven only)
         self.cfg = cfg
         self.safety_cfg: dict[str, Any] = dict(cfg.get("safety", {}))
         self.catalog = {str(o["id"]): o for o in cfg.get("objects", [])}
@@ -361,9 +388,10 @@ class Embodied:
     def _do_place_near_user(self) -> ToolResult:
         contract = self._contract(Verb.PLACE_NEAR_USER, speed=self._gesture_speed())
         open_pct = float(self.cfg.get("arm", {}).get("gripper_open", 60.0))
+        prefix = handover_set(self.cfg.get("arm", {}), self.held_fn())
         try:
-            plan: Plan | None = plan_place_near_user(self.lib, open_pct)
-        except KeyError:
+            plan: Plan | None = plan_place_near_user(self.lib, open_pct, prefix)
+        except (KeyError, PoseError):
             plan = None
         decision = decide(contract, self.world_fn(contract), self.safety_cfg)
         if plan is None:
@@ -430,4 +458,4 @@ class Embodied:
 
 __all__ = ["TOOLS", "GESTURES", "Embodied", "ToolError", "ToolResult", "validate_args",
            "load_gestures", "plan_gesture", "gesture_deviation", "plan_place_near_user",
-           "plan_place_lower", "skill_facts", "skill_speed"]
+           "plan_place_lower", "handover_set", "skill_facts", "skill_speed"]

@@ -111,6 +111,11 @@ def decide(contract: StepContract, world: dict[str, Any], cfg: dict[str, Any]) -
             checks["near_person_ok"] = world.get("near_person_ok") is True
         if world.get("needs_holding") is True:
             checks["holding"] = world.get("holding") is True
+        if world.get("needs_spot") is True:
+            # a skill that hands over to the person's hand: the same two proofs as
+            # place_near_user, for that object's own spot (world is set by the app)
+            checks["spot_watchable"] = world.get("spot_watchable") is True
+            checks["spot_clear"] = world.get("spot_clear") is True
     if contract.verb is Verb.PLACE_NEAR_USER:
         checks["holding"] = world.get("holding") is True
         checks["spot_watchable"] = world.get("spot_watchable") is True  # stage 2 can run
@@ -156,6 +161,11 @@ def decide(contract: StepContract, world: dict[str, Any], cfg: dict[str, Any]) -
             )
         if checks.get("holding") is False:
             return Decision(Verdict.HOLD, "I'm not holding anything for that", checks)
+        if checks.get("spot_watchable") is False:
+            why = world.get("watch_reason") or "I can't watch the spot while lowering"
+            return Decision(Verdict.HOLD, str(why), checks)
+        if checks.get("spot_clear") is False:
+            return Decision(Verdict.HOLD, "the marked spot is not proven clear of a hand", checks)
     if contract.verb is Verb.MOVE and not checks["destination_ok"]:
         why = world.get("destination_reason") or "that is not a free taught spot"
         return Decision(Verdict.HOLD, str(why), checks, slot_id=world.get("slot_id"))

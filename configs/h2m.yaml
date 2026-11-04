@@ -4,7 +4,8 @@
 objects:
   # What is on the table. `prompt` is what the detector looks for and what
   # people can say ("hand me the cup"). `max_grip` caps squeeze for that object
-  # (0 = gripper fully open, 1 = hardest allowed squeeze).
+  # (0 = gripper fully open, 1 = hardest allowed squeeze). Optional `aliases`: other names
+  # Muse may see it as (e.g. [highlighter] for a marker); Muse always says the taught name.
   - id: cup
     name: paper cup
     prompt: paper cup
@@ -41,6 +42,11 @@ speech:
   # `wearer:` to pin a label for every session. `speakers:` names labels for the Card.
   speakers: {}           # e.g. {A: Pranay, B: Sam}
   wearer: null
+  # false: every voice is the wearer's (one person in the room). Diarization relabels a
+  # lone speaker often (A, E, I, ...), so "first yes" picks a label that later changes and
+  # the wearer's own words read as someone else's. Turn on, with `wearer:` pinned, for
+  # scenes with a second person.
+  other_speakers: true
   # LOCAL STOP (energy burst only, no keyword model): a short loud sound (ratio x noise floor
   # for min_ms..max_ms) fires the app's stop handling as source "local_stop" without waiting
   # on the socket. Off by default: a clap or a cough would stop the arm too. The brace, the
@@ -228,6 +234,7 @@ safety:
   # the arm on any hand landmark within clear_radius + handover_watch_margin of the spot,
   # or when the newest hand pass is older than handover_watch_stale_ms. UNVERIFIED live.
   handover_recheck_s: 2.0
+  second_confirm_s: 30.0   # how long the second card of a two-stage hand over waits
   handover_watch_margin: 0.05
   handover_watch_stale_ms: 500
   # The arm counts as hiding the spot from the scene camera within this of the handover
@@ -326,6 +333,18 @@ arm:
   robot_id: my_follower_arm
   poses_file: configs/poses.yaml
   skills_file: configs/skills.yaml
+  # Pose sets a hand over uses, by object id (`default` for the rest): the set `x` is the
+  # taught pair x_above / x_release and has its own hand spot in routes.yaml
+  # (handover.sets.x; `handover` uses handover.spot). Both poses must be taught or the
+  # hand over is refused. Used by place_near_user and by `{handover}` in skills.yaml.
+  handover_sets:
+    default: handover
+  # REVIEWED RELAXATION (needs safety-reviewer sign-off), true = checked: false drops the vision
+  # hand-spot check and the lowering watchdog for `{handover}` skills only (place_near_user is
+  # unchanged). The pose set, route, rules, empty/holding proof and confirmations stay.
+  handover_hand_check: true
+  handover_two_stage: []   # objects whose hand over stops at the lift for a second confirmation
+  handover_then: {}        # object id -> the object offered right after its hand over completed
   control_hz: 30
   max_joint_speed_deg_s: 20
   max_gripper_speed_pct_s: 60
@@ -354,7 +373,7 @@ arm:
   # less touch_squeeze_pct x the grip effort, so a grab is a little firmer than a touch.
   # An untaught point pose falls back to the effort-mapped close. The torque limit still applies.
   use_taught_touch_close: true
-  touch_squeeze_pct: 8
+  touch_squeeze_pct: 24   # was 8: a soft effort (0.4) squeezed only ~3% past touch, too loose to carry
   # UNMEASURED: the widest opening known to clear the tray wall at tray_release. A pick to the
   # tray opens no wider than this; measure 38 and 57 at the arm, then raise it.
   tray_release_max_pct: 30

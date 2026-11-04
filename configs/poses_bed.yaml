@@ -72,23 +72,23 @@ poses:
       wrist_roll: 72.31
       gripper: 46.31
   handover_above:
-    taught: false
+    taught: true
     joints:
-      shoulder_pan: 85.63
-      shoulder_lift: -59.69
-      elbow_flex: 16.88
-      wrist_flex: 44.62
-      wrist_roll: 72.31
-      gripper: 39.14
+      shoulder_pan: 16.44
+      shoulder_lift: -5.19
+      elbow_flex: -13.1
+      wrist_flex: 25.8
+      wrist_roll: -26.1
+      gripper: 24.39
   handover_release:
-    taught: false
+    taught: true
     joints:
-      shoulder_pan: 88.7
-      shoulder_lift: -60.57
-      elbow_flex: 65.41
-      wrist_flex: 19.21
-      wrist_roll: 72.31
-      gripper: 46.31
+      shoulder_pan: 13.27
+      shoulder_lift: 26.2
+      elbow_flex: -13.1
+      wrist_flex: 18.33
+      wrist_roll: -26.1
+      gripper: 23.99
   via_left:
     taught: false
     joints:
@@ -233,6 +233,42 @@ poses:
       wrist_flex: 80.04
       wrist_roll: -13.14
       gripper: 6.98
+  handover_bottle_above:
+    taught: true
+    joints:
+      shoulder_pan: 18.9
+      shoulder_lift: -10.99
+      elbow_flex: -8.97
+      wrist_flex: 29.49
+      wrist_roll: 77.0
+      gripper: 24.32
+  handover_bottle_release:
+    taught: true
+    joints:
+      shoulder_pan: 16.09
+      shoulder_lift: 11.6
+      elbow_flex: -8.88
+      wrist_flex: 29.41
+      wrist_roll: 77.0
+      gripper: 24.32
+  x_hand_above:
+    taught: true
+    joints:
+      shoulder_pan: -40.26
+      shoulder_lift: -31.91
+      elbow_flex: -5.63
+      wrist_flex: 61.41
+      wrist_roll: -98.95
+      gripper: 12.62
+  x_hand_release:
+    taught: true
+    joints:
+      shoulder_pan: -44.4
+      shoulder_lift: -9.41
+      elbow_flex: -2.11
+      wrist_flex: 45.23
+      wrist_roll: -99.03
+      gripper: 12.62
 routes:
   direct: []
   via_left:
@@ -336,32 +372,32 @@ slots:
 gestures:
   nod:
   - name: nod_down
-    taught: false
+    taught: true
     joints:
-      shoulder_pan: -9.05
-      shoulder_lift: -57.67
-      elbow_flex: 21.36
-      wrist_flex: 98.0
-      wrist_roll: -17.71
-      gripper: 4.58
+      shoulder_pan: -14.68
+      shoulder_lift: -66.2
+      elbow_flex: 22.77
+      wrist_flex: 82.7
+      wrist_roll: -18.59
+      gripper: 17.48
   - name: nod_up
-    taught: false
+    taught: true
     joints:
-      shoulder_pan: -9.05
-      shoulder_lift: -57.67
-      elbow_flex: 21.36
-      wrist_flex: 80.5
-      wrist_roll: -17.71
-      gripper: 4.58
+      shoulder_pan: -14.68
+      shoulder_lift: -66.2
+      elbow_flex: 22.77
+      wrist_flex: 65.2
+      wrist_roll: -18.59
+      gripper: 17.48
   - name: nod_home
-    taught: false
+    taught: true
     joints:
-      shoulder_pan: -9.05
-      shoulder_lift: -57.67
-      elbow_flex: 21.36
-      wrist_flex: 92.35
-      wrist_roll: -17.71
-      gripper: 4.58
+      shoulder_pan: -14.68
+      shoulder_lift: -66.2
+      elbow_flex: 22.77
+      wrist_flex: 77.05
+      wrist_roll: -18.59
+      gripper: 17.48
   tilt:
   - name: tilt_left
     taught: false
@@ -410,24 +446,25 @@ gestures:
       wrist_roll: 0
       gripper: 5
   look_at_user:
+  # look_user: derived from the bed home, 14 degrees toward X (X's hand is at negative pan)
   - name: look_user
-    taught: false
+    taught: true
     joints:
-      shoulder_pan: 4.95
-      shoulder_lift: -57.67
-      elbow_flex: 21.36
-      wrist_flex: 84.35
-      wrist_roll: -17.71
-      gripper: 4.58
+      shoulder_pan: -28.68
+      shoulder_lift: -66.2
+      elbow_flex: 22.77
+      wrist_flex: 69.05
+      wrist_roll: -18.59
+      gripper: 17.48
   - name: look_user_home
-    taught: false
+    taught: true
     joints:
-      shoulder_pan: -9.05
-      shoulder_lift: -57.67
-      elbow_flex: 21.36
-      wrist_flex: 92.35
-      wrist_roll: -17.71
-      gripper: 4.58
+      shoulder_pan: -14.68
+      shoulder_lift: -66.2
+      elbow_flex: 22.77
+      wrist_flex: 77.05
+      wrist_roll: -18.59
+      gripper: 17.48
   thinking:
   - name: think_a
     taught: false

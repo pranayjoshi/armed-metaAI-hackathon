@@ -88,7 +88,12 @@ def _local_only(app: FastAPI, token: str | None) -> None:
                 problem = "missing or wrong session token"
         if problem is not None:
             return JSONResponse({"detail": problem}, status_code=403)
-        return await call_next(request)
+        response = await call_next(request)
+        if request.url.path.startswith("/web/"):
+            # Revalidate the console's scripts on every load (ETag keeps it cheap): a cached
+            # module from before an edit otherwise survives even a hard reload.
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def _page(web: Path, token: str, mode: str | None = None, rel: str = "index.html") -> HTMLResponse:
@@ -244,6 +249,11 @@ def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
             return {"ok": True}
         raise HTTPException(404, "unknown arm action")
 
+    @app.post("/api/gripper/check")
+    def gripper_check() -> dict[str, Any]:
+        """Prove the gripper empty from the wrist camera (Muse Spark); nothing moves."""
+        return result(*h2m.check_gripper_by_wrist("ui"))
+
     @app.post("/api/gripper/release")
     async def release_gripper(request: Request) -> dict[str, Any]:
         """SAFETY REVIEW: operator-only gripper release, two steps (token required, like
@@ -294,6 +304,14 @@ def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
             raise HTTPException(409, "only available with --emg synthetic")
         source.set_drive(flexor, extensor)
         return {"ok": True}
+
+    @app.post("/api/emg/source")
+    def emg_source(source: str = Body(..., embed=True)) -> dict:
+        """Switch between the real band (ganglion) and the synthetic source (mock dock)."""
+        try:
+            return h2m.set_emg_source(source)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
 
     @app.post("/api/emg/mock/{gesture}")
     def emg_mock(gesture: str) -> dict:

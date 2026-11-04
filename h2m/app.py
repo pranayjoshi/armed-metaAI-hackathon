@@ -56,6 +56,7 @@ Interaction rules:
 
 from __future__ import annotations
 
+import base64
 import hmac
 import math
 import re
@@ -64,19 +65,22 @@ import threading
 import time
 from collections import deque
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
-from h2m.compiler.grammar import Parsed, build_vocabulary, normalize, parse
+from h2m.compiler.grammar import Parsed, as_hand_over, build_vocabulary, normalize, parse
 from h2m.compiler.llm import build_llm
 from h2m.compiler.resolve import compile_contract, resolve_choice
 from h2m.contract import StepContract, Verb
 from h2m.core import ROOT, Event, EventLog, now
 from h2m.embodied import (
+    DEFAULT_HANDOVER,
     Embodied,
     ToolResult,
     gesture_deviation,
+    handover_set,
     plan_gesture,
     plan_place_lower,
     plan_place_near_user,
@@ -95,14 +99,19 @@ from h2m.grasp import (
     to_table,
     width_across_jaws,
 )
-from h2m.intent import IntentRanker, RankResult, SparkClient, scanning_candidates
+from h2m.intent import IntentRanker, RankResult, SparkClient, _parse_json, scanning_candidates
 from h2m.learning import Learner
 from h2m.proactive import build_proposer
 from h2m.recorder import Recorder
 from h2m.robot import ArmState, build_arm
 from h2m.robot.skills import (
+    PART_ALL,
+    PART_CARRY,
+    PART_PICK,
     Plan,
     Pose,
+    PoseError,
+    handover_poses,
     plan_home,
     plan_move,
     plan_pick_approach,
@@ -154,7 +163,8 @@ SKILL_GRIP_MAX = 0.4  # a skill's close (take_this, hold_up) stays soft: it may 
 HANDOVER_WATCH_STAGES = frozenset({"lower", "release"})  # the hand watchdog runs here
 # Never release-safe for the operator release, whatever the config lists: the spot near
 # the user is only let go over under the stage-2 hand watchdog.
-HANDOVER_POSES = frozenset({"handover_above", "handover_release"})
+HANDOVER_POSES = frozenset({"handover_above", "handover_release"})  # the default set
+CARRY_OFFER_S = 30.0  # how long the marker's second card waits (safety.second_confirm_s)
 RELEASE_DISABLED = (
     "the operator gripper release is off (set safety.operator_release: true in "
     "configs/h2m.yaml to enable it)"
@@ -212,6 +222,18 @@ class Pending:
     announced_at: float = field(default_factory=now)
     plan: Plan | None = None  # embodied plan to check against at execution (gesture / place)
     popped: bool = False  # set (under the app lock) by the confirm that took it
+
+
+class CarryJob(NamedTuple):
+    """The second stage of a two-stage hand over (the marker): the arm holds the object at
+    ``slot.above`` and ``contract_id`` is the card that carries it to the hand. Only valid
+    under the request epoch and arm_count stage 1 started at."""
+
+    contract_id: str
+    object_id: str
+    slot_id: str
+    epoch: int
+    armed: int
 
 
 class GraspJob(NamedTuple):
@@ -296,6 +318,7 @@ class H2M:
                 enabled=bool(speech_cfg.get("voice_out", True)),
             ),
             vision=self._scene_answer,
+            held_fn=lambda: self.gripper.state().object_id,
         )
         self.embodied.safety_cfg = self.safety_cfg  # one gate config for both paths
         self.pending: Pending | None = None
@@ -323,6 +346,11 @@ class H2M:
         # place_near_user stage 2 waiting for stage 1 to arrive: (contract, epoch, the
         # arm's arm_count at stage 1: any re-arming since, however it came, drops it)
         self._handover_job: tuple[StepContract, int, int] | None = None
+        # A two-stage hand over (arm.handover_two_stage): stage 1 running (contract, epoch,
+        # arm_count), then the card that carries the held object to the hand (CarryJob).
+        self._carry_wait: tuple[StepContract, int, int] | None = None
+        self._carry_job: CarryJob | None = None
+        self._asked_by: dict[str, str] = {}  # object id -> who asked for it (the second card)
         # A pick waiting at slot.above for its measured grasp (grasp.sam_width only).
         self._grasp_job: GraspJob | None = None
         self._grasp_chip: dict[str, Any] | None = None  # last measurement, for the snapshot
@@ -345,6 +373,7 @@ class H2M:
         # suggestion is a request through run_tool_calls, so the gate and one
         # confirmation stand between it and the arm. Off unless think.enabled is true.
         self.thinker = Thinker(self, cfg)
+        self._wrist_client: SparkClient | None = None  # the gripper's wrist check (Muse Spark)
         # The stop handler subscribes before the Recorder so the freeze runs before
         # any disk I/O on the same event.
         self.log.subscribe(self._on_event)
@@ -381,6 +410,33 @@ class H2M:
             if part is not None:
                 part.stop()
         self.arm.close()
+
+    EMG_SOURCES = ("ganglion", "synthetic")
+
+    def set_emg_source(self, source: str) -> dict[str, Any]:
+        """Swap the EMG source while running: the real band (ganglion) or the synthetic one
+        with the mock dock. Refused while the arm moves; it disarms first, and the arm
+        guard holds every motion until the new source streams a live, calibrated stop."""
+        if source not in self.EMG_SOURCES:
+            raise ValueError(f"source must be one of {', '.join(self.EMG_SOURCES)}")
+        if self.emg is not None and self.emg.source.name == source:
+            return {"ok": True, "source": source, "changed": False}
+        if self.arm.state is ArmState.MOVING:
+            raise ValueError("the arm is moving; switch the EMG source when it is still")
+        if self.arm.state is ArmState.READY:
+            self.disarm("emg source switch")
+        cfg = {**(self.cfg.get("emg") or {}), "source": source}
+        new = build_emg(cfg, self.log)
+        old, self.emg = self.emg, new
+        self.cfg["emg"] = cfg
+        if old is not None:
+            old.stop(wait_s=3.0)  # the band is one connection: let the old loop release it
+        elif self._emg_problem not in self.arm.guards:
+            self.arm.guards.append(self._emg_problem)
+        if new is not None:
+            new.start()
+        self.log.emit("emg.source", source=source, was=old.source.name if old else "off")
+        return {"ok": True, "source": source, "changed": True}
 
     # ── world ────────────────────────────────────────────────────────────────
     def visible_objects(self) -> list[dict[str, Any]]:
@@ -461,16 +517,19 @@ class H2M:
             problem = self._shape_handover(contract, held)
             world["route_clear"] = problem is None
             world["route_reason"] = problem
-            world["spot_watchable"], world["watch_reason"] = self._spot_watchable()
-            world["spot_clear"], world["spot_reason"] = self._spot_clear()
+            prefix = self._handover_prefix(held.object_id)
+            world["spot_watchable"], world["watch_reason"] = self._spot_watchable(prefix)
+            world["spot_clear"], world["spot_reason"] = self._spot_clear(prefix)
         elif contract.verb is Verb.SKILL:
             skill = self.embodied.skills.get(contract.utterance)
             world.update(skill_facts(skill, self.safety_cfg))
             if skill is not None:
                 contract.speed = min(contract.speed, skill_speed(skill, self.safety_cfg))
+                if skill.uses_handover:
+                    self._handover_skill_world(contract, world, held)
                 # Moving while (maybe) holding something is a carry whatever the skill
                 # says: rules shape it, a route must be proven, the question says so.
-                if skill.carries or (
+                elif skill.carries or (
                     not skill.needs_empty and world["gripper_empty"] is not True
                 ):
                     world["carries"] = True
@@ -542,7 +601,7 @@ class H2M:
         low, high = (float(v) for v in arm_cfg.get("taught_jaws_range", (20, 60)))
         return max(low, min(high, float(taught)))
 
-    def _touch_close_pct(self, slot: Any, grip: Any) -> float:
+    def _touch_close_pct(self, slot: Any, grip: Any, squeeze_pct: Any = None) -> float:
         """Where the jaws close to: the opening taught at the slot's ``point`` pose (the
         jaws touching the object there), less a small squeeze scaled by the grip effort, so
         a fragile object gets less. The torque limit still bounds the force. Falls back to
@@ -558,7 +617,9 @@ class H2M:
             or not 0.0 <= touch <= 100.0
         ):
             return grip.close_pct
-        squeeze = max(0.0, float(arm_cfg.get("touch_squeeze_pct", 8.0)))
+        if squeeze_pct is None:  # the object's own squeeze (catalog), else the arm's
+            squeeze_pct = arm_cfg.get("touch_squeeze_pct", 8.0)
+        squeeze = max(0.0, float(squeeze_pct))
         return max(float(self.arm.settings.gripper_hard_close), float(touch) - squeeze * grip.effort)
 
     def _tray_open_pct(self, slot: Any) -> float:
@@ -578,29 +639,56 @@ class H2M:
     def _speaking(self) -> bool:
         return self.embodied.speech.speaking()
 
-    def _spot_clear(self) -> tuple[bool, str]:
-        """No tracked hand near the marked spot, on a fresh pass. Fails closed with no
-        camera, no hand tracker, a stale pass, no taught spot or the arm hiding it."""
+    def _handover_prefix(self, object_id: str | None) -> str:
+        """The pose set (``arm.handover_sets``) the hand over of ``object_id`` uses."""
+        return handover_set(self.cfg.get("arm", {}), object_id)
+
+    def _hand_check(self) -> bool:
+        """Do the {handover} skills check the vision hand spot (and run the lowering
+        watchdog)? On unless ``arm.handover_hand_check`` is literally false. Off, the gate
+        still proves the pose set, route, rules, holding/empty and the confirmation, but
+        nothing verifies a hand is clear of the spot. A reviewed relaxation, off by default."""
+        return self.cfg.get("arm", {}).get("handover_hand_check") is not False
+
+    def _two_stage(self, object_id: str | None) -> bool:
+        """Does this object's hand over stop at the lift for a second confirmation?"""
+        listed = self.cfg.get("arm", {}).get("handover_two_stage") or []
+        return object_id is not None and object_id in listed
+
+    def _handover_pose_names(self) -> frozenset[str]:
+        """Every pose of every handover set (none is a release-safe place)."""
+        sets = self.cfg.get("arm", {}).get("handover_sets") or {}
+        prefixes = {DEFAULT_HANDOVER, *(v for v in sets.values() if isinstance(v, str))}
+        return frozenset(f"{p}_{end}" for p in prefixes for end in ("above", "release"))
+
+    def _spot_clear(self, prefix: str = DEFAULT_HANDOVER) -> tuple[bool, str]:
+        """No tracked hand near the marked spot of this handover set, on a fresh pass.
+        Fails closed with no camera, no hand tracker, a stale pass, no taught spot for
+        the set or the arm hiding it."""
         handover = self._proof_routes().handover if self.routes else None
+        spot = handover.hand_spot(prefix) if handover else None
         hands = getattr(self.vision, "hands_seen", None) if self.vision is not None else None
         stale_s = float(self.cfg.get("vision", {}).get("stale_ms", 800)) / 1000
         return spot_is_clear(
             hands,
             now(),
             stale_s,
-            handover.spot if handover else None,
-            handover.clear_radius if handover else 0.0,
-            hidden=self._arm_hides_spot(),
+            spot.spot if spot else None,
+            spot.clear_radius if spot else 0.0,
+            hidden=self._arm_hides_spot(prefix),
         )
 
-    def _spot_watchable(self) -> tuple[bool, str]:
-        """Could stage 2 (lower + release under the hand watchdog) ever run? Needs the
-        camera checked at teach time to see the spot past the arm, and a running hand
-        tracker. Fails closed: missing or unreadable means not watchable."""
+    def _spot_watchable(self, prefix: str = DEFAULT_HANDOVER) -> tuple[bool, str]:
+        """Could the lowering (lower + release under the hand watchdog) ever run? Needs the
+        camera checked at teach time to see this set's spot past the arm, and a running
+        hand tracker. Fails closed: missing or unreadable means not watchable."""
         handover = self.routes.handover if self.routes else None
         if handover is None:
             return False, "I have no taught path to the marked spot"
-        if handover.camera_sees_past_arm is not True:
+        spot = handover.hand_spot(prefix)
+        if spot is None:
+            return False, f"I have no marked hand spot for the {prefix} poses"
+        if spot.camera_sees_past_arm is not True:
             return False, (
                 "my camera isn't checked to see the spot past my arm, so I couldn't watch "
                 "it while lowering"
@@ -610,17 +698,18 @@ class H2M:
             return False, "I have no hand tracking, so I couldn't watch the spot while lowering"
         return True, "spot watchable"
 
-    def _arm_hides_spot(self) -> bool:
-        """The arm is near the handover poses (between the scene camera and the spot),
+    def _arm_hides_spot(self, prefix: str = DEFAULT_HANDOVER) -> bool:
+        """The arm is near the set's handover poses (between the scene camera and the spot),
         unless the camera was checked at teach time to see past it. Unknown = hidden."""
         handover = self.routes.handover if self.routes else None
-        if handover is None:
+        spot = handover.hand_spot(prefix) if handover else None
+        if spot is None:
             return True
-        if handover.camera_sees_past_arm:
+        if spot.camera_sees_past_arm:
             return False
         tol = float(self.safety_cfg.get("handover_occlusion_deg", 30.0))
         measured = self.arm.measured()
-        for name in ("handover_above", "handover_release"):
+        for name in (f"{prefix}_above", f"{prefix}_release"):
             pose = self.arm.poses.poses.get(name)
             if pose is None:
                 return True
@@ -641,6 +730,57 @@ class H2M:
 
     def catalog_tags(self) -> set[str]:
         return catalog_tags(self.routes, self.cfg.get("objects", []))
+
+    def _is_carry_stage(self, contract: StepContract) -> bool:
+        job = self._carry_job
+        return job is not None and job.contract_id == contract.id
+
+    def _carry_stage_problem(self, contract: StepContract) -> str | None:
+        """Why the second stage may not start, or None: it is the card raised at the lift,
+        under the epoch and arm_count stage 1 started at, with the arm still above the slot."""
+        job = self._carry_job
+        if job is None or job.contract_id != contract.id:
+            return "that hand over was cancelled"
+        if job.epoch != self._epoch or job.armed != self.arm.arm_count:
+            return "that hand over was cancelled"
+        slot = self.arm.poses.slots.get(job.slot_id)
+        if slot is None:
+            return "no reachable slot"
+        dev = pose_deviation(self.arm.measured(), slot.above.joints)
+        tol = float(self.safety_cfg.get("handover_start_tol_deg", 5.0))
+        if dev is None or not dev <= tol:
+            return f"I'm not above the {contract.object_name or 'object'}'s slot"
+        return None
+
+    def _handover_skill_world(
+        self, contract: StepContract, world: dict[str, Any], held: GripperState
+    ) -> None:
+        """Gate facts for a ``{handover}`` skill (hand_over): the object's own pose set must
+        be taught, its path and rules shape the carry, and its own hand spot is checked.
+        A two-stage object stops at the lift: the first stage needs no spot, the second
+        (the card raised at the lift, run only under its job) needs it fresh."""
+        prefix = self._handover_prefix(contract.object_id)
+        carry_stage = self._is_carry_stage(contract)
+        world["carries"] = True
+        problem: str | None = None
+        try:
+            handover_poses(self.arm.poses, prefix)
+        except PoseError as exc:
+            problem = str(exc)
+        if carry_stage:
+            world["needs_empty"], world["needs_holding"] = False, True
+            world["holding"] = held.holding and held.object_id == contract.object_id
+            world["target_visible"] = world["holding"]  # in the gripper: the camera can't see it
+            problem = problem or self._carry_stage_problem(contract)
+        if problem is None:
+            problem = self._shape_handover(
+                contract, GripperState("holding", contract.object_id), check_start=False
+            )
+        world["route_clear"], world["route_reason"] = problem is None, problem
+        if self._hand_check() and (carry_stage or not self._two_stage(contract.object_id)):
+            world["needs_spot"] = True
+            world["spot_watchable"], world["watch_reason"] = self._spot_watchable(prefix)
+            world["spot_clear"], world["spot_reason"] = self._spot_clear(prefix)
 
     def _shape_carry(self, contract: StepContract) -> str | None:
         """Apply matching approved rules to a carry: set route and applied_rules, and
@@ -714,14 +854,29 @@ class H2M:
             rules: Any = self.rules.list()
         except RulesUnavailable as exc:
             rules = exc
-        shaping = plan_handover(
+        shape = (
             tags_for(held.object_id, self.routes, self.catalog),
             rules,
-            self._proof_routes(),
             float(self.rules_cfg.get("slow_down_speed", 0.5)),
             float(self.rules_cfg.get("grip_gentler", 0.6)),
-            name,
         )
+        shaping = plan_handover(shape[0], shape[1], self._proof_routes(), *shape[2:], name)
+        if (
+            self.cfg.get("arm", {}).get("handover_path_unmeasured_ok") is True
+            and self.routes is not None
+            and self.routes.handover is not None
+            and shaping.problem == "I have no taught path to the marked spot."
+        ):
+            # Bed only: the path is a placeholder, so it may carry the hand over only where
+            # nothing needs it as proof: no approved rule for what is held (a placeholder can't
+            # show an avoid zone is missed), and the rule store readable.
+            tags = set(shape[0])
+            ruled = isinstance(rules, RulesUnavailable) or any(
+                r.approved and tags & set(r.when_holding) for r in rules
+            )
+            loose = plan_handover(shape[0], shape[1], self.routes, *shape[2:], name)
+            if not ruled and loose.problem is None and not loose.applied:
+                shaping = loose
         contract.route = shaping.route
         contract.applied_rules = list(shaping.applied)
         self.learner.note_applied(
@@ -754,6 +909,8 @@ class H2M:
         t0 = now()
         meta = meta or {}
         parsed = parse(text, self.vocab)
+        if self.cfg.get("arm", {}).get("give_hands_over") is True:
+            parsed = as_hand_over(parsed)
         self.log.emit("speech.utterance", text=text, source=source, verb=str(parsed.verb), **meta)
         if parsed.verb is Verb.STOP:
             self.stop(f"{source}: {text}")
@@ -766,6 +923,23 @@ class H2M:
             self._power_offer = None
             self.disarm(f"{source}: {text}")
             self._say("Disarmed. I'm still watching and listening.")
+            return
+        offer = self._power_offer
+        if (
+            parsed.verb is Verb.CONFIRM
+            and offer is not None
+            and source == "voice"
+            and not meta.get("asked_by")
+            and not self._is_echo(text)
+        ):
+            # The answer to "Arm and start helping?". That question has no "yes" in it, so a
+            # "yes" heard as it ends cannot be its echo; arming moves nothing. Every other
+            # confirmation keeps the strict echo window below.
+            self._power_offer = None
+            if now() - offer > POWER_OFFER_S:
+                self._say("That question lapsed. Say arm yourself again.")
+                return
+            self._arm_by_voice()
             return
         # Past this point the words could start or confirm something. Nothing heard while
         # the robot was talking counts, nor anything repeating what it just said.
@@ -782,20 +956,6 @@ class H2M:
         with self._lock:
             pending = self.pending
             proposal = self.learner.proposal
-        offer = self._power_offer
-        if (
-            parsed.verb is Verb.CONFIRM
-            and offer is not None
-            and pending is None
-            and proposal is None
-            and not meta.get("asked_by")
-        ):
-            self._power_offer = None
-            if onset < offer or now() - offer > POWER_OFFER_S:
-                self._say("That question lapsed. Say arm yourself again.")
-                return
-            self._arm_by_voice()
-            return
         if parsed.verb is Verb.CONFIRM:
             if meta.get("asked_by"):
                 # Diarized as someone other than the wearer: only the wearer answers.
@@ -869,7 +1029,7 @@ class H2M:
         if state not in (ArmState.DISARMED, ArmState.STOPPED):
             self._say(f"I can't arm while {state}.")
             return
-        self._say("Arm and start helping? Say yes.")
+        self._say("Arm and start helping?")
         self._power_offer = now()
 
     def _arm_by_voice(self) -> None:
@@ -965,6 +1125,8 @@ class H2M:
         self._set_pending(parsed, contract, decision)
         if decision.verdict is Verdict.APPROVE:
             self._execute(contract, decision, confirmed_by="auto")
+        else:
+            self._speak_decision(contract, decision)
 
     def _set_pending(
         self,
@@ -972,6 +1134,7 @@ class H2M:
         contract: StepContract,
         decision: Decision,
         plan: Plan | None = None,
+        timeout_s: float | None = None,
     ) -> None:
         """Replace the pending request; an ASK waits for a confirmation. A request from
         an older epoch (stopped or cancelled while it compiled) is not queued."""
@@ -981,7 +1144,7 @@ class H2M:
             if not stale:
                 self.pending = None
             if not stale and decision.verdict is Verdict.ASK:
-                timeout = float(self.safety_cfg.get("confirm_timeout_s", 8.0))
+                timeout = timeout_s or float(self.safety_cfg.get("confirm_timeout_s", 8.0))
                 self.pending = Pending(parsed, contract, decision, now() + timeout, plan=plan)
                 # A new question supersedes an unanswered rule: "yes" must be unambiguous.
                 dropped = self.learner.pop_proposal()
@@ -1065,11 +1228,46 @@ class H2M:
         if decision.verdict is Verdict.ASK and contract.needs_motion:
             self._set_pending(None, contract, decision, plan=result.plan)
             self.reply = decision.reason
+            self._speak_decision(contract, decision)
             return False, True
         self.reply = decision.reason
+        if decision.verdict is Verdict.HOLD and contract.verb is not Verb.PLACE_NEAR_USER:
+            self._speak_decision(contract, decision)
         if contract.verb is Verb.PLACE_NEAR_USER:
             self._say(f"I won't take it to the spot: {decision.reason}.")
         return False, False
+
+    SKILL_ASKS = {
+        "hand_over": "Hand you the {o}", "hold_up": "Hold up the {o}", "hold_jar": "Hold the jar",
+        "take_this": "Take it from you", "sip": "Bring you a sip", "press_button": "Press the button",
+    }
+
+    def _question(self, contract: StepContract) -> str:
+        """The request as a short spoken question's body: "Hand you the water bottle"."""
+        o = contract.object_name or "it"
+        verb = contract.verb
+        if verb is Verb.SKILL:
+            name = contract.utterance or "that"
+            return self.SKILL_ASKS.get(name, name.replace("_", " ").capitalize()).format(o=o)
+        return {
+            Verb.PICK_PLACE: f"Put the {o} in the tray",
+            Verb.MOVE: f"Move the {o}",
+            Verb.PLACE_NEAR_USER: "Put it down by your hand",
+            Verb.HOME: "Go home",
+            Verb.POINT: f"Point at the {o}",
+        }.get(verb, "Do that")
+
+    def _speak_decision(self, contract: StepContract, decision: Decision) -> None:
+        """Say every question and every refusal out loud (the Card shows Yes / No). The
+        question never says "yes": a yes heard over Armed's own voice is echo. Quiet when
+        the caller speaks for itself (the thinker phrases its own question)."""
+        if getattr(self._tls, "quiet", False) or not contract.needs_motion:
+            return
+        q = self._question(contract)
+        if decision.verdict is Verdict.ASK:
+            self._say(f"{q}?")
+        elif decision.verdict is Verdict.HOLD and decision.reason:
+            self._say(f"I can't {q[0].lower()}{q[1:]}: {decision.reason.rstrip('.')}.")
 
     def _say(self, text: str) -> ToolResult:
         """Speak ``text`` through the say tool (gated, speech only) and show it. The
@@ -1202,6 +1400,7 @@ class H2M:
         with self._lock:
             had = self.pending is not None
             self.pending = None
+            self._carry_wait = self._carry_job = None
             self._release_offer = None
             self._epoch += 1  # drops a Muse reply or confirmed plan not yet started
         self.arm.stop_if_active(reason)  # atomic check-and-stop of a moving arm
@@ -1214,6 +1413,7 @@ class H2M:
         with self._lock:
             self.pending = None
             self._handover_job = None  # stage 2 never follows a stop
+            self._carry_wait = self._carry_job = None
             self._grasp_job = None
             self._release_offer = None
             self._epoch += 1
@@ -1227,6 +1427,7 @@ class H2M:
             had = self.pending is not None
             self.pending = None
             self._handover_job = None
+            self._carry_wait = self._carry_job = None
             self._grasp_job = None
             self._release_offer = None
             self._epoch += 1
@@ -1261,7 +1462,8 @@ class H2M:
         poses = self.arm.poses
         tol = float(self.safety_cfg.get("operator_release_tol_deg", 5.0))
         measured = self.arm.measured()
-        for name in sorted(HANDOVER_POSES):
+        handover_names = self._handover_pose_names()
+        for name in sorted(handover_names):
             pose = poses.poses.get(name)
             if pose is None:
                 continue
@@ -1279,7 +1481,7 @@ class H2M:
                 names.append(entry)
         best: tuple[float, str, dict[str, float]] | None = None
         for name in names:
-            if name in HANDOVER_POSES:
+            if name in handover_names:
                 continue
             try:
                 pose = poses.pose(name)
@@ -1291,8 +1493,73 @@ class H2M:
             if dev is not None and dev <= tol and (best is None or dev < best[0]):
                 best = (dev, name, dict(pose.joints))
         if best is None:
-            return None, None, BRING_TO_TRAY
+            if any(n.startswith("tray_") or n.endswith(".grasp") for n in names):
+                return None, None, BRING_TO_TRAY
+            return None, None, (
+                f"move me to {' or '.join(names) or 'a release pose'} first: "
+                "I only open my gripper alone there"
+            )
         return best[1], best[2], ""
+
+    WRIST_SYSTEM = (
+        "You check a robot gripper from its wrist camera. The two white jaws are at the bottom "
+        "of the frame. A red and black cable may loop in front of the lens: it is never held. "
+        'Answer only JSON: {"jaws": "empty" | "holding" | "unsure", "what": short text}. '
+        '"empty" only if you can see the space between the jaws and nothing is in it. The table '
+        'and things far below the jaws are not held. If the jaws are hidden, "unsure".'
+    )
+
+    def check_gripper_by_wrist(self, by: str = "ui") -> tuple[bool, str]:
+        """Prove the gripper empty from the wrist camera, nothing moving: three Muse Spark
+        looks at one wrist frame; EMPTY only if two say empty and none says holding, and the
+        load reading agrees. Fails closed. Blocking (network): never on the EMG thread."""
+        wrist = self.vision.wrist if self.vision is not None else None
+        jpeg = wrist.jpeg() if wrist is not None else None
+        if jpeg is None:
+            return False, "I have no wrist camera frame"
+        if self.arm.state is ArmState.MOVING:
+            return False, "I'm moving; ask again when I'm still"
+        held = self.gripper.state()
+        if held.holding:
+            return False, f"I'm holding the {self._held_summary(held)['name'] or 'object'}"
+        load_max = float(self.safety_cfg.get("gripper_empty_load_max", 0.15))
+        load = self.arm.load
+        if isinstance(load, (int, float)) and load > load_max:
+            return False, "my gripper load says something is in my jaws"
+        if self._wrist_client is None:
+            base = (self.cfg.get("compiler") or {}).get("base_url")
+            self._wrist_client = SparkClient({**({"base_url": base} if base else {}),
+                                              "timeout_s": 20, "max_tokens": 2048})
+        b64 = base64.b64encode(jpeg).decode()
+        messages = [
+            {"role": "system", "content": self.WRIST_SYSTEM},
+            {"role": "user", "content": [
+                {"type": "text", "text": "Is anything held between the jaws?"},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ]},
+        ]
+
+        def look(_: int) -> str:
+            try:
+                reply = _parse_json(self._wrist_client.chat(self._wrist_client.model, messages)) or {}
+            except Exception:  # noqa: BLE001  # a failed look counts as unsure
+                return "unsure"
+            return str(reply.get("jaws", "unsure")).lower()
+
+        t0 = now()
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            answers = list(pool.map(look, range(3)))
+        ms = round((now() - t0) * 1000)
+        empty = answers.count("empty") >= 2 and "holding" not in answers
+        self.log.emit("gripper.wrist_check", answers=answers, empty=empty, ms=ms, by=by)
+        if not empty:
+            if "holding" in answers:
+                return False, "my wrist camera sees something between my jaws"
+            return False, ("my wrist camera can't see my jaws clearly (move the cable off the "
+                           "lens, or open the gripper at home)")
+        if not self.gripper.seen_empty("wrist camera: nothing between the jaws"):
+            return False, "I'm busy; ask again when I'm still"
+        return True, "my wrist camera sees my jaws empty"
 
     def _held_summary(self, held: GripperState) -> dict[str, Any]:
         name = None
@@ -1474,8 +1741,12 @@ class H2M:
             if not all(checks.get(k) is True for k in proven):
                 return None, "handover not checked"
             try:
-                plan = plan_place_near_user(arm.poses, float(arm.settings.gripper_open))
-            except KeyError:
+                plan = plan_place_near_user(
+                    arm.poses,
+                    float(arm.settings.gripper_open),
+                    self._handover_prefix(contract.object_id),
+                )
+            except (KeyError, PoseError):
                 return None, "the handover spot is not defined"
         if given is not None and given != plan:
             return None, "plan does not match the taught poses"
@@ -1490,6 +1761,8 @@ class H2M:
         epoch: int | None = None,
     ) -> tuple[bool, str]:
         arm = self.arm
+        if epoch is None:
+            epoch = self._epoch
         meta: dict[str, Any] = {
             "contract_id": contract.id,
             "object_id": contract.object_id,
@@ -1497,6 +1770,8 @@ class H2M:
             "confirmed_by": confirmed_by,
         }
         grip = None
+        watchdog = None
+        hand_prefix = part = None  # a {handover} skill's pose set and which part of it runs
         via: tuple = ()
         # home / point only command the gripper when it is proven empty (it may hold
         # something otherwise), and then only on a decision that checked the rules.
@@ -1529,24 +1804,62 @@ class H2M:
                 return False, "route not checked"
             if skill.near_person and decision.checks.get("near_person_ok") is not True:
                 return False, "near-person move not checked"
+            hand_prefix = part = None
+            if skill.uses_handover:
+                hand_prefix, part = self._handover_prefix(contract.object_id), PART_ALL
+                if self._is_carry_stage(contract):
+                    if why := self._carry_stage_problem(contract):
+                        return False, why
+                    part = PART_CARRY
+                elif self._two_stage(contract.object_id):
+                    part = PART_PICK
+                if part != PART_PICK and self._hand_check() and not all(
+                    decision.checks.get(k) is True for k in ("spot_watchable", "spot_clear")
+                ):
+                    return False, "hand spot not checked"
+            steps = skill.steps
+            if part in (PART_PICK, PART_CARRY) and skill.handover_cut is not None:
+                cut = skill.handover_cut
+                steps = steps[:cut] if part == PART_PICK else steps[cut:]
             close_pct = float(arm.settings.gripper_soft_close)
-            if skill.closes:
-                # A skill closes near a hand or on an unknown object: never above a soft grip.
+            if part == PART_CARRY:
+                pass  # the object is already held: no close, no torque change
+            elif skill.closes:
+                # A skill closes near a hand or on an unknown object: never above a soft grip,
+                # unless the catalog names this object's own skill grip (a slippery bottle);
+                # max_grip still bounds it, and so does the gripper torque cap.
+                obj = self.catalog.get(contract.object_id or "", {})
+                cap = float(obj.get("skill_grip", SKILL_GRIP_MAX))
                 effort = contract.grip_effort
                 if effort is None:
-                    effort = float(self.safety_cfg.get("default_grip", 0.5))
-                ceiling = float(self.catalog.get(contract.object_id or "", {}).get("max_grip", 1.0))
-                grip = arm.grip_for(min(effort, SKILL_GRIP_MAX), ceiling)
-                close_pct = self._touch_close_pct(slot, grip)
+                    effort = cap if "skill_grip" in obj else float(self.safety_cfg.get("default_grip", 0.5))
+                ceiling = float(obj.get("max_grip", 1.0))
+                grip = arm.grip_for(min(effort, cap), ceiling)
+                close_pct = self._touch_close_pct(slot, grip, obj.get("touch_squeeze_pct"))
                 meta["requested_effort"] = round(effort, 3)
             meta["skill_name"] = skill.name
-            meta["closes"] = skill.closes
-            last_jaw = next((st.gripper for st in reversed(skill.steps) if st.gripper), None)
+            meta["closes"] = any(st.gripper == "soft" for st in steps)
+            last_jaw = next((st.gripper for st in reversed(steps) if st.gripper), None)
             meta["releases"] = last_jaw == "open"
+            if part is not None:
+                meta["handover_set"] = hand_prefix
+                meta["epoch"], meta["armed"] = epoch, arm.arm_count
+                if part == PART_PICK:  # stops holding at the lift; a second card carries on
+                    meta["hand_stage"] = "pick"
+                    meta["holds"] = True
+                elif part == PART_ALL:
+                    meta["phase"] = "handover"
             try:
-                plan = plan_skill(arm.poses, skill, self._slot_open_pct(slot), close_pct, slot)
+                plan = plan_skill(
+                    arm.poses, skill, self._slot_open_pct(slot), close_pct, slot,
+                    handover=hand_prefix, part=part or PART_ALL,
+                )
             except KeyError as exc:
                 return False, f"skill {skill.name} uses an undefined pose {exc}"
+            except PoseError as exc:
+                return False, str(exc)
+            if part != PART_PICK and hand_prefix and self._hand_check():
+                watchdog = self._handover_watchdog(hand_prefix)
         elif contract.verb is Verb.MOVE:
             slot = arm.poses.slots.get(decision.slot_id or "")
             dest = arm.poses.slots.get(contract.destination or "")
@@ -1615,8 +1928,6 @@ class H2M:
             **meta, "object_name": contract.object_name, "tags": tags,
             "slot_id": decision.slot_id,
         })
-        if epoch is None:
-            epoch = self._epoch
         two_stage = contract.verb is Verb.PICK_PLACE and meta.get("phase") == APPROACH
         if contract.verb is Verb.PLACE_NEAR_USER:
             with self._lock:  # set before the start: arrival may come on the next tick
@@ -1626,8 +1937,15 @@ class H2M:
                 self._grasp_job = GraspJob(
                     contract, decision, dict(meta), epoch, arm.arm_count, effort, via
                 )
+        elif meta.get("hand_stage") == "pick":
+            with self._lock:  # set before the start: arrival may come on the next tick
+                self._carry_wait = (contract, epoch, arm.arm_count)
+        elif meta.get("hand_stage") is None and meta.get("handover_set") and part == PART_CARRY:
+            with self._lock:
+                self._carry_job = None  # consumed: the arm now carries it
         ok, reason = arm.execute(
-            plan, meta, grip, speed=contract.speed, still_wanted=lambda: not self._stale(epoch)
+            plan, meta, grip, speed=contract.speed, watchdog=watchdog,
+            still_wanted=lambda: not self._stale(epoch),
         )
         if not ok:
             if contract.verb is Verb.PLACE_NEAR_USER:
@@ -1636,6 +1954,9 @@ class H2M:
             elif two_stage:
                 with self._lock:
                     self._grasp_job = None
+            elif meta.get("hand_stage") == "pick":
+                with self._lock:
+                    self._carry_wait = None
             self.log.emit("intent.blocked", reason=reason, contract_id=contract.id)
         elif contract.verb is Verb.SKILL and (line := self.embodied.skills[contract.utterance].say):
             self._say(line)  # gated speech only; the plan is already running
@@ -1664,6 +1985,98 @@ class H2M:
             self._say(
                 f"I'm holding the {name} above the spot: {why}. Say go home to bring it back."
             )
+
+    # ── hand over: the marker's second card and the pills-then-water chain ───
+    def _offer_carry(self, contract_id: Any) -> None:
+        """Stage 1 of a two-stage hand over arrived at ``slot.above`` holding the object and
+        stopped. Raise the second card ("Hand it to X?"); nothing moves until it is
+        confirmed. The gate runs again on fresh facts, under stage 1's request epoch and
+        arm_count; a brace, stop or cancel since drops it and leaves the arm stopped."""
+        with self._lock:
+            wait, self._carry_wait = self._carry_wait, None
+            if wait is None or wait[0].id != contract_id:
+                return
+            self._in_flight += 1  # same section as the pop: a brace in between still stops
+        first, epoch, armed = wait
+        try:
+            self._offer_carry_card(first, epoch, armed)
+        finally:
+            with self._lock:
+                self._in_flight -= 1
+
+    def _offer_carry_card(self, first: StepContract, epoch: int, armed: int) -> None:
+        name = first.object_name or "it"
+        deadline = now() + float(self.safety_cfg.get("handover_recheck_s", 2.0))
+        while self.arm.state is not ArmState.READY and now() < deadline:
+            time.sleep(0.05)  # the arm is READY a tick after its completed event
+        slot = self.arm.slot_for(first.table_xy) if first.table_xy else None
+        stale = self._stale(epoch) or self.arm.arm_count != armed
+        if stale or slot is None or self.arm.state is not ArmState.READY:
+            return
+        contract = StepContract(
+            verb=Verb.SKILL,
+            object_id=first.object_id,
+            object_name=first.object_name,
+            table_xy=first.table_xy,
+            confidence=first.confidence,
+            source=first.source,
+            utterance=first.utterance,
+            speed=first.speed,
+            evidence=dict(first.evidence),
+        )
+        with self._lock:
+            self._carry_job = CarryJob(contract.id, str(first.object_id), slot.slot_id, epoch, armed)
+        decision = decide(contract, self._world(contract), self.safety_cfg)
+        if decision.verdict is not Verdict.ASK:
+            with self._lock:
+                self._carry_job = None
+            self._publish(contract, decision, stage="carry_offer")
+            self.log.emit("intent.blocked", reason=decision.reason, contract_id=first.id)
+            self._say(f"I'm holding the {name} at the lift: {decision.reason}. Say go home to bring it back.")
+            return
+        who = self._asked_by.get(str(first.object_id)) or "them"
+        decision = Decision(
+            Verdict.ASK, f"Hand it to {who}?", dict(decision.checks), slot_id=decision.slot_id
+        )
+        self._publish(contract, decision, stage="carry_offer")
+        self._tls.epoch = epoch  # _set_pending drops the card if anything bumped since
+        try:
+            self._set_pending(
+                None, contract, decision,
+                timeout_s=float(self.safety_cfg.get("second_confirm_s", CARRY_OFFER_S)),
+            )
+        finally:
+            self._tls.epoch = None
+        self.reply = decision.reason
+
+    def _chain_next(self, data: dict[str, Any]) -> None:
+        """A hand over completed. If ``arm.handover_then`` names a next object (pills, then
+        water), raise its card straight away: same tool path, same gate, its own
+        confirmation. Only with the gripper proven empty, and not under a stale request."""
+        nxt = (self.cfg.get("arm", {}).get("handover_then") or {}).get(data.get("object_id"))
+        if not isinstance(nxt, str) or not nxt:
+            return
+        epoch, armed = data.get("epoch"), data.get("armed")
+        if not isinstance(epoch, int) or not isinstance(armed, int):
+            return
+        deadline = now() + float(self.safety_cfg.get("handover_recheck_s", 2.0))
+        while (
+            self.arm.state is not ArmState.READY or not self._gripper_proven_empty()
+        ) and now() < deadline:
+            time.sleep(0.05)  # the arm is READY a tick after its completed event
+        if (
+            self._stale(epoch)
+            or self.arm.arm_count != armed
+            or self.arm.state is not ArmState.READY
+            or not self._gripper_proven_empty()
+        ):
+            return
+        self.log.emit("handover.chain", after=data.get("object_id"), next=nxt)
+        self._tls.epoch = epoch
+        try:
+            self.run_tool_calls([("skill", {"name": str(data.get("skill_name")), "object_id": nxt})])
+        finally:
+            self._tls.epoch = None
 
     # ── pick stage 2: the measured grasp (grasp.sam_width) ───────────────────
     def _continue_grasp(self, contract_id: Any, arrived_t: float) -> None:
@@ -1863,23 +2276,25 @@ class H2M:
         if held.object_id != contract.object_id:
             world["holding"] = False  # not the object this request was for
         problem = self._shape_handover(contract, held, check_start=False)
-        above = self.arm.poses.poses.get("handover_above")
+        prefix = self._handover_prefix(contract.object_id)
+        above = self.arm.poses.poses.get(f"{prefix}_above")
         dev = pose_deviation(self.arm.measured(), above.joints) if above else None
         tol = float(self.safety_cfg.get("handover_start_tol_deg", 5.0))
         if problem is None and (dev is None or not dev <= tol):
             problem = "I'm not above the spot"
         world["route_clear"], world["route_reason"] = problem is None, problem
-        world["spot_watchable"], world["watch_reason"] = self._spot_watchable()
+        world["spot_watchable"], world["watch_reason"] = self._spot_watchable(prefix)
         handover = self._proof_routes().handover if self.routes else None
+        spot = handover.hand_spot(prefix) if handover else None
         hands = getattr(self.vision, "hands_seen", None) if self.vision is not None else None
         margin = float(self.safety_cfg.get("handover_watch_margin", 0.05))
         world["spot_clear"], world["spot_reason"] = spot_is_clear(
             hands,
             now(),
             float(self.cfg.get("vision", {}).get("stale_ms", 800)) / 1000,
-            handover.spot if handover else None,
-            (handover.clear_radius + margin) if handover else 0.0,
-            hidden=not (handover and handover.camera_sees_past_arm),
+            spot.spot if spot else None,
+            (spot.clear_radius + margin) if spot else 0.0,
+            hidden=not (spot and spot.camera_sees_past_arm),
             newer_than=arrived_t,
         )
         world["confirmed"] = True  # stage 2 of a request a person confirmed
@@ -1908,8 +2323,12 @@ class H2M:
             time.sleep(0.05)
         self._publish(contract, decision, stage="lower")
         try:
-            plan = plan_place_lower(self.arm.poses, float(self.arm.settings.gripper_open))
-        except KeyError:
+            plan = plan_place_lower(
+                self.arm.poses,
+                float(self.arm.settings.gripper_open),
+                self._handover_prefix(contract.object_id),
+            )
+        except (KeyError, PoseError):
             return False, "the handover spot is not defined"
         meta = {
             "contract_id": contract.id,
@@ -1924,20 +2343,21 @@ class H2M:
             plan,
             meta,
             speed=contract.speed,
-            watchdog=self._handover_watchdog(),
+            watchdog=self._handover_watchdog(self._handover_prefix(contract.object_id)),
             still_wanted=wanted,
         )
 
-    def _handover_watchdog(self):
+    def _handover_watchdog(self, prefix: str = DEFAULT_HANDOVER):
         """Per-tick check while lowering and releasing (control thread, under the arm
         lock): attribute reads and arithmetic only. Stops on a hand within clear_radius
-        + margin of the spot, a stale or missing hand pass, or a hidden spot."""
+        + margin of the set's spot, a stale or missing hand pass, or a hidden spot."""
         handover = self._proof_routes().handover if self.routes else None
-        spot = handover.spot if handover else None
-        radius = (handover.clear_radius if handover else 0.0) + float(
+        hand = handover.hand_spot(prefix) if handover else None
+        spot = hand.spot if hand else None
+        radius = (hand.clear_radius if hand else 0.0) + float(
             self.safety_cfg.get("handover_watch_margin", 0.05)
         )
-        hidden = not (handover and handover.camera_sees_past_arm)
+        hidden = not (hand and hand.camera_sees_past_arm)
         stale_s = float(self.safety_cfg.get("handover_watch_stale_ms", 500)) / 1000
 
         def check(stage: str | None) -> str | None:
@@ -2497,6 +2917,22 @@ class H2M:
                     name="h2m-handover",
                     daemon=True,
                 ).start()
+            elif data.get("verb") == str(Verb.SKILL) and data.get("hand_stage") == "pick":
+                threading.Thread(  # the marker is held at the lift: raise the carry card
+                    target=self._offer_carry,
+                    args=(data.get("contract_id"),),
+                    name="h2m-carry-offer",
+                    daemon=True,
+                ).start()
+            elif data.get("verb") == str(Verb.SKILL) and data.get("handover_set") and (
+                data.get("releases") is True
+            ):
+                threading.Thread(  # handed over: the next object in the chain, if any
+                    target=self._chain_next,
+                    args=(data,),
+                    name="h2m-handover-chain",
+                    daemon=True,
+                ).start()
             elif data.get("verb") == str(Verb.PICK_PLACE) and data.get("phase") == APPROACH:
                 threading.Thread(  # the pick's measured-grasp stage 2, same reasons
                     target=self._continue_grasp,
@@ -2510,12 +2946,17 @@ class H2M:
             # Emitted after the freeze write, under the arm lock: plain assignments (no app
             # lock) void stage 2 and any release offer; the tracker takes its own lock.
             self._handover_job = None
+            self._carry_wait = self._carry_job = None
             self._grasp_job = None
             self._release_offer = None
             self.gripper.interrupted(
                 event.data.get("stage"), event.kind == "arm.fault", str(event.data.get("reason"))
             )
             self._selection_arm_event(event)  # after the freeze write: bookkeeping only
+            if event.kind == "arm.fault":
+                # Said off the control thread (this runs under the arm lock).
+                why = str(event.data.get("reason") or "a fault").split(" (")[0]
+                threading.Thread(target=self._say, args=(f"I stopped: {why}.",), daemon=True).start()
         elif event.kind == "incident.triggered":
             # The arm is already stopped (this event is emitted after the stop). Only a
             # non-blocking enqueue here: freeze, save and Muse run on the learner's worker.

@@ -41,7 +41,7 @@ def test_every_shipped_skill_plans_from_the_pose_file():
     assert {"wave", "bow", "celebrate", "sorry", "hold_up", "take_this", "sip", "press_button"} <= set(SKILLS)
     for skill in SKILLS.values():
         slot = LIB.slots["slot_1"] if skill.requires_object else None
-        plan = plan_skill(LIB, skill, 30.0, 20.0, slot)
+        plan = plan_skill(LIB, skill, 30.0, 20.0, slot, handover="handover")
         assert plan.skill == f"skill.{skill.name}"
         assert plan.waypoints[-1].label == "home" and GRIPPER not in plan.waypoints[-1].joints
         # placeholders: the real arm would refuse every one of them

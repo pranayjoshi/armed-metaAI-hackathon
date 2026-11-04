@@ -40,6 +40,8 @@ import atexit
 import json
 import queue
 import re
+import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -179,6 +181,40 @@ REST_MAX_RMS = 25.0  # a relaxed forearm reads well under this
 MIN_GAIN = 3.0  # a real contraction reaches at least this many times rest
 CONNECT_ATTEMPTS = 6  # about half of connections fail, and most often right after a disconnect
 
+# One BLE connect in a child process. CoreBluetooth aborts the whole process (SIGABRT) when
+# the OS refuses Bluetooth, which no try/except can catch, so the runtime asks a child first.
+_PROBE = """
+import json, sys
+from brainflow.board_shim import BoardShim, BrainFlowInputParams
+a = json.loads(sys.argv[1])
+p = BrainFlowInputParams()
+p.timeout = a["timeout"]
+p.other_info = a["other_info"]
+if a["mac"]:
+    p.mac_address = a["mac"]
+BoardShim.disable_board_logger()
+b = BoardShim(a["board"], p)
+b.prepare_session()
+b.release_session()
+"""
+
+
+def probe_ble(board_id: int, params: Any) -> None:
+    """Raise if connecting would kill the process; an ordinary connect failure passes
+    (the caller retries in-process, where that failure is catchable)."""
+    args = {"board": board_id, "timeout": params.timeout, "other_info": params.other_info,
+            "mac": params.mac_address or ""}
+    try:
+        r = subprocess.run([sys.executable, "-c", _PROBE, json.dumps(args)],
+                           capture_output=True, timeout=params.timeout + 20)
+    except subprocess.TimeoutExpired:
+        return
+    if r.returncode < 0 or r.returncode == 134:
+        raise RuntimeError(
+            "the band's Bluetooth connection was killed by the OS (Bluetooth not allowed "
+            "for this terminal?); still on no EMG, switch back to Synthetic"
+        )
+
 
 class GanglionSource:
     """OpenBCI Ganglion over BLE (native) or the BLED112 USB dongle, via BrainFlow."""
@@ -218,6 +254,8 @@ class GanglionSource:
             # decodes the compressed samples into noise thousands of uV too large.
             params.other_info = f"fw:{self.firmware}"
         BoardShim.disable_board_logger()
+        if board_id == BoardIds.GANGLION_NATIVE_BOARD.value:
+            probe_ble(board_id, params)
         for attempt in range(1, CONNECT_ATTEMPTS + 1):
             self._board = BoardShim(board_id, params)
             try:
@@ -369,10 +407,15 @@ class EmgService:
     # lifecycle
     def start(self) -> None:
         self._running = True
-        threading.Thread(target=self._loop, name="emg", daemon=True).start()
+        self._thread = threading.Thread(target=self._loop, name="emg", daemon=True)
+        self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, wait_s: float = 0.0) -> None:
+        """Stop the loop; with ``wait_s`` wait that long for it to release the source."""
         self._running = False
+        thread = getattr(self, "_thread", None)
+        if wait_s and thread is not None and thread is not threading.current_thread():
+            thread.join(wait_s)
 
     MOCK_GESTURES = ("twitch", "double_twitch", "squeeze", "brace")
 

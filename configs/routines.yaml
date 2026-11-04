@@ -15,7 +15,9 @@
 #   conditions  "hand not at keyboard", "hand at keyboard", "present", "holding",
 #               "not holding", "object visible <name>", "object not visible <name>",
 #               "heard <label>"  (a fact the packet does not have fails the condition)
-#   label / say  the card's text and the one line spoken when it is announced
+#   label / say  the card's text and the one line spoken when it is announced, or once when
+#                its ask card goes up (speech only, no motion; muted and in quiet hours it is
+#                silent). `{time}` in `say` is the local time, e.g. "8 pm" or "8:30 pm".
 #   first_after  for `every`: when the first one is due after start (default: the interval)
 routines:
   water:
@@ -59,4 +61,13 @@ routines:
     mode: ask
     window: 30s
     label: "Hold the jar?"
+  pills:
+    action: hand_over
+    object: pill_cup
+    every: 30m
+    mode: ask
+    window: 5m
+    profile: bed
+    label: "Pills?"
+    say: "It's {time} Pranay, time for your pills."
 quiet_hours: "23:00-07:00"

@@ -1,0 +1,67 @@
+# Bed routes: a copy of routes.yaml for the bed profile (configs/bed.yaml). The handover spot,
+# polyline and camera_sees_past_arm here are measured on the bed; the rest is unused on the bed.
+# Object tags and taught routes used by h2m/rules.py and h2m/routing.py.
+# PLACEHOLDER: every polyline and zone below is a stand-in and MUST be
+# re-measured at teach time (table coordinates, same frame as poses.yaml slots).
+# Set `measured: true` on a polyline only once it has been measured. The real arm
+# never uses an unmeasured polyline to prove a rule is kept: a carry that needs one
+# holds and says why.
+
+tags:            # object id -> tags; rules generalize through tags
+  cup: [liquid, fragile]
+  block: []
+  ball: [rigid]    # the phone (h2m.yaml object id `ball`)
+  bottle: [liquid]
+  tea: [liquid]    # a rule learned on the cup applies to the tea through `liquid`
+
+# name -> pick slot (poses.yaml slots) -> table polyline (x, y) from that slot to the
+# drop zone. Route proof is per (route, slot): a slot with no polyline for a route
+# cannot use that route when a rule must be checked.
+routes:
+  direct:
+    slot_1: {measured: false, path: [[0.25, 0.55], [0.30, 0.20], [0.50, 0.20]]}  # PLACEHOLDER
+    slot_2: {measured: false, path: [[0.50, 0.55], [0.30, 0.20], [0.50, 0.20]]}  # PLACEHOLDER
+    slot_3: {measured: false, path: [[0.75, 0.55], [0.30, 0.20], [0.50, 0.20]]}  # PLACEHOLDER
+  via_left:
+    slot_1: {measured: false, path: [[0.25, 0.55], [0.20, 0.40], [0.50, 0.40]]}  # PLACEHOLDER
+    slot_2: {measured: false, path: [[0.50, 0.55], [0.20, 0.40], [0.50, 0.40]]}  # PLACEHOLDER
+    slot_3: {measured: false, path: [[0.75, 0.55], [0.20, 0.40], [0.50, 0.40]]}  # PLACEHOLDER
+  via_high:
+    slot_1: {measured: false, path: [[0.25, 0.55], [0.10, 0.40], [0.10, 0.00], [0.50, 0.00]]}  # PLACEHOLDER
+    slot_2: {measured: false, path: [[0.50, 0.55], [0.10, 0.40], [0.10, 0.00], [0.50, 0.00]]}  # PLACEHOLDER
+    slot_3: {measured: false, path: [[0.75, 0.55], [0.10, 0.40], [0.10, 0.00], [0.50, 0.00]]}  # PLACEHOLDER
+
+high_routes:     # routes a lift_higher rule may still use (carried above the usual height)
+  - via_high
+
+zones:           # named avoid zones, axis-aligned rectangles [xmin, ymin, xmax, ymax]
+  laptop: [0.25, 0.12, 0.35, 0.28]                        # PLACEHOLDER, measure at teach time
+
+# place_near_user: the one taught path to the marked spot near the user (never into a
+# hand). Rules shape it like a carry route (avoid zones, slow_down; lift_higher needs
+# "handover" in high_routes). Delete this section to disable place_near_user.
+handover:
+  from: home                              # arm must be at this taught pose to start
+  polyline: [[0.50, 0.70], [0.15, 0.85]]  # PLACEHOLDER, measure at teach time
+  measured: false                         # true once the polyline is measured (hardware needs it)
+  spot: [0.15, 0.85]                      # PLACEHOLDER: table xy under poses.handover_release
+  clear_radius: 0.10                      # PLACEHOLDER: no hand landmark within this of the spot
+  # Set true only after checking at teach time that the scene camera sees a hand on the
+  # spot with the arm at handover_above and handover_release. While false, the arm over
+  # the spot hides it, so the lowering could never be watched: place_near_user is refused
+  # at the gate (and says why). It also needs a running hand tracker.
+  camera_sees_past_arm: false
+  # One hand spot per other handover set (arm.handover_sets in configs/bed.yaml). Each is
+  # measured with the arm at that set's _release pose; the check and the lowering watchdog
+  # use only the set's own spot. PLACEHOLDER until measured: true (dropped as proof on hardware).
+  sets:
+    handover_bottle:
+      spot: [0.15, 0.85]        # PLACEHOLDER: table xy under poses.handover_bottle_release
+      clear_radius: 0.10
+      measured: false
+      camera_sees_past_arm: false
+    x_hand:
+      spot: [0.15, 0.85]        # PLACEHOLDER: table xy under poses.x_hand_release
+      clear_radius: 0.10
+      measured: false
+      camera_sees_past_arm: false

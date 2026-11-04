@@ -48,6 +48,17 @@ HANDOVER = "handover"  # route name used for place_near_user shaping
 
 
 @dataclass(frozen=True)
+class HandSpot:
+    """One handover set's marked hand spot (``Handover.sets``): where the person's hand
+    is held for that set's ``<set>_release`` pose, measured at teach time."""
+
+    spot: Point  # table coords under the set's release pose
+    clear_radius: float  # no hand landmark may be within this of the spot
+    measured: bool = False  # False = placeholder (dropped as proof on hardware)
+    camera_sees_past_arm: bool = False  # as Handover.camera_sees_past_arm, for this set
+
+
+@dataclass(frozen=True)
 class Handover:
     """The one taught path to the marked spot near the user (place_near_user)."""
 
@@ -59,6 +70,16 @@ class Handover:
     # The scene camera sees a hand on the spot past the arm at the handover poses
     # (checked at teach time). False: the arm over the spot hides it, so it is not clear.
     camera_sees_past_arm: bool = False
+    # Other handover sets (``arm.handover_sets``): pose prefix -> its own hand spot.
+    # The default set (prefix "handover") uses the fields above.
+    sets: dict[str, HandSpot] = field(default_factory=dict)
+
+    def hand_spot(self, prefix: str) -> HandSpot | None:
+        """The hand spot of the set whose poses are ``<prefix>_above`` / ``<prefix>_release``;
+        None when that set has no spot (so a check against it fails closed)."""
+        if prefix == HANDOVER:
+            return HandSpot(self.spot, self.clear_radius, self.measured, self.camera_sees_past_arm)
+        return self.sets.get(prefix)
 
 
 @dataclass(frozen=True)
@@ -81,6 +102,10 @@ class RouteConfig:
             for name, per in self.routes.items()
         }
         handover = self.handover if self.handover and self.handover.measured else None
+        if handover is not None and handover.sets:
+            handover = replace(
+                handover, sets={k: v for k, v in handover.sets.items() if v.measured}
+            )
         return replace(self, routes=routes, handover=handover, unmeasured=frozenset())
 
 
@@ -119,6 +144,19 @@ def _handover(raw: Any) -> Handover | None:
     radius = float(raw["clear_radius"])
     if len(poly) < 2 or not radius > 0:
         raise ValueError("handover needs a polyline of 2+ points and clear_radius > 0")
+    sets: dict[str, HandSpot] = {}
+    for name, entry in (raw.get("sets") or {}).items():
+        if not isinstance(entry, dict):
+            raise TypeError(f"handover.sets.{name} must be a mapping")
+        ex, ey = entry["spot"]
+        r = float(entry["clear_radius"])
+        if not r > 0:
+            raise ValueError(f"handover.sets.{name} needs clear_radius > 0")
+        sets[str(name)] = HandSpot(
+            (float(ex), float(ey)), r,
+            measured=entry.get("measured") is True,
+            camera_sees_past_arm=entry.get("camera_sees_past_arm") is True,
+        )
     return Handover(
         str(raw["from"]),
         poly,
@@ -126,6 +164,7 @@ def _handover(raw: Any) -> Handover | None:
         radius,
         measured=raw.get("measured") is True,
         camera_sees_past_arm=raw.get("camera_sees_past_arm") is True,
+        sets=sets,
     )
 
 

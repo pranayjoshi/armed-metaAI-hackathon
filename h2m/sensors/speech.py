@@ -381,7 +381,8 @@ class SpeechService:
         name = self.speaker_name(label)
         asked_by = (
             name
-            if self.wearer_label is not None
+            if self.cfg.get("other_speakers", True) is not False
+            and self.wearer_label is not None
             and label is not None
             and str(label) != self.wearer_label
             else None

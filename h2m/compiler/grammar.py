@@ -63,24 +63,30 @@ PICK_PHRASES = (
     "bring",
     "get",
 )
+# Asking for something to be handed over. Where the tray is not taught (the bed,
+# arm.give_hands_over), these hand the named object over instead of clearing it.
+GIVE_PHRASES = ("give me", "hand me", "pass me", "bring me", "get me", "can i have", "i need", "i want")
 # Taught skills (configs/skills.yaml): phrase -> (skill, takes an object). Checked before
 # the verbs so "hold up the cup" is a skill, while "show me the cup" stays a point.
-SKILL_PHRASES: tuple[tuple[str, str, bool], ...] = (
-    ("wave", "wave", False),
-    ("say hi", "wave", False),
-    ("say hello", "wave", False),
-    ("bow", "bow", False),
-    ("celebrate", "celebrate", False),
-    ("say sorry", "sorry", False),
-    ("apologize", "sorry", False),
-    ("take this", "take_this", False),
-    ("hold up", "hold_up", True),
-    ("lift up", "hold_up", True),
-    ("hold the jar", "hold_jar", False),
-    ("hold this jar", "hold_jar", False),
-    ("hold my jar", "hold_jar", False),
-    ("sip", "sip", False),
-    ("press the button", "press_button", False),
+SKILL_PHRASES: tuple[tuple[str, str, bool, str | None], ...] = (
+    ("wave", "wave", False, None),
+    ("say hi", "wave", False, None),
+    ("say hello", "wave", False, None),
+    ("bow", "bow", False, None),
+    ("celebrate", "celebrate", False, None),
+    ("say sorry", "sorry", False, None),
+    ("apologize", "sorry", False, None),
+    ("take this", "take_this", False, None),
+    ("hold up", "hold_up", True, None),
+    ("lift up", "hold_up", True, None),
+    ("hold the jar", "hold_jar", False, None),
+    ("hold this jar", "hold_jar", False, None),
+    ("hold my jar", "hold_jar", False, None),
+    ("sip", "sip", False, None),
+    ("press the button", "press_button", False, None),
+    # The bed: the pill cup, handed over (the phrase names the object, so it needs no pointing).
+    ("my pills", "hand_over", True, "pill_cup"),
+    ("pills", "hand_over", True, "pill_cup"),
 )
 # "move the cup to slot 2": a pick that ends on another taught slot instead of the tray.
 DEST_RE = re.compile(
@@ -133,6 +139,7 @@ def build_vocabulary(objects: list[dict]) -> dict[str, str]:
     for item in objects:
         object_id = str(item["id"])
         names = {normalize(str(item.get(key) or "")) for key in ("name", "prompt", "id")}
+        names |= {normalize(str(a)) for a in item.get("aliases") or []}  # "pills" for the pill cup
         for name in filter(None, names):
             phrases[name] = object_id
             for word in name.split():
@@ -142,6 +149,14 @@ def build_vocabulary(objects: list[dict]) -> dict[str, str]:
         if len(ids) == 1:
             phrases.setdefault(word, next(iter(ids)))
     return phrases
+
+
+def as_hand_over(parsed: Parsed) -> Parsed:
+    """"Hand me the water bottle" as the hand_over skill for that object (the bed), when the
+    request is a give phrase naming an object; anything else is returned unchanged."""
+    if parsed.verb is Verb.PICK_PLACE and parsed.object_id and parsed.matched[:1] and parsed.matched[0] in GIVE_PHRASES:
+        parsed.verb, parsed.skill, parsed.skill_needs_object = Verb.SKILL, "hand_over", True
+    return parsed
 
 
 def parse(text: str, vocabulary: dict[str, str]) -> Parsed:
@@ -155,9 +170,12 @@ def parse(text: str, vocabulary: dict[str, str]) -> Parsed:
 
     verb, confidence, matched = Verb.UNKNOWN, 0.0, []
     skill: tuple[str, bool] | None = None
-    for phrase, name, needs_object in SKILL_PHRASES:
+    skill_object: str | None = None
+    for phrase, name, needs_object, fixed_object in SKILL_PHRASES:
         if _has(clean, phrase):
             verb, confidence, matched, skill = Verb.SKILL, 0.9, [phrase], (name, needs_object)
+            if fixed_object in vocabulary.values():  # only where the catalog has that object
+                skill_object = fixed_object
             break
     if skill is None:
         for candidate, phrases, score in (
@@ -178,6 +196,8 @@ def parse(text: str, vocabulary: dict[str, str]) -> Parsed:
     if skill is not None:
         parsed.skill, parsed.skill_needs_object = skill
     parsed.destination = destination
+    if skill_object is not None:
+        parsed.object_id, parsed.reference = skill_object, "named"
     for name in sorted(vocabulary, key=len, reverse=True):  # "red cup" beats "cup"
         if _has(clean, name):
             parsed.object_id, parsed.reference = vocabulary[name], "named"
