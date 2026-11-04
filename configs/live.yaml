@@ -1,0 +1,31 @@
+# Live profile: `h2m run --profile live --i-have-the-estop` merges this onto
+# configs/h2m.yaml. The real SO-101, the overhead camera through SAM 3.1, the mic through
+# Voice Transcribe, Spark ranking every card and Wonder on every stop. EMG is the mock
+# dock in the UI (Twitch / Double / Brace, keys T / D / B) until the band is worn.
+arm:
+  backend: lerobot       # the real SO-101 follower (needs --i-have-the-estop)
+emg:
+  source: synthetic      # the UI's mock dock emits the decoder's events
+vision:
+  source: camera
+  # Until `h2m calibrate table` runs: an object SAM sees sits on its taught slot.
+  assume_slots: true
+speech:
+  source: mic
+compiler:
+  llm: "on"
+selection:
+  enabled: true          # cards answered by a (mock) twitch
+  muse: true             # Spark ranks every menu
+proactive:
+  enabled: true          # routines, sounds and other speakers become cards
+  profile: desk
+  propose_min_gap_s: 20  # demo pace: the default waits 2 minutes between unsolicited cards
+  quiet_hours: "off"     # proposals at any hour while working on it (routines.yaml keeps 23:00-07:00)
+think:
+  enabled: true          # Muse watches, listens, remarks and suggests (one confirmation)
+trust:
+  # The desk check (a routine set to `announce`) runs after the 5 s veto ring
+  # (docs/DEMO_STORY.md 1:39). The ladder still makes anything near a person or
+  # carrying a card.
+  announce_enabled: true

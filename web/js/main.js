@@ -5,6 +5,7 @@ const { $, $$, esc, bus, store, api, loop, reduced, mode } = core;
 const I = (d) => `<svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
 const ALL_SECTIONS = [
   { id: "home", label: "Home", key: "1", icon: I('<circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="8.5" stroke-dasharray="2 3.4"/>') },
+  { id: "mind", label: "Mind", key: "2", icon: I('<circle cx="6" cy="7" r="2"/><circle cx="6" cy="17" r="2"/><circle cx="18" cy="12" r="2.6"/><path d="M8 7.6l7.6 3.4M8 16.4l7.6-3.4"/>') },
   { id: "stage", label: "Stage", key: "2", icon: I('<path d="M4 20h16M7 20l3-8 5 1 3-6"/><circle cx="18" cy="7" r="1.8"/><circle cx="10" cy="12" r="1.4"/>') },
   { id: "flow", label: "Workflow", key: "3", icon: I('<rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="15" y="9" width="6" height="6" rx="1.5"/><rect x="3" y="15" width="6" height="6" rx="1.5"/><path d="M9 6h3a3 3 0 0 1 3 3M9 18h3a3 3 0 0 0 3-3"/>') },
   { id: "signals", label: "Signals", key: "4", icon: I('<path d="M2 12h4l2.5-7 4 14 3-9 1.5 2H22"/>') },
@@ -163,6 +164,8 @@ addEventListener("keydown", (e) => {
     return;
   }
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+  const gesture = mockOn() && { t: "twitch", d: "double_twitch", q: "squeeze", b: "brace" }[e.key.toLowerCase()];
+  if (gesture) return mockGesture(gesture);
   const hit = SECTIONS.find((s) => s.key === e.key);
   if (hit) go(hit.id);
   else if (e.key === "s" || e.key === "S") go("stage");
@@ -198,6 +201,23 @@ function dockBadge(id, on) {
   if (on) a.insertAdjacentHTML("beforeend", '<i class="badge"></i>');
 }
 
+// ── mock EMG dock: the synthetic source's stand-in for the band ────────────
+// Each button emits the gesture the decoder would (POST /api/emg/mock/<gesture>), so the
+// cards, the veto ring and the freeze run unchanged. Never shown with the real band.
+const mockDock = $("#emgmock");
+const mockOn = () => mode !== "replay" && !!store.state?.emg && !store.state.emg.hardware;
+function mockGesture(g) {
+  api(`/api/emg/mock/${g}`);
+  const b = $(`button[data-g="${g}"]`, mockDock);
+  b?.classList.remove("hit");
+  void b?.offsetWidth;
+  b?.classList.add("hit");
+}
+mockDock.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-g]");
+  if (b) mockGesture(b.dataset.g);
+});
+
 // ── status chips ───────────────────────────────────────────────────────────
 const chip = (label, tone = "") => `<span class="chip ${tone}"><i></i>${esc(label)}</span>`;
 function renderChips(s) {
@@ -214,7 +234,7 @@ function renderChips(s) {
   out.push(chip(`${arm.hardware ? "SO-101" : "Virtual arm"} · ${arm.state}`, armTone));
   if (s.emg) {
     const tone = s.emg.error ? "bad" : !s.emg.live ? "warn" : s.emg.hardware ? "ok" : "warn";
-    out.push(chip(s.emg.hardware ? `EMG${s.emg.calibrated ? "" : " · uncalibrated"}` : "EMG synthetic", tone));
+    out.push(chip(s.emg.hardware ? `EMG${s.emg.calibrated ? "" : " · uncalibrated"}` : "EMG mock", tone));
   }
   out.push(chip(s.vision.virtual ? "Virtual table" : `Camera ${s.vision.fps || 0} fps`, s.vision.virtual ? "warn" : s.vision.live ? "ok" : "bad"));
   if (s.speech) out.push(chip(s.speech.error ? "Mic error" : `${s.speech.asr || "ASR loading"}`, s.speech.error ? "bad" : s.speech.listening ? "ok" : "warn"));
@@ -232,6 +252,7 @@ bus.on("conn", (ok) => {
 // ── state fan-out: only the active section re-renders ──────────────────────
 bus.on("state", (s) => {
   renderChips(s);
+  mockDock.hidden = !mockOn();
   const v = current && views.get(current);
   if (v?.mounted) v.mod.update?.(s, ctx);
 });

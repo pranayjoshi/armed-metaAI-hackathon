@@ -62,7 +62,9 @@ TEXT_MAX = 280
 # accept is the confirmation. The model's confidence word never feeds this number.
 CONTRACT_CONFIDENCE = 0.6
 
-SYSTEM = """You help a person who can only twitch a muscle choose what a tabletop robot arm does next.
+SYSTEM = """You are the autocomplete for a robot arm that works beside a person at a desk: from what is
+happening right now, predict what they most likely want the arm to do next. They answer your top
+card with one muscle twitch, so the best guess must come first.
 You are given a numbered list of OPTIONS. Reply with ONLY a JSON object:
 {"choices": [{"option": "<id from the list>", "confidence": "likely|maybe"}]}
 Rules:
@@ -77,8 +79,13 @@ Rules:
 - context is what the robot knows right now (clock, objects, who is present, the hand,
   sounds, last actions, routines due, rules). Options marked "why" came from a routine or
   an event; prefer them when the context still fits, and leave them out when it does not.
-- Each choice may carry a short "reason" (under 15 words, plain words, from the context
-  given): it is shown to the person under the card. Never a command, never a joint value."""
+- A "why" that starts with "just now:" answers something that just happened (a hand held
+  out, a sound, someone asking). That is the strongest signal you have: rank those first
+  unless a rule or the context says otherwise.
+- "look_at" options only point the camera; choose them only when nothing else fits.
+- Give each choice a short "reason" (under 10 words, plain words, from the context given,
+  e.g. "you held your hand out"): it is shown to the person under the card. Never a
+  command, never a joint value."""
 
 
 # ── output items ───────────────────────────────────────────────────────────────
@@ -362,7 +369,11 @@ def _user_said(items: list[dict[str, str]], option: Option) -> bool:
 def _time_of_day(hour: int | None) -> str:
     if hour is None:
         hour = time.localtime().tm_hour
-    return "morning" if 5 <= hour < 12 else "afternoon" if 12 <= hour < 18 else "evening" if hour < 22 else "night"
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 18:
+        return "afternoon"
+    return "evening" if 18 <= hour < 22 else "night"  # 22:00-04:59
 
 
 # ── deterministic fallback ─────────────────────────────────────────────────────
@@ -533,8 +544,9 @@ class SparkClient:
     """Thin httpx client; same endpoint and auth pattern as incident.MuseClient.
 
     Config (all optional): ``base_url``, ``model`` (else env H2M_SPARK_MODEL, else
-    DEFAULT_MODEL), ``timeout_s`` (default 2.0), ``max_tokens`` (reasoning tokens count
-    toward it), ``reasoning_effort`` (default "minimal"; set null to omit). The key comes
+    DEFAULT_MODEL), ``timeout_s`` (default 2.0), ``max_tokens`` (default 2048; reasoning
+    tokens count toward it, and Spark 1.3 at ``minimal`` still thinks for 300-1000 tokens, so
+    512 cut most live replies off before any JSON), ``reasoning_effort`` (default "minimal"; set null to omit). The key comes
     from MODEL_API_KEY and is never logged or stored beyond this object."""
 
     def __init__(self, cfg: dict[str, Any] | None = None):
@@ -542,7 +554,7 @@ class SparkClient:
         self.base_url = str(cfg.get("base_url", "https://api.meta.ai/v1")).rstrip("/")
         self.model = str(cfg.get("model") or os.environ.get("H2M_SPARK_MODEL") or DEFAULT_MODEL)
         self.timeout = float(cfg.get("timeout_s", 2.0))
-        self.max_tokens = int(cfg.get("max_tokens", 512))
+        self.max_tokens = int(cfg.get("max_tokens", 2048))
         self.reasoning_effort = cfg.get("reasoning_effort", "minimal")
         self.key = os.environ.get("MODEL_API_KEY", "")
         self.last_error: str | None = None

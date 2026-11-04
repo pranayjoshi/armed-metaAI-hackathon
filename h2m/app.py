@@ -68,7 +68,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
-from h2m.compiler.grammar import Parsed, build_vocabulary, parse
+from h2m.compiler.grammar import Parsed, build_vocabulary, normalize, parse
 from h2m.compiler.llm import build_llm
 from h2m.compiler.resolve import compile_contract, resolve_choice
 from h2m.contract import StepContract, Verb
@@ -127,6 +127,7 @@ from h2m.sensors.emg import build_emg
 from h2m.sensors.speech import build_speech
 from h2m.sensors.vision import build_vision
 from h2m.speech_out import SpeechOut
+from h2m.think import WAKE_RE, Thinker
 from h2m.world import (
     APPROACH,
     GripperState,
@@ -138,6 +139,13 @@ from h2m.world import (
 
 MIN_CONFIRM_REACTION_S = 0.3
 REJECT_RE = re.compile(r"^\s*(no|nope|no thanks|don'?t|do not)\b", re.I)
+# Voice power (on normalized text). Disarm first: "disarm" contains "arm". Disarming
+# only makes the arm safer, so anyone may say it; arming is the wearer's, after one "yes".
+DISARM_RE = re.compile(r"\b(disarm( yourself)?|stand down|power down|deactivate)\b")
+ARM_RE = re.compile(
+    r"\b(arm (yourself|up|the (robot|arm))|power up|activate yourself|start helping)\b"
+)
+POWER_OFFER_S = 10.0  # an "arm?" question lapses after this
 NO_VISION_MODEL = "I can't look closely right now; my vision model is offline."
 TOOL_MOTION = frozenset(
     {"pick_place", "place_near_user", "look_at", "gesture", "skill", "move_to_slot"}
@@ -293,6 +301,7 @@ class H2M:
         self.pending: Pending | None = None
         self.last: dict[str, Any] | None = None
         self.reply = ""
+        self._power_offer: float | None = None  # when "arm?" was asked by voice
         self._lock = threading.RLock()
         self._running = False
         self._in_flight = 0  # plans being confirmed/built/started but not yet MOVING
@@ -332,6 +341,10 @@ class H2M:
         # proactive.enabled is literally true. It reads sensors and the selection; the
         # arm is only ever reached through the card path, gate and confirmation below.
         self.proactive = build_proposer(self, cfg)
+        # Muse, always on (h2m/think.py): watches, listens, remarks and suggests; a
+        # suggestion is a request through run_tool_calls, so the gate and one
+        # confirmation stand between it and the arm. Off unless think.enabled is true.
+        self.thinker = Thinker(self, cfg)
         # The stop handler subscribes before the Recorder so the freeze runs before
         # any disk I/O on the same event.
         self.log.subscribe(self._on_event)
@@ -345,6 +358,7 @@ class H2M:
                 part.start()
         self._running = True
         self.learner.start()
+        self.thinker.start()
         threading.Thread(target=self._loop, name="h2m-loop", daemon=True).start()
         self.log.emit(
             "h2m.started",
@@ -360,6 +374,7 @@ class H2M:
 
     def shutdown(self) -> None:
         self._running = False
+        self.thinker.stop()
         self.learner.stop()
         self.recorder.stop()
         for part in (self.speech, self.vision, self.emg):
@@ -370,7 +385,11 @@ class H2M:
     # ── world ────────────────────────────────────────────────────────────────
     def visible_objects(self) -> list[dict[str, Any]]:
         if self.vision is not None:
-            return self.vision.visible_objects()
+            seen = self.vision.visible_objects()
+            assume = self.cfg.get("vision", {}).get("assume_slots") is True
+            if assume and getattr(self.vision, "homography", None) is None:
+                return self._on_assumed_slots(seen)
+            return seen
         # Virtual scene (no camera): catalog objects sit on the taught slots.
         slots = list(self.arm.poses.slots.values())
         return [
@@ -383,6 +402,19 @@ class H2M:
                 "virtual": True,
             }
             for i, o in enumerate(self.cfg.get("objects", [])[: len(slots)])
+        ]
+
+    def _on_assumed_slots(self, seen: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Until ``h2m calibrate table`` has run, an object SAM really sees takes the taught
+        slot the virtual scene gives it (catalog order), marked ``position: assumed_slot``.
+        Presence, staleness and confidence stay SAM's; only the table position is assumed.
+        Opt-in (``vision.assume_slots: true``), and ignored once a homography exists."""
+        slots = list(self.arm.poses.slots.values())
+        home = {o["id"]: slots[i].table_xy for i, o in enumerate(self.cfg.get("objects", [])[: len(slots)])}
+        return [
+            {**o, "table_xy": home[o["id"]], "position": "assumed_slot"}
+            for o in seen
+            if o.get("id") in home
         ]
 
     def pointing(self) -> dict[str, Any]:
@@ -729,6 +761,12 @@ class H2M:
         if parsed.verb is Verb.CANCEL:
             self.cancel(f"{source}: {text}")
             return
+        clean = normalize(text)
+        if DISARM_RE.search(clean):
+            self._power_offer = None
+            self.disarm(f"{source}: {text}")
+            self._say("Disarmed. I'm still watching and listening.")
+            return
         # Past this point the words could start or confirm something. Nothing heard while
         # the robot was talking counts, nor anything repeating what it just said.
         # Fails closed: only an explicit False echo tag counts as not echo.
@@ -738,9 +776,26 @@ class H2M:
         # Answer onset: back out ASR time and the utterance length (errs early, which
         # only makes the reaction-time gate stricter). Typed text: when it arrived.
         onset = t0 - float(meta.get("asr_ms", 0)) / 1000 - float(meta.get("audio_s", 0))
+        if ARM_RE.search(clean):
+            self._offer_power(meta)
+            return
         with self._lock:
             pending = self.pending
             proposal = self.learner.proposal
+        offer = self._power_offer
+        if (
+            parsed.verb is Verb.CONFIRM
+            and offer is not None
+            and pending is None
+            and proposal is None
+            and not meta.get("asked_by")
+        ):
+            self._power_offer = None
+            if onset < offer or now() - offer > POWER_OFFER_S:
+                self._say("That question lapsed. Say arm yourself again.")
+                return
+            self._arm_by_voice()
+            return
         if parsed.verb is Verb.CONFIRM:
             if meta.get("asked_by"):
                 # Diarized as someone other than the wearer: only the wearer answers.
@@ -769,6 +824,11 @@ class H2M:
         if pending and pending.decision.clarify and parsed.object_id:
             self.choose(parsed.object_id, by=source)
             return
+        if self.thinker.enabled and source == "voice" and not self._is_command(parsed, clean):
+            # Ambient speech, or addressed but not a command: Muse heard it (the thinker
+            # woke on speech.utterance above) and judges whether to remark or suggest.
+            # Never a chatbot turn, never "what do you need?".
+            return
         uses_llm = bool(self.llm) and (
             parsed.verb is Verb.UNKNOWN
             or (parsed.reference == "none" and parsed.verb in (Verb.PICK_PLACE, Verb.POINT))
@@ -785,6 +845,45 @@ class H2M:
             ).start()
             return
         self._compile_and_run(text, parsed, t0, uses_llm, epoch)
+
+    @staticmethod
+    def _is_command(parsed: Parsed, clean: str) -> bool:
+        """A spoken request the grammar can act on: a known verb with a named target or a
+        taught skill, short, or addressed to the arm by name. Everything else is
+        conversation for the thinker."""
+        if parsed.verb is Verb.UNKNOWN:
+            return False
+        if parsed.verb in (Verb.PICK_PLACE, Verb.POINT, Verb.MOVE) and parsed.reference == "none":
+            return False
+        return bool(WAKE_RE.search(clean)) or len(clean.split()) <= 8
+
+    def _offer_power(self, meta: dict[str, Any]) -> None:
+        """"Arm yourself": ask once; the wearer's next "yes" within POWER_OFFER_S arms."""
+        if meta.get("asked_by"):
+            self._say("Only you can arm me.")
+            return
+        state = self.arm.state
+        if state in (ArmState.READY, ArmState.MOVING):
+            self._say("I'm already armed.")
+            return
+        if state not in (ArmState.DISARMED, ArmState.STOPPED):
+            self._say(f"I can't arm while {state}.")
+            return
+        self._say("Arm and start helping? Say yes.")
+        self._power_offer = now()
+
+    def _arm_by_voice(self) -> None:
+        """The confirmed "arm": a latched stop is reset first (the "yes" is the deliberate
+        act the latch waits for), then armed. Nothing moves; the next motion is gated."""
+        arm = self.arm
+        if arm.state is ArmState.STOPPED:
+            ok, why = arm.reset()
+            if not ok:
+                self._say(f"I couldn't reset: {why}.")
+                return
+        ok, why = arm.arm()
+        self.log.emit("arm.voice", ok=ok, detail=why)
+        self._say("Armed. I'll suggest, you confirm." if ok else f"I couldn't arm: {why}.")
 
     def _is_echo(self, text: str) -> bool:
         try:
@@ -1988,7 +2087,7 @@ class H2M:
             self.selection.recent_history(),
             rules,
             head if isinstance(head, str) else None,
-            [],
+            self._recent_speech(),
             self.selection.k,
             arm_stopped=state in (ArmState.READY, ArmState.STOPPED),
             holding=holding,
@@ -2004,6 +2103,17 @@ class H2M:
         if self.proactive is not None:
             self.proactive.remember(first.candidates)
         return first.candidates, "fallback", gen
+
+    def _recent_speech(self, window_s: float = 120.0) -> list[dict[str, str]]:
+        """What was said near the arm lately, for the ranker: the wearer as "user", anyone
+        else by name. Context only; the ranker treats it as untrusted."""
+        t = now()
+        out = []
+        for e in self.log.recent(300, {"speech.utterance"}):
+            if t - e.t <= window_s and e.data.get("text") and e.data.get("echo") is not True:
+                who = e.data.get("asked_by") or "user"
+                out.append({"speaker": str(who), "text": str(e.data["text"])})
+        return out
 
     def _card_reachable(self, entry: Any) -> bool:
         xy = entry.get("table_xy")
@@ -2586,6 +2696,12 @@ class H2M:
                 "routine.done",
                 "sound.event",
                 "scene.event",
+                "think.started",
+                "think.note",
+                "think.said",
+                "think.suggested",
+                "think.failed",
+                "arm.voice",
             },
         )
         out = {
@@ -2640,6 +2756,7 @@ class H2M:
                 for o in self.cfg.get("objects", [])
             ],
             "events": [e.as_dict() for e in events],
+            "think": self.thinker.snapshot(),
             **self._scene_fields(),
         }
         return self._with_proactive(out)

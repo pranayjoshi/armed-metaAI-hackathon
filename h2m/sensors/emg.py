@@ -374,6 +374,32 @@ class EmgService:
     def stop(self) -> None:
         self._running = False
 
+    MOCK_GESTURES = ("twitch", "double_twitch", "squeeze", "brace")
+
+    def mock(self, gesture: str) -> dict[str, Any]:
+        """Emit one gesture as the detector would, for the synthetic source only (the UI's
+        mock dock). The event carries ``mock: True`` and goes through the same handlers:
+        a brace freezes, a twitch selects or confirms under every selection gate."""
+        if getattr(self.source, "is_hardware", True):
+            raise ValueError("the mock is only available with the synthetic source")
+        if gesture not in self.MOCK_GESTURES:
+            raise ValueError(f"gesture must be one of {', '.join(self.MOCK_GESTURES)}")
+        t = now()
+        data: dict[str, Any] = {"mock": True, "onset_t": round(t, 3), "detect_ms": 0}
+        if gesture == "brace":
+            with self._lock:
+                self._brace_until = t + self.cfg.get("brace_lockout_ms", 1500) / 1000
+            data.update(trigger="mock", cross_t=round(t, 3), peak_flexor=1.0,
+                        peak_extensor=1.0, peak_brace=1.0, trace=[])
+        elif gesture == "twitch":
+            data.update(held_ms=120)
+        elif gesture == "squeeze":
+            data = {"mock": True, "effort": 0.6, "held_ms": 400}
+        else:
+            data.update(first_ms=120, second_ms=120, interval_ms=300)
+        self.log.emit(f"emg.{gesture}", **data)
+        return {"ok": True, "gesture": gesture}
+
     def _loop(self) -> None:
         try:
             self.source.start()

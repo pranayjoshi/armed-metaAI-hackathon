@@ -24,6 +24,11 @@ const html = `
     <section class="panel cx-packet rise" style="--i:2" aria-label="Packet">
       <div class="panel-head"><h3>Packet</h3><span class="cx-age num" id="cx-age"></span></div>
       <div class="cx-rows" id="cx-rows"></div>
+      <div class="cx-trig" id="cx-trig" hidden>
+        <span class="kicker">Make it happen now</span>
+        <div class="cx-trig-row" id="cx-trig-routines"></div>
+        <div class="cx-trig-row"><button data-sound="phone buzz">Phone buzz</button><button data-sound="knock">Knock</button><em class="muted">mock sound</em></div>
+      </div>
     </section>
   </div>
 </div>`;
@@ -50,6 +55,27 @@ export default {
       this.fit();
     });
     this.esc = esc;
+    // Trigger strip (live only): a routine made due now, or a mock sound. Either still
+    // only becomes a card; nothing here moves the arm.
+    $("#cx-trig").addEventListener("click", (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      if (b.dataset.routine) ctx.api("/api/routines", { run_now: b.dataset.routine });
+      else if (b.dataset.sound) ctx.api("/api/sound/mock", { label: b.dataset.sound });
+    });
+  },
+
+  async loadRoutines() {
+    const s = this.s;
+    if (s.ctx.mode === "replay") return;
+    try {
+      const r = await fetch("/api/routines");
+      if (!r.ok) return;
+      const data = await r.json();
+      s.$("#cx-trig").hidden = !data.enabled;
+      const list = (data.routines || []).filter((x) => !x.profile || x.profile === data.profile || !data.profile);
+      this.setHtml("#cx-trig-routines", list.map((x) => `<button data-routine="${this.esc(x.name)}" title="Make this routine due now">${this.esc(x.label || x.name)}</button>`).join(""));
+    } catch {}
   },
 
   // size the frame box to the image's aspect ratio inside the stage
@@ -72,6 +98,7 @@ export default {
     s.timers.push(setInterval(() => this.pollFrame(), 700));
     this.loadRules();
     s.timers.push(setInterval(() => this.loadRules(), 15000));
+    this.loadRoutines();
     s.removeLoop = ctx.loop.add(() => this.tick());
     if (ctx.store.state) this.update(ctx.store.state, ctx);
   },
@@ -132,6 +159,7 @@ export default {
     clearTimeout(s.slideT);
     s.frozen = true;
     if (scene.frame_url) s.$("#cx-img").src = scene.frame_url;
+    else if (!s.hasFrame) s.$("#cx-img").src = `/api/camera/scene.jpg?t=${Date.now()}`; // a scan landed before any frame
     const body = s.$("#cx-body");
     const done = s.masks.paint(scene.masks, { instant });
     if (instant || this.s.ctx.reduced) {

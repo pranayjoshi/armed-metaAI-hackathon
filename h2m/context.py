@@ -126,12 +126,15 @@ def present_row(
     events: Iterable[Any],
     t_now: float,
 ) -> list[str]:
-    for src in (scene, speech):
-        if isinstance(src, Mapping) and isinstance(src.get("present"), list):
-            names = [_text(_get(p, "name") if not isinstance(p, str) else p, 30) for p in src["present"]]
-            return [n for n in names if n][:6]
     names: list[str] = []
-    for e in events:
+    for src in (scene, speech):  # the camera's or the mic's own list first ...
+        if isinstance(src, Mapping) and isinstance(src.get("present"), list):
+            found = [_text(_get(p, "name") if not isinstance(p, str) else p, 30) for p in src["present"]]
+            names = [n for n in found if n]
+            break
+    for e in events:  # ... then anyone else heard recently
+        if len(names) >= 6:
+            break
         if _get(e, "kind") != "speech.utterance":
             continue
         data = _data(e)

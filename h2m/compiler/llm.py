@@ -79,7 +79,11 @@ class MuseCompiler:
     def __init__(self, cfg: dict[str, Any]):
         self.base_url = cfg.get("base_url", "https://api.meta.ai/v1").rstrip("/")
         self.model = cfg.get("model", "muse-spark-1.3")
-        self.timeout = float(cfg.get("timeout_s", 4.0))
+        self.timeout = float(cfg.get("timeout_s", 20.0))
+        # Reasoning tokens count toward max_tokens: Spark 1.3 thinks for 300-1000 tokens
+        # even at "minimal", so a small cap returns an empty reply.
+        self.max_tokens = int(cfg.get("max_tokens", 2048))
+        self.reasoning_effort = cfg.get("reasoning_effort", "minimal")
         self.send_image = bool(cfg.get("send_image", True))
         self.key = os.environ.get("MODEL_API_KEY", "")
         self.last_ms: float | None = None
@@ -110,7 +114,7 @@ class MuseCompiler:
                 {"role": "user", "content": content},
             ],
             "temperature": 0,
-            "max_tokens": 1000,  # includes reasoning tokens; 200 returned empty replies
+            **self._budget(),
         }
         started = time.monotonic()
         try:
@@ -130,6 +134,13 @@ class MuseCompiler:
             self.last_ms = round((time.monotonic() - started) * 1000)
         self.last_error = None
         return self._to_parsed(text, data, {o["id"] for o in objects}), str(data.get("reply") or "")
+
+    def _budget(self) -> dict[str, Any]:
+        """Token cap and reasoning effort shared by every call."""
+        out: dict[str, Any] = {"max_tokens": self.max_tokens}
+        if self.reasoning_effort:
+            out["reasoning_effort"] = self.reasoning_effort
+        return out
 
     def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         resp = httpx.post(
@@ -164,7 +175,7 @@ class MuseCompiler:
             "tools": tools,
             "tool_choice": "auto",
             "temperature": 0,
-            "max_tokens": 1000,
+            **self._budget(),
         }
         started = time.monotonic()
         try:
@@ -197,7 +208,7 @@ class MuseCompiler:
                 {"role": "user", "content": self._content(question, jpeg, force_image=True)},
             ],
             "temperature": 0,
-            "max_tokens": 1000,
+            **self._budget(),
         }
         started = time.monotonic()
         try:
@@ -219,7 +230,7 @@ class MuseCompiler:
                 },
             ],
             "temperature": 0,
-            "max_tokens": 20,
+            **self._budget(),
         }
         return parse_profile(self._post(body).get("content"))
 

@@ -295,6 +295,25 @@ def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
         source.set_drive(flexor, extensor)
         return {"ok": True}
 
+    @app.post("/api/emg/mock/{gesture}")
+    def emg_mock(gesture: str) -> dict:
+        """One twitch, double twitch or brace from the UI's mock dock (synthetic only)."""
+        if h2m.emg is None:
+            raise HTTPException(409, "EMG is off")
+        try:
+            return h2m.emg.mock(gesture)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.post("/api/sound/mock")
+    def sound_mock(label: str = Body(..., embed=True)) -> dict:
+        """A sound the runtime has no detector for (phone buzz, knock), from the Context
+        view's trigger strip. It only ever becomes a card, through the proactive layer."""
+        if h2m.proactive is None:
+            raise HTTPException(409, PROACTIVE_OFF)
+        h2m.log.emit("sound.event", label=str(label)[:30], mock=True)
+        return {"ok": True}
+
     # speech
     @app.post("/api/speech/mute")
     def mute(muted: bool = Body(..., embed=True)) -> dict[str, Any]:
@@ -321,8 +340,11 @@ def create_app(h2m: H2M, token: str | None = None) -> FastAPI:
     @app.get("/api/camera/{name}.jpg")
     def camera(name: str) -> Response:
         vision = h2m.vision
-        cam = None if vision is None else (vision.scene if name == "scene" else vision.wrist)
-        data = cam.jpeg() if cam is not None else None
+        if name == "scan":  # the frame the last SAM scan ran on
+            data = None if vision is None else getattr(vision, "scan_jpeg", None)
+        else:
+            cam = None if vision is None else (vision.scene if name == "scene" else vision.wrist)
+            data = cam.jpeg() if cam is not None else None
         if data is None:
             raise HTTPException(404, "no frame")
         return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})

@@ -349,7 +349,8 @@ def test_a_sound_triggers_its_routine_and_the_ranker_gets_the_packet(h2m, tmp_pa
     assert menu.highlighted.id == "skill:hold_up:ball" and menu.highlighted.routine == "phone"
     assert menu.highlighted.evidence[0] == {"row": "sounds", "text": "phone buzz", "age_s": 0}
     assert wait(lambda: menu.source == "muse")
-    assert seen["options"][0]["why"].startswith("routine phone is due") and seen["context"]["sounds"] == ["phone buzz"]
+    assert seen["options"][0]["why"] == "just now: phone buzz -> routine phone is due (on phone buzz)"
+    assert seen["context"]["sounds"] == ["phone buzz"]
     snap = h2m.snapshot()  # the highlighted card keeps its identity; its reason is layered on in the snapshot
     assert snap["selection"]["cards"][0]["evidence"][-1] == {"row": "rank", "text": "the phone just buzzed",
                                                              "source": "muse-spark-1.3"}

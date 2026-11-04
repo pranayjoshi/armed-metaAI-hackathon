@@ -93,3 +93,17 @@
 .cardlinks a { font: 500 11.5px var(--font-mono); color: var(--ink-2); text-decoration: none; padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 9px; transition: color .2s, border-color .2s, background .2s; }
 .cardlinks a:hover { color: var(--ink); border-color: var(--ink-3); background: rgba(255,255,255,.05); }
 @media (max-width: 760px) { .cardlinks { display: none; } }
+
+/* mock EMG dock (synthetic source only), in the top bar beside STOP */
+.emgmock { display: flex; align-items: center; gap: 5px; padding: 4px 4px 4px 10px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--bg-1); }
+.emgmock[hidden] { display: none; }
+.emgmock .kicker { font-size: 10px; }
+.emgmock button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--bg-2); color: var(--ink); font: 600 12.5px/1 var(--font-body); cursor: pointer; }
+.emgmock button:hover { background: var(--bg-3); }
+.emgmock kbd { font: 500 10px/1 var(--font-mono); color: var(--ink-3); }
+.emgmock .g-twitch, .emgmock .g-double { border-color: color-mix(in srgb, var(--grip) 45%, transparent); }
+.emgmock .g-squeeze { border-color: color-mix(in srgb, var(--ok, #5fe3a1) 50%, transparent); }
+.emgmock .g-brace { border-color: color-mix(in srgb, var(--brace) 55%, transparent); color: var(--brace); }
+.emgmock button.hit { animation: mockhit .5s ease-out; }
+@keyframes mockhit { from { box-shadow: 0 0 0 6px color-mix(in srgb, var(--grip) 40%, transparent); } to { box-shadow: 0 0 0 0 transparent; } }
+@media (max-width: 760px) { .emgmock .kicker, .emgmock kbd { display: none; } .emgmock button { padding: 6px 7px; } }

@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+from collections import deque
 from typing import Any
 
 import cv2
@@ -171,8 +172,16 @@ class VisionService:
         self.face: str | None = FACE if cfg.get("face", True) else None
         self.client = client or SamClient(cfg)
         self.scheduler = ScanScheduler(
-            self.client, lambda: self.scene.latest(), self.phrases, self._on_scan, cfg, log
+            self.client, self._frame_for_scan, self.phrases, self._on_scan, cfg, log
         )
+        # Frames handed to scans, so the Context view paints masks over the frame they
+        # came from (``/api/camera/scan.jpg``), not a newer one.
+        self._scan_frames: deque[tuple[float, np.ndarray]] = deque(maxlen=4)
+        self.scan_jpeg: bytes | None = None
+        self.scan_t: float | None = None
+        self.hand: dict[str, Any] | None = None  # {where, since_t} from the last hand pass
+        self.present: list[str] | None = None  # ["you"] when the last face pass saw a face
+        self._scans_seen = 0  # the first good scan is the baseline: no scene events from it
         self._lock = threading.Lock()
         self._seen: dict[str, dict[str, Any]] = {}
         self.pointing: dict[str, Any] = {"active": 0.0, "candidates": [], "ray": None}
@@ -215,6 +224,42 @@ class VisionService:
         return round(cx / w, 4), round(cy / h, 4)
 
     # ── scans ─────────────────────────────────────────────────────────────────
+    def _frame_for_scan(self) -> tuple[np.ndarray, float] | None:
+        item = self.scene.latest()
+        if item is not None:
+            with self._lock:
+                self._scan_frames.append((item[1], item[0]))
+        return item
+
+    def _keep_scan_frame(self, t: float) -> None:
+        with self._lock:
+            frame = next((f for ft, f in self._scan_frames if ft == t), None)
+        if frame is None:
+            return
+        if frame.shape[1] > 960:
+            scale = 960 / frame.shape[1]
+            frame = cv2.resize(frame, None, fx=scale, fy=scale)
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        if ok:
+            with self._lock:
+                self.scan_jpeg, self.scan_t = buf.tobytes(), t
+
+    def _hand_where(self, masks: list[Mask]) -> str | None:
+        """Coarse words for the hand furthest from the person: reaching out or near them,
+        and which third of the frame. None when no hand was seen."""
+        if not masks:
+            return None
+        side = str(self.cfg.get("person_side", "bottom"))
+        dx, dy = SIDES.get(side, SIDES["bottom"])
+
+        def reach(m: Mask) -> float:  # 0 at the person's edge, 1 at the far edge
+            cx, cy = (m.bbox[0] + m.bbox[2]) / 2, (m.bbox[1] + m.bbox[3]) / 2
+            return (1 - cy if dy < 0 else cy) if dy else (cx if dx > 0 else 1 - cx)
+
+        best = max(masks, key=reach)
+        third = face_third(best.bbox, invert=bool(self.cfg.get("face_invert", False))) or "centre"
+        return f"{'hand out' if reach(best) > 0.45 else 'hand near you'} · {third}"
+
     def phrases(self) -> list[str]:
         extra = [p for p in (self.hands, self.face) if p]
         return list(self.prompts) + extra
@@ -256,13 +301,21 @@ class VisionService:
                     pointing = {"active": active, "candidates": scores[:3], "ray": ray}
             points = tuple(self.point_xy(float(x), float(y)) for pts in hands for x, y in pts)
             hands_seen = HandsSeen(scan.t, points)  # empty points: a fresh pass that saw no hand
+        hand = self.hand
+        if self.hands and self.hands not in scan.failed:
+            where = self._hand_where(scan.for_phrase(self.hands))
+            same = hand is not None and where == hand.get("where")
+            hand = None if where is None else (hand if same else {"where": where, "since_t": scan.t})
+        present = self.present
         head = None
         if self.face and self.face not in scan.failed:
+            present = ["you"] if scan.for_phrase(self.face) else []
             faces = scan.for_phrase(self.face)
             if faces:
                 best = max(faces, key=lambda m: m.confidence)
                 head = face_third(best.bbox, invert=bool(self.cfg.get("face_invert", False)))
         with self._lock:
+            events = self._scene_events(found, hand, present, scan)
             if not (set(self.prompts) <= set(scan.failed)):
                 self._seen = found
             self.pointing = pointing
@@ -270,7 +323,33 @@ class VisionService:
                 self.hands_seen = hands_seen
             if self.face and self.face not in scan.failed:
                 self.head_third = head
+            self.hand, self.present = hand, present
             self.latency_ms = scan.ms
+            self._scans_seen += 1
+        self._keep_scan_frame(scan.t)
+        for name, what in events:
+            self.log.emit("scene.event", event=name, what=what, scan_t=round(scan.t, 3))
+
+    def _scene_events(
+        self, found: dict[str, dict[str, Any]], hand: dict[str, Any] | None,
+        present: list[str] | None, scan: Scan,
+    ) -> list[tuple[str, str]]:
+        """Armed scene diff, under the lock: what changed since the last scan, as routine
+        trigger names (h2m.routines.EVENTS). A hand that starts reaching out, a catalog
+        object that appears, a face after none. A phrase whose call failed says nothing."""
+        if self._scans_seen == 0:
+            return []
+        out: list[tuple[str, str]] = []
+        was_out = bool(self.hand and str(self.hand.get("where", "")).startswith("hand out"))
+        if hand and str(hand.get("where", "")).startswith("hand out") and not was_out:
+            out.append(("hand_out", str(hand["where"])))
+        if not (set(self.prompts) <= set(scan.failed)):
+            for oid, obj in found.items():
+                if oid not in self._seen:
+                    out.append(("new_object", str(obj["name"])))
+        if present and not self.present and self.present is not None:
+            out.append(("person_arrived", "someone sat down"))
+        return out
 
     # ── what the app reads ────────────────────────────────────────────────────
     def visible_objects(self) -> list[dict[str, Any]]:
@@ -285,8 +364,17 @@ class VisionService:
             ]
 
     def scene_snapshot(self) -> dict[str, Any]:
-        """``state.scene`` (docs/UI_RUNTIME_FIELDS.md): masks, scan_age_s, scan_ms, stale."""
-        return self.scheduler.snapshot()
+        """``state.scene`` (docs/UI_RUNTIME_FIELDS.md): masks, scan_age_s, scan_ms, stale,
+        plus the scanned frame's URL and the hand and present rows for the packet."""
+        out = self.scheduler.snapshot()
+        with self._lock:
+            if self.scan_jpeg is not None:
+                out["frame_url"] = f"/api/camera/scan.jpg?t={self.scan_t}"
+            if self.hand is not None:
+                out["hand"] = dict(self.hand)
+            if self.present is not None:
+                out["present"] = list(self.present)
+        return out
 
     def calls(self) -> list[dict[str, Any]]:
         """``state.calls`` entries for SAM scans (``{model, for: "scan", ms}``)."""

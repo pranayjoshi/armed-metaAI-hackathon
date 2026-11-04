@@ -50,6 +50,12 @@
 .cx-chip { height: 24px; font-size: 11.5px; }
 .cx-chip:not(.done) i { animation: blink 1s infinite; }
 .cx-chip b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.cx-trig { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.cx-trig[hidden] { display: none; }
+.cx-trig-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cx-trig button { padding: 6px 10px; border: 1px solid color-mix(in srgb, var(--muse) 45%, transparent); border-radius: 9px; background: var(--bg-2); color: var(--ink); font: 600 12.5px/1 var(--font-body); cursor: pointer; }
+.cx-trig button:hover { background: var(--bg-3); }
+.cx-trig em { font: 400 11.5px var(--font-mono); font-style: normal; }
 
 @media (max-width: 1000px) {
   .cx { position: static; overflow: auto; min-height: 100%; grid-template-rows: auto auto; }

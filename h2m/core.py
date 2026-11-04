@@ -28,13 +28,14 @@ def now() -> float:
 
 def load_config(path: str | Path | None = None, profile: str | None = None) -> dict[str, Any]:
     """configs/h2m.yaml (or ``path``), with ``configs/<profile>.yaml`` merged on top when
-    a profile is named (``h2m run --profile shoot``): mappings merge key by key, any
-    other value in the overlay replaces the base one."""
+    a profile is named (``h2m run --profile shoot``; ``live,bed`` merges both in order):
+    mappings merge key by key, any other value in the overlay replaces the base one."""
     target = Path(path) if path else ROOT / "configs" / "h2m.yaml"
     with target.open("r", encoding="utf-8") as handle:
         cfg = yaml.safe_load(handle) or {}
-    if profile:
-        cfg = deep_merge(cfg, load_profile(profile))
+    for name in (profile or "").split(","):  # "live,bed": each overlay in order
+        if name.strip():
+            cfg = deep_merge(cfg, load_profile(name.strip()))
     return cfg
 
 

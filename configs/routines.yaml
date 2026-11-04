@@ -47,4 +47,16 @@ routines:
     mode: ask
     window: 60s
     label: "Say you're coming?"
+  take_it:
+    action: take_this
+    "on": hand_out
+    mode: ask
+    window: 30s
+    label: "Take it from you?"
+  hold_it:
+    action: hold_jar
+    "on": hand_out
+    mode: ask
+    window: 30s
+    label: "Hold the jar?"
 quiet_hours: "23:00-07:00"

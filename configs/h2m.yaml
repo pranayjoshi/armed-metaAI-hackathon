@@ -93,6 +93,10 @@ vision:
   stale_ms: 800
   # Image -> table homography from `h2m calibrate-table`; null = normalized image coords.
   table_homography: null
+  # Until the table is calibrated: an object SAM sees takes its catalog slot's position
+  # (object i -> slot i, as in the virtual scene), marked assumed_slot. Only the literal
+  # true; ignored once table_homography is set.
+  assume_slots: false
 
 emg:
   source: ganglion       # ganglion | synthetic | off
@@ -188,7 +192,9 @@ compiler:
   llm: auto              # auto (use if MODEL_API_KEY set) | on | off
   base_url: https://api.meta.ai/v1
   model: muse-spark-1.3
-  timeout_s: 4.0
+  timeout_s: 20          # Spark 1.3 with an image took 4-10 s live (Nov 4)
+  max_tokens: 2048       # reasoning tokens count toward this
+  reasoning_effort: minimal
   send_image: true
   tools: true            # Muse answers with h2m.embodied tool calls (false = old JSON verb path)
 
@@ -265,11 +271,15 @@ selection:
   mode: intent           # intent (ranked cards, Muse upgrade) | scanning (fixed scene order, every option: the baseline)
   cards: 3               # intent mode shows this many (at most 3)
   muse: true             # intent mode asks Muse Spark to rank (needs MODEL_API_KEY); false = deterministic ranking only
-  deadline_s: 2.5        # a Muse ranking later than this is dropped; no key / timeout / error switch to scanning for the run
+  # The deterministic cards show at once; Spark's ranking replaces them when it lands,
+  # only before the first input. Measured live (Nov 4): Spark 1.3 ranks in 4-13 s even at
+  # `minimal` (300-1000 reasoning tokens), so a 2.5 s budget dropped every ranking.
+  deadline_s: 15         # a Muse ranking later than this is dropped; no key / timeout / error switch to scanning for the run
   spark:                 # h2m.intent.SparkClient (base_url defaults to compiler.base_url)
     model: null          # null = env H2M_SPARK_MODEL, else muse-spark-1.3
-    timeout_s: 2.0
-    reasoning_effort: minimal
+    timeout_s: 15
+    max_tokens: 2048     # reasoning tokens count toward this; 512 truncated most replies
+    reasoning_effort: minimal  # the lowest Spark 1.3 accepts ("none" is a 400)
   reshow_s: 3.0          # after every card is refused, a stop or a cancel: wait this long before new cards
   veto_refractory_s: 1.5 # a flinch often fires brace AND open hand: within this, one refusal (both counted)
   table_x: [0.0, 1.0]    # table x range split into left / centre / right thirds (head direction tie-break)
@@ -409,10 +419,29 @@ proactive:
   propose_min_gap_s: 120      # at most one unsolicited card this often (sounds, other people and overdue routines excepted)
   refuse_cooldown_min: 30     # a refused routine is not re-proposed this long ...
   dont_propose_hours: 24      # ... and its "don't propose <action> <context>" entry lasts this long
-  quiet_hours: null           # HH:MM-HH:MM; the routines file's quiet_hours wins when set
+  quiet_hours: null           # HH:MM-HH:MM; the routines file's quiet_hours wins when set; "off" lifts both
   veto_window_s: 5.0          # the announce rung's veto ring (clamped 3..30 in code)
   request_only: false         # "stop proposing": the robot answers requests only
   speak: true                 # say the announce line ("... Brace to cancel.")
+
+think:
+  # Muse, always on (h2m/think.py). Watches, listens and judges on every change (speech,
+  # scene, sound, a task, a stop) and on a slow heartbeat; may remark aloud, and may
+  # suggest one action from a closed list, which becomes a request: gate, then one
+  # "yes", squeeze or click. Never a gesture (those can run unconfirmed). Off unless true.
+  enabled: false
+  every_s: 25            # heartbeat while nothing happens (one Spark call each)
+  debounce_s: 1.2        # an event wakes it this long after (bursts coalesce)
+  comment_min_gap_s: 40  # at most one unprompted remark this often (answers to "Armed, ..." excepted)
+  suggest_min_gap_s: 20  # at most one suggestion this often
+  heard_window_s: 180    # conversation kept as context
+  recent_window_s: 600   # timeline kept as context
+  speak: true
+  send_image: true       # the last scan's frame goes with every call
+  model: null            # null: muse-spark-1.3
+  timeout_s: 20
+  max_tokens: 2048
+  reasoning_effort: minimal
 
 trust:
   # The trust ladder (docs/PROACTIVE.md §3, h2m/safety.py::ladder). Per-action rungs:

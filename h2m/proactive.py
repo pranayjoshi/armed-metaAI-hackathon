@@ -167,7 +167,9 @@ class Proposer:
             refuse_cooldown_s=float(self.cfg["refuse_cooldown_min"]) * 60,
             dont_propose_s=float(self.cfg["dont_propose_hours"]) * 3600,
         )
-        if self.book.quiet is None:
+        if self.cfg.get("quiet_hours") == "off":
+            self.book.quiet = None  # a profile can lift the routines file's quiet hours
+        elif self.book.quiet is None:
             self.book.quiet = parse_quiet_hours(self.cfg.get("quiet_hours"))
         self.book.request_only = self.cfg.get("request_only") is True
         self.calls = CallLog()
@@ -284,7 +286,8 @@ class Proposer:
 
     def _build_packet(self, t: float) -> dict[str, Any]:
         app = self.app
-        vision = app.vision.snapshot() if app.vision is not None else {
+        # Objects as the cards see them (assumed slots included), not raw image positions.
+        vision = {**app.vision.snapshot(), "objects": app.visible_objects()} if app.vision is not None else {
             "virtual": True, "objects": app.visible_objects()}
         scene = getattr(app.vision, "scene_snapshot", None)
         scene_data = None
@@ -355,9 +358,10 @@ class Proposer:
                     evidence=[{"row": "sounds", "text": label, "age_s": 0}]))
         elif kind == "scene.event" and data.get("event") in EVENTS:
             what = str(data.get("what") or data.get("event")).replace("_", " ")[:40]
+            row = {"hand_out": "hand", "person_arrived": "present"}.get(str(data["event"]), "objects")
             self._triggers.append(Trigger(
-                "scene", event.t, event=str(data["event"]), row="objects",
-                evidence=[{"row": "objects", "text": what}]))
+                "scene", event.t, event=str(data["event"]), row=row,
+                evidence=[{"row": row, "text": what}]))
         elif kind == "selection.shown" and not data.get("upgraded"):
             self._reasons.clear()  # a new menu: last menu's reasons are not these cards'
         elif kind == "task.completed":
@@ -511,11 +515,16 @@ class Proposer:
             if tr.kind == "asked":
                 opt = self._asked_option(tr, scene)
             elif tr.kind in ("sound", "scene") and tr.event:
+                # Every routine on this event joins the list; Spark chooses between them
+                # (a hand held out: take it, or hold the jar).
                 for routine in self.book.on_event(tr.event, self.facts()):
-                    opt = self._routine_option(routine, scene)
-                    if opt is not None:
-                        opt = replace(opt, evidence=tuple(tr.evidence) + opt.evidence)
-                        break
+                    alt = self._routine_option(routine, scene)
+                    if alt is not None and alt.rung not in AUTO_RUNGS and alt.id not in {o.id for o in out}:
+                        # What was just seen or heard leads the "why" Spark reads.
+                        seen = "; ".join(str(e.get("text")) for e in tr.evidence if e.get("text"))
+                        why = f"just now: {seen} -> {alt.why}" if seen else alt.why
+                        out.append(replace(alt, evidence=tuple(tr.evidence) + alt.evidence, why=why))
+                        row = tr.row
             if opt is not None and opt.rung not in AUTO_RUNGS:
                 out.append(opt)
                 row = tr.row

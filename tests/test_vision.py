@@ -224,3 +224,48 @@ def test_gate_refuses_to_move_toward_a_stale_target(h2m):
     scan.t -= 100.0
     assert h2m._world(contract)["target_visible"] is False
     assert h2m.visible_objects()[0]["stale"] is True  # still known, just not a target
+
+
+def test_a_scan_keeps_its_frame_and_fills_the_hand_and_present_rows():
+    from h2m.sensors.sam import FACE, HAND, Mask, Scan
+
+    vs = make_vision(FakePost({}))
+    frame, t = vs._frame_for_scan()
+    far_right_hand = Mask(HAND, (0.75, 0.10, 0.90, 0.30), confidence=0.9)
+    near_hand = Mask(HAND, (0.40, 0.80, 0.50, 0.95), confidence=0.9)
+    face = Mask(FACE, (0.45, 0.70, 0.55, 0.90), confidence=0.9)
+    phrases = ("paper cup", "wooden block", HAND, FACE)
+    vs._on_scan(Scan(t, 900.0, phrases, [near_hand, far_right_hand, face], frame_size=(640, 360)))
+    scene = vs.scene_snapshot()
+    assert scene["hand"] == {"where": "hand out · right", "since_t": t}  # the furthest hand
+    assert scene["present"] == ["you"]
+    assert scene["frame_url"] == f"/api/camera/scan.jpg?t={t}" and vs.scan_jpeg[:2] == b"\xff\xd8"
+    # the same place on the next scan keeps its start time; no hand and no face clear the rows
+    vs._on_scan(Scan(t + 1, 900.0, phrases, [far_right_hand, face], frame_size=(640, 360)))
+    assert vs.scene_snapshot()["hand"]["since_t"] == t
+    vs._on_scan(Scan(t + 2, 900.0, phrases, [], frame_size=(640, 360)))
+    scene = vs.scene_snapshot()
+    assert "hand" not in scene and scene["present"] == []
+
+
+def test_scan_diff_emits_hand_out_new_object_and_person_arrived():
+    from h2m.sensors.sam import FACE, HAND, Mask, Scan
+
+    log = EventLog()
+    vs = make_vision(FakePost({}), log=log)
+    _, t = vs._frame_for_scan()
+    phrases = ("paper cup", "wooden block", HAND, FACE)
+    near = Mask(HAND, (0.40, 0.80, 0.50, 0.95), confidence=0.9)
+    out = Mask(HAND, (0.40, 0.10, 0.50, 0.30), confidence=0.9)
+    cup = Mask("paper cup", (0.1, 0.1, 0.2, 0.2), confidence=0.9)
+    face = Mask(FACE, (0.45, 0.70, 0.55, 0.90), confidence=0.9)
+
+    def scan(dt, masks):
+        vs._on_scan(Scan(t + dt, 900.0, phrases, masks, frame_size=(640, 360)))
+        return [(e.data["event"], e.data["what"]) for e in log.recent(50, {"scene.event"})]
+
+    assert scan(0, [near]) == []  # the baseline scan says nothing
+    assert scan(1, [near]) == []
+    assert scan(2, [out, cup, face]) == [
+        ("hand_out", "hand out · centre"), ("new_object", "paper cup"), ("person_arrived", "someone sat down")]
+    assert len(scan(3, [out, cup, face])) == 3  # nothing new: no more events

@@ -1,0 +1,59 @@
+/* Mind: the live flow. Hues: --muse for Meta models, the spine ink for Armed's own code, --brace for the stop path. */
+.mind { position: absolute; inset: 0; padding: 12px 18px 16px; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 10px; }
+.mind-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.mind-line { margin: 4px 0 0; font: 500 14px/1.2 var(--font-mono); color: var(--ink-2); }
+.mind-legend { display: flex; gap: 12px; font: 500 11px var(--font-mono); color: var(--ink-3); }
+.mind-legend .lg::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; background: var(--c); vertical-align: -1px; }
+.lg.muse { --c: var(--muse); } .lg.spine { --c: var(--ink-3); } .lg.brace { --c: var(--brace); }
+
+.mind-grid { position: relative; display: grid; gap: 26px 34px; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-rows: repeat(4, minmax(0, 1fr)) minmax(0, .8fr); min-height: 0; }
+.mind-wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 0; }
+.wire { fill: none; stroke: var(--line-2); stroke-width: 1.6; transition: stroke .3s, stroke-width .3s; }
+.wire.hot[data-hue="muse"] { stroke: var(--muse); stroke-width: 2.4; }
+.wire.hot[data-hue="spine"] { stroke: var(--ink-2); stroke-width: 2.4; }
+.wire.hot[data-hue="grip"] { stroke: var(--grip); stroke-width: 2.4; }
+.wire.hot[data-hue="brace"] { stroke: var(--brace); stroke-width: 2.4; }
+.wire.hot[data-hue="ok"] { stroke: var(--ok, #5fe3a1); stroke-width: 2.4; }
+.dot { filter: drop-shadow(0 0 6px currentColor); }
+.dot.muse { fill: var(--muse); color: var(--muse); } .dot.spine { fill: var(--ink); color: var(--ink); }
+.dot.grip { fill: var(--grip); color: var(--grip); } .dot.brace { fill: var(--brace); color: var(--brace); } .dot.ok { fill: var(--ok, #5fe3a1); color: var(--ok, #5fe3a1); }
+
+.mn { --h: var(--ink-3); position: relative; z-index: 1; display: flex; flex-direction: column; gap: 6px; min-height: 0; min-width: 0; overflow: hidden; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--bg-1) 94%, transparent); transition: border-color .3s, box-shadow .3s, background .3s; }
+.mn[data-hue="muse"] { --h: var(--muse); } .mn[data-hue="grip"] { --h: var(--grip); } .mn[data-hue="brace"] { --h: var(--brace); } .mn[data-hue="ok"] { --h: var(--ok, #5fe3a1); } .mn[data-hue="spine"] { --h: var(--ink-2); }
+.mn.lit { border-color: color-mix(in srgb, var(--h) 70%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--h) 40%, transparent), 0 0 24px color-mix(in srgb, var(--h) 22%, transparent); }
+.mn.busy { border-color: var(--h); background: color-mix(in srgb, var(--h) 9%, var(--bg-1)); }
+.mn.busy::after { content: ""; position: absolute; inset: 0; border-radius: 12px; pointer-events: none; box-shadow: inset 0 0 0 1px var(--h); animation: mnpulse 1.2s ease-in-out infinite; }
+@keyframes mnpulse { 50% { box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--h) 45%, transparent); } }
+.mn-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mn-top h3 { margin: 0; color: var(--ink); font: 600 13px/1.1 var(--font-display); letter-spacing: 0; text-transform: none; }
+.mn-chip { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 7px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--h) 45%, transparent); color: var(--h); font: 600 10.5px/1 var(--font-mono); }
+.mn-status { min-height: 15px; font: 500 11.5px/1.3 var(--font-mono); color: var(--ink-3); }
+.mn-status .live { color: var(--h); font-weight: 600; }
+.mn-status .bad { color: var(--brace); }
+.mn-body { min-height: 0; overflow: auto; font: 500 13px/1.35 var(--font-body); color: var(--ink); }
+.mn-body p { margin: 0 0 4px; overflow-wrap: anywhere; }
+.mn-body .muted { color: var(--ink-3); font-weight: 400; font-size: 12px; }
+.mn-body .ev { color: var(--ink-3); font: 500 11px var(--font-mono); }
+.mn-body .quote { font-size: 14px; }
+.mn-body .tag { display: inline-block; margin: 0 4px 4px 0; padding: 2px 7px; border-radius: 6px; background: color-mix(in srgb, var(--muse) 14%, transparent); color: var(--ink); font: 500 12px var(--font-mono); }
+.mn-body .hl { color: var(--grip); font-weight: 700; }
+.mn-body .row { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 8px; padding: 4px 0; border-top: 1px solid var(--line); font-size: 12.5px; }
+.mn-body .row:first-child { border-top: 0; }
+.mn-body .row span { color: var(--ink-3); font: 500 10.5px/1.6 var(--font-mono); text-transform: uppercase; letter-spacing: .08em; }
+.mn-body .row.empty b { color: var(--ink-3); font-weight: 400; }
+.mn.big .mn-top h3 { font-size: 16px; }
+.mn.big .thought { padding: 7px 0; border-top: 1px solid var(--line); transition: opacity .4s; }
+.mn.big .thought:first-child { border-top: 0; }
+.mn.big .thought p { font-size: 15px; }
+.mn.big .thought.old { opacity: .5; }
+.mn.big .thought.old p { font-size: 13px; }
+.mn.big .why { color: var(--muse); font: 500 10.5px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; }
+
+@media (max-width: 1000px) {
+  .mind { position: static; overflow: auto; min-height: 100%; }
+  .mind-grid { grid-template-columns: 1fr 1fr; grid-template-rows: none; grid-auto-rows: minmax(120px, auto); gap: 12px; }
+  .mind-grid .mn { grid-area: auto !important; }
+  .mind-grid .mn.big { grid-column: 1 / -1 !important; }
+  .mind-wires { display: none; }
+  .mind-legend { display: none; }
+}

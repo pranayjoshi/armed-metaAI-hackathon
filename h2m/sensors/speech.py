@@ -253,9 +253,14 @@ class SpeechService:
 
     def stop(self) -> None:
         self.listening = False
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            # abort() drops queued buffers instead of draining them; CoreAudio's stop could
+            # still deadlock with its own IO thread, so it gets 2 s on a daemon thread and
+            # shutdown never waits on the mic longer than that.
+            closer = threading.Thread(target=_close_stream, args=(stream,), name="mic-close", daemon=True)
+            closer.start()
+            closer.join(2.0)
         if self.voice is not None:
             self.voice.stop()
 
@@ -491,3 +496,11 @@ def build_speech(
         catalog=catalog,
         on_local_stop=lambda meta: on_utterance("stop", meta, "local_stop"),
     )
+
+
+def _close_stream(stream: Any) -> None:
+    try:
+        stream.abort()
+        stream.close()
+    except Exception:  # noqa: BLE001  # the process is going away either way
+        pass
