@@ -28,13 +28,15 @@
 .home-keys span { display: inline-flex; gap: 6px; align-items: center; }
 
 /* ── hero (bottom-left): the app's one big-type moment ───────────────── */
-.home-hero { left: 28px; bottom: 26px; width: min(720px, 56%); display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.home-hero { left: 28px; bottom: 26px; width: min(740px, 58%); display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .home-hero .kicker { color: var(--ink-3); }
-.home-hero h1 { font: 600 clamp(36px, 4.5vw, 68px)/.97 var(--font-display); letter-spacing: -.035em; font-optical-sizing: auto; }
+.home-hero h1 { font: 600 clamp(34px, 4vw, 60px)/.97 var(--font-display); letter-spacing: -.035em; font-optical-sizing: auto; }
 .home-hero h1 span { display: block; }
 .home-hero h1 .l1 { color: var(--ink-3); }
 .home-hero h1 .l2 { color: var(--ink); }
 .home-hero p { max-width: 50ch; color: var(--ink-2); font-size: 15px; line-height: 1.45; }
+.home-hero p.film { max-width: none; color: var(--ink); font: 550 clamp(16px, 1.45vw, 21px)/1.25 var(--font-display); letter-spacing: -.015em; }
+.home-hero p.promise { max-width: 74ch; font-size: 13px; line-height: 1.42; color: var(--ink-3); }
 .home-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; pointer-events: auto; }
 .home-actions .btn { height: 40px; padding: 0 20px; }
 .home-actions .btn.ghost { background: transparent; }
@@ -130,16 +132,21 @@
   .core-css .r3 { display: none; }
 }
 @media (max-width: 1180px) and (min-width: 761px) {
-  .home-hero p { display: none; }
+  .home-hero p.promise { display: none; }
   .home-keys span:nth-child(3) { display: none; }
 }
 @media (max-height: 760px) and (min-width: 761px) {
-  .home-hero { gap: 12px; } .home-hero p { display: none; }
+  .home-hero { gap: 12px; } .home-hero p.promise { display: none; }
   .vit .n { font-size: 32px; }
 }
 
-/* ── Reflex wording + replay (read-only server) ──────────────────────── */
+/* ── Armed wording + replay (read-only server) ──────────────────────── */
 .home-actions .note.wide { max-width: 60ch; }
 .home-actions .note .ro { display: table; margin-bottom: 4px; font: 500 10.5px/1 var(--font-mono); letter-spacing: .14em; color: var(--ink-2); padding: 4px 7px 3px; border-radius: 6px; border: 1px solid var(--line-2); white-space: nowrap; }
 /* a wider health strip (replay adds a Mode item) must not run into the key hints on a small laptop */
-@media (max-width: 1240px) { .home[data-mode="scene"] .home-keys { top: 74px; } }
+@media (max-width: 1420px) { .home[data-mode="scene"] .home-keys { top: 74px; } }
+/* short windows: the hero keeps the headline, the film line and the actions; the long notes step aside */
+@media (max-height: 760px) and (min-width: 761px) {
+  .home-hero h1 { font-size: clamp(30px, 3.3vw, 46px); }
+  .home-actions .note .nt { display: none; }
+}

@@ -23,6 +23,7 @@ export const SKELETON = `
           <button data-preset="angled" aria-pressed="true">Angled</button>
           <button data-preset="follow" aria-pressed="false">Follow</button>
         </div>
+        <button class="btn tw-filmbtn" data-el="filmbtn" aria-pressed="false" title="Film mode (M): the proof layer the camera records">Film <kbd>M</kbd></button>
         <button class="btn tw-focusbtn" data-el="focusbtn" title="Focus mode (F)">Focus <kbd>F</kbd></button>
       </div>
       <div class="tw-legend" data-el="legend"></div>

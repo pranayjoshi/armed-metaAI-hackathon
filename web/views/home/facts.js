@@ -125,5 +125,14 @@ export function healthItems(s) {
     tag: "",
     tone: l.error ? "bad" : l.enabled ? "muse" : "",
   });
+
+  // Cards: straight from state.selection (absent in snapshots that predate it, so no item then)
+  const c = s.selection;
+  if (c) {
+    if (!c.enabled) items.push({ key: "Cards", value: "off", tag: "", tone: "", title: c.blocked || "selection.enabled is false" });
+    else if (c.degraded) items.push({ key: "Cards", value: "scanning", tag: "DEGRADED", tone: "warn", title: String(c.degraded) });
+    else if (c.blocked) items.push({ key: "Cards", value: `${words(c.mode, "—")} · held`, tag: "", tone: "warn", title: String(c.blocked) });
+    else items.push({ key: "Cards", value: words(c.mode, "on"), tag: "", tone: "ok", title: c.cards?.length ? `${c.cards.length} card${c.cards.length === 1 ? "" : "s"} showing` : "selection on, no cards showing" });
+  }
   return items;
 }

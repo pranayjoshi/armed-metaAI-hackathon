@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <title>Armed card</title>
+  <!-- The runtime inserts <meta name="h2m-token"> (and, in replay, <meta name="h2m-mode">) right after
+       the literal "<head>" tag above, exactly as it does for the console (h2m/server.py::_page).
+       Served as a plain file (/web/card/index.html) the page fetches "/" for the token instead. -->
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/web/css/tokens.css" />
+  <link rel="stylesheet" href="/web/card/card.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <!-- Fonts are an upgrade, never a dependency: loaded without blocking paint, so the card also
+       draws with the system faces when the network is gone. -->
+  <link rel="stylesheet" media="print" onload="this.media='all'"
+        href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..700&family=JetBrains+Mono:wght@400;500;700&display=swap" />
+</head>
+<body>
+  <main id="root" class="root" data-scene="hidden">
+    <section id="panel" class="panel" role="region" aria-label="Armed card" data-edge="line">
+      <header class="hd">
+        <div id="hdl" class="hdl"></div>
+        <div class="hdr">
+          <span id="acts" class="acts"></span>
+          <button id="stop" class="stop" type="button" tabindex="-1" data-hit data-act="stop" aria-label="Stop the arm">STOP</button>
+        </div>
+      </header>
+      <div id="strip" class="strip" data-n="0" aria-label="Models in use"></div>
+      <div id="body" class="bd"></div>
+      <div id="note" class="note" role="status"></div>
+      <footer class="mt">
+        <canvas id="meter" aria-label="Muscle meter"></canvas>
+        <div class="mt-tags"><span id="mt-l" class="mt-l"></span><span id="mt-r" class="mt-r"></span>
+          <button id="mute" class="mute" type="button" tabindex="-1" data-hit data-act="mute" aria-label="Sounds" title="Sounds"></button></div>
+      </footer>
+    </section>
+    <div id="live" class="sr" aria-live="polite"></div>
+  </main>
+  <script type="module" src="/web/card/card.js"></script>
+</body>
+</html>

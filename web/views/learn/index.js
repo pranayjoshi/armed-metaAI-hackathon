@@ -6,6 +6,7 @@ import { Player, Timeline } from "./timeline.js";
 import { MuseCard, ProposalCard } from "./muse.js";
 import { Tracker, Thread } from "./tracker.js";
 import { RulesView } from "./rules.js";
+import { CardsView } from "./cards.js";
 
 const I = (d) => `<svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
 const ICON = {
@@ -14,6 +15,7 @@ const ICON = {
   play: I('<path d="M7 4.5v15l12-7.5z"/>'),
   pause: I('<rect x="6" y="5" width="4.2" height="14" rx="1"/><rect x="13.8" y="5" width="4.2" height="14" rx="1"/>'),
   replay: I('<path d="M4 12a8 8 0 1 0 2.6-5.9M4 4v4.5h4.5"/>'),
+  cards: I('<rect x="3.5" y="8" width="13" height="11" rx="2"/><path d="M7 8V6.2A1.7 1.7 0 0 1 8.7 4.5h9.6a1.7 1.7 0 0 1 1.7 1.7v7.1a1.7 1.7 0 0 1-1.7 1.7H16.5"/>'),
 };
 
 async function getJSON(url) {
@@ -31,6 +33,7 @@ class Learn {
     this.root = root;
     this.ctx = ctx;
     this.tab = "incident";
+    this.tableTab = "incident"; // which tab the shared table scene is mounted for (Cards leaves it where it was)
     this.ro = ctx.mode === "replay"; // read-only server: no approve / reject / delete route exists
     this.visible = false;
     this.learning = null;
@@ -56,6 +59,7 @@ class Learn {
           <i class="seg-thumb"></i>
           <button role="tab" data-tab="incident" aria-selected="true"><span class="seg-ic">${ICON.inc}</span><span class="seg-t">Incident</span><span class="seg-s"><i class="dot"></i><span class="seg-st">none yet</span></span></button>
           <button role="tab" data-tab="rules" aria-selected="false"><span class="seg-ic">${ICON.rules}</span><span class="seg-t">Rules</span><span class="seg-s"><span class="seg-n num">0</span> saved</span></button>
+          <button role="tab" data-tab="cards" aria-selected="false"><span class="seg-ic">${ICON.cards}</span><span class="seg-t">Cards</span><span class="seg-s"><span class="seg-c num">0</span> tasks</span></button>
         </div>
       </header>
       <div class="lrn-trk"></div>
@@ -83,6 +87,7 @@ class Learn {
           <div class="inc-right"><div class="muse-host"></div><div class="prop-host"></div></div>
         </section>
         <section class="pane pane-rules" role="tabpanel"></section>
+        <section class="pane pane-cards" role="tabpanel"></section>
       </div>
     </div>`;
     const q = (s) => root.querySelector(s);
@@ -105,6 +110,7 @@ class Learn {
       onDelete: (id) => this.deleteRule(id),
       onReplay: () => this.setTab("incident", true),
     });
+    this.cards = new CardsView(q(".pane-cards"), ctx, { readOnly: this.ro });
     this.timeline = new Timeline(q(".tl-host"), { onScrub: (t) => (this.player.pause(), this.player.seek(t)) });
     this.player = new Player(ctx.loop, (t, force) => this.tick(t, force));
     this.table = await createTable(ctx);
@@ -123,7 +129,9 @@ class Learn {
     q(".lrn-seg").addEventListener("keydown", (e) => {
       if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
         e.preventDefault();
-        this.setTab(this.tab === "incident" ? "rules" : "incident", false, true);
+        const order = ["incident", "rules", "cards"];
+        const i = order.indexOf(this.tab) + (e.key === "ArrowRight" ? 1 : -1);
+        this.setTab(order[(i + order.length) % order.length], false, true);
       }
     });
     this.btnPlay.onclick = () => this.player.toggle();
@@ -138,7 +146,7 @@ class Learn {
     ctx.bus.on("event", (e) => this.onEvent(e));
     const qs = new URLSearchParams(location.search); // ?lt=<s> parks the replay at a time; ?tab=rules opens Rules (for screenshots)
     this.debugT = qs.has("lt") ? Number(qs.get("lt")) : null;
-    if (qs.get("tab") === "rules") this.setTab("rules");
+    if (qs.get("tab") === "rules" || qs.get("tab") === "cards") this.setTab(qs.get("tab"));
     this.loadRules();
   }
 
@@ -214,6 +222,15 @@ class Learn {
     if (inc?.id && (!prev || prev.id !== inc.id || prev.state !== inc.state || !this.details)) this.fetchDetails(inc);
     if (L?.proposal && inc) this.proposedFor.set(inc.id ?? "pending", L.proposal.rule.id);
     this.afterData();
+    this.paintCards();
+  }
+
+  paintCards() {
+    if (!this.state) return;
+    this.cards.render(this.state, this.visible && this.tab === "cards");
+    const n = this.cards.order.length;
+    const el = this.root.querySelector(".seg-c");
+    if (el.textContent !== String(n)) el.textContent = n;
   }
 
   syncModel() {
@@ -361,7 +378,7 @@ class Learn {
 
   updateFlow(stages) {
     const a = this.tracker.activeIdx;
-    if (a > 0 && this.visible && !this.ctx.reduced) {
+    if (a > 0 && this.visible && this.tab !== "cards" && !this.ctx.reduced) {
       const colour = [null, "255,77,94", "170,182,198", "165,139,255", "90,240,164"][a] || "170,182,198";
       this.thread.flow(this.tracker.dot(a - 1), this.tracker.dot(a), colour);
     } else this.thread.flow(null, null);
@@ -437,20 +454,30 @@ class Learn {
       if (on && keepFocus) b.focus();
     });
     if (changed) {
-      const host = tab === "incident" ? this.sceneHost : this.rv.mapHost;
-      this.table.mount(host);
-      this.table.setMode(tab === "incident" ? "incident" : "rules");
-      if (tab === "rules") {
+      if (tab === "cards") {
         this.player.pause();
-        this.mapSig = "";
-        this.paintRules();
-        this.loadRules();
+        this.paintCards();
+        this.cards.dirty = true;
+        this.cards.render(this.state || {}, true);
       } else {
-        this.table.setCursor(this.player.t);
-        this.maybeAutoplay();
+        if (this.tableTab !== tab) {
+          this.tableTab = tab;
+          const host = tab === "incident" ? this.sceneHost : this.rv.mapHost;
+          this.table.mount(host);
+          this.table.setMode(tab === "incident" ? "incident" : "rules");
+        }
+        if (tab === "rules") {
+          this.player.pause();
+          this.mapSig = "";
+          this.paintRules();
+          this.loadRules();
+        } else {
+          this.table.setCursor(this.player.t);
+          this.maybeAutoplay();
+        }
+        requestAnimationFrame(() => this.table.resize());
       }
       this.thread.resize();
-      requestAnimationFrame(() => this.table.resize());
     }
     if (replay && this.model && !this.model.empty) {
       this.played = true;
@@ -545,6 +572,7 @@ class Learn {
     });
     this.loadRules();
     this.afterData();
+    this.paintCards();
     this.maybeAutoplay();
   }
 
@@ -561,6 +589,7 @@ class Learn {
     this.table.dispose();
     this.timeline.dispose();
     this.thread.dispose();
+    this.cards.dispose();
   }
 }
 

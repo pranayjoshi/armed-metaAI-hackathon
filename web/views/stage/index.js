@@ -2,8 +2,10 @@
 import { Deck, SKELETON } from "./deck.js";
 import { createTwin2D } from "./twin2d.js";
 import { tableToWorld } from "./kin.js";
+import { Film } from "./film.js";
+import { Extras } from "./extras.js";
 
-let ctx, root, deck, twin, el, T = null;
+let ctx, root, deck, twin, el, film, extras, T = null;
 let active = false, offLoop = null, offKey = null, camTimer = null, camBusy = false;
 let rules = { zones: null, routes: null };
 let memTarget = null, lastPulse = -9, lastState = null, lastStatus = "";
@@ -162,6 +164,7 @@ function onKey(e) {
   }
   if (typing()) return;
   if (e.key === "f" || e.key === "F") { e.preventDefault(); e.stopImmediatePropagation(); setFocus(stg.dataset.focus !== "1"); }
+  else if (e.key === "m" || e.key === "M") { e.preventDefault(); e.stopImmediatePropagation(); film.toggle(); }
   else if (e.key === "/" && ctx.mode !== "replay") { e.preventDefault(); deck.el.say.focus(); }
 }
 function markPreset(name) {
@@ -216,6 +219,28 @@ export default {
       markPreset(b.dataset.preset);
     });
     el.focusbtn.onclick = () => setFocus(root.querySelector(".stg").dataset.focus !== "1");
+    film = new Film(root.querySelector(".stg"), ctx, {
+      onToggle: (on) => {
+        el.filmbtn.classList.toggle("on", on);
+        el.filmbtn.setAttribute("aria-pressed", String(on));
+        twin?.resize?.(); // the twin's box changes size when the film band opens
+        requestAnimationFrame(() => twin?.resize?.());
+      },
+    });
+    extras = new Extras(root.querySelector(".stg"), ctx, { getRoutes: () => rules.routes });
+    el.filmbtn.onclick = () => film.toggle();
+    el.filmbtn.insertAdjacentHTML("beforebegin", '<button class="btn tw-archbtn" data-el="archbtn" aria-pressed="false" title="Architecture frame: what ran today">Architecture</button>');
+    const archbtn = root.querySelector(".tw-archbtn");
+    archbtn.onclick = () => {
+      const on = root.querySelector(".stg").dataset.frame !== "architecture";
+      extras.setFrame(on ? "architecture" : "");
+      archbtn.classList.toggle("on", on);
+      archbtn.setAttribute("aria-pressed", String(on));
+      if (ctx.store.state) extras.update(ctx.store.state, film.on);
+    };
+    const qs = new URLSearchParams(location.search);
+    if (qs.get("film") === "1") film.set(true); // ?film=1 turns the proof layer on at load
+    if (qs.get("frame") === "architecture") { extras.setFrame("architecture"); archbtn.classList.add("on"); archbtn.setAttribute("aria-pressed", "true"); } // ?film=1&frame=architecture exports the 2:05 frame
     if (ctx.mode !== "replay") el.freeze.addEventListener("click", (e) => { if (e.target.closest("[data-arm]")) ctx.api("/api/arm/reset"); });
     root.querySelector(".stg").dataset.mode = ctx.mode;
     el.empty.addEventListener("click", (e) => { if (e.target.closest("[data-go]")) ctx.router.go("replay", [e.clientX, e.clientY]); });
@@ -244,6 +269,7 @@ export default {
     offLoop = ctx.loop.add((dt, t) => {
       twin.frame?.(dt, t);
       deck.frame(dt, t);
+      film.frame();
     });
     addEventListener("keydown", onKey, true);
     offKey = () => removeEventListener("keydown", onKey, true);
@@ -269,7 +295,7 @@ export default {
 
   update(s) {
     if (!deck) return;
-    if (!s.arm) { renderEmpty(s); return; } // replay with no running simulation: only recordings exist
+    if (!s.arm) { renderEmpty(s); film.updateEmpty(); extras.update(s, film.on); return; } // replay with no running simulation: only recordings exist
     el.empty.hidden = true;
     el.view.classList.remove("no-sim");
     const d = twinData(s);
@@ -277,6 +303,8 @@ export default {
     twin?.setData(d);
     const sent = sentenceFor(s);
     deck.update(s, sent);
+    film.update(s, sent);
+    extras.update(s, film.on);
     renderOverlays(s);
     lastState = s;
   },

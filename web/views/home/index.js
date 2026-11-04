@@ -41,8 +41,9 @@ export default {
             ).join("")}
           </nav>
           <div class="home-hero">
-            <h1 class="rise" style="--i:2"><span class="l1">Hands never moved.</span><span class="l2">One muscle, one twitch.</span></h1>
-            <p class="rise" style="--i:3">A brace freezes the arm before you speak. Muse explains why, and you approve a rule that can only make it more cautious.</p>
+            <h1 class="rise" style="--i:2"><span class="l1">A third arm that</span><span class="l2">autocompletes you.</span></h1>
+            <p class="film rise" style="--i:3">You never said a word to it. It knew. One muscle did the rest.</p>
+            <p class="promise rise" style="--i:3" data-promise>Waiting for the runtime.</p>
             <div class="home-actions rise" style="--i:4">
               ${replayMode
                 ? '<button class="btn primary" data-act="replay" type="button">Open the replay</button>'
@@ -71,6 +72,7 @@ export default {
     const factEls = portalEls.map((el) => ({ el, txt: el.querySelector(".txt"), last: "", tone: "" }));
     const healthEl = $(".home-health");
     const noteEl = $("[data-note]");
+    const promiseEl = $("[data-promise]");
     const armBtn = $("[data-act=arm]"); // null in replay: that server has no /api/arm/*
 
     const tagsEl = $("[data-tags]");
@@ -260,9 +262,25 @@ export default {
     let healthHtml = "";
     function renderHealth(s) {
       const html = healthItems(s)
-        .map((h) => `<div class="hh" role="listitem" data-tone="${h.tone}"><span class="k">${esc(h.key)}</span><span class="v"><i></i>${esc(h.value)}${h.tag ? `<span class="tag">${esc(h.tag)}</span>` : ""}</span></div>`)
+        .map((h) => `<div class="hh" role="listitem" data-tone="${h.tone}"${h.title ? ` title="${esc(h.title)}"` : ""}><span class="k">${esc(h.key)}</span><span class="v"><i></i>${esc(h.value)}${h.tag ? `<span class="tag">${esc(h.tag)}</span>` : ""}</span></div>`)
         .join("");
       if (html !== healthHtml) healthEl.innerHTML = healthHtml = html;
+    }
+    // What this build does, said honestly: the promise follows the selection flag and nothing else.
+    let promiseText = "";
+    function renderPromise(s) {
+      const sel = s.selection;
+      let text;
+      if (!s.arm) text = "A replay of saved recordings. Nothing here moves an arm.";
+      else if (sel?.enabled) {
+        text = `It shows what it thinks you want next as cards. A twitch picks one and a second confirms it, a double twitch moves to the next, a brace refuses. A brace while it moves freezes the arm, and the rules it learns can only make it more careful.`;
+        if (sel.degraded) text += " Cards are in scanning order for now.";
+      } else if (replayMode) {
+        text = "This is a scripted simulation: selection cards are off in it. A brace freezes the virtual arm, and the rule it learns can only make it more careful.";
+      } else {
+        text = "Selection cards are off in this build (selection.enabled is false), so you ask by voice or text. A brace still freezes the arm, and the rules it learns can only make it more careful.";
+      }
+      if (text !== promiseText) promiseEl.textContent = promiseText = text;
     }
     let tagsHtml = "";
     function renderTags(s) {
@@ -290,7 +308,7 @@ export default {
     function renderAction(s) {
       if (!armBtn) {
         // replay: nothing to arm. Say what this is, from the server's own note.
-        const html = `<span class="ro">READ-ONLY · ${esc(s.label || "REPLAY")}</span>${esc(s.note || "Replay of saved recordings. Nothing here moves an arm.")}`;
+        const html = `<span class="ro">READ-ONLY · ${esc(s.label || "REPLAY")}</span><span class="nt">${esc(s.note || "Replay of saved recordings. Nothing here moves an arm.")}</span>`;
         if (noteEl.dataset.h !== html) noteEl.dataset.h = noteEl.innerHTML = html;
         return;
       }
@@ -310,6 +328,7 @@ export default {
       S.last = s;
       renderFacts(s);
       renderHealth(s);
+      renderPromise(s);
       renderTags(s);
       renderVitals(s);
       renderAction(s);

@@ -24,6 +24,29 @@ function thumb(model, rule) {
   return `<svg class="thumb" viewBox="0 0 88 88" aria-hidden="true">${s}</svg>`;
 }
 
+const TICK = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8.4l3 3 6.6-6.8"/></svg>';
+const CROSS = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
+const nice = (k) => String(k).replaceAll("_", " ");
+
+/**
+ * The verifier's result, only when the rule payload carries it (r.verifier as an object of checks, a boolean or a
+ * string, or r.verified as a boolean). The runtime does not publish these yet: nothing is shown, never a guessed tick.
+ */
+function verifierHtml(r) {
+  const items = [];
+  const v = r.verifier;
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    for (const [k, x] of Object.entries(v)) {
+      if (typeof x === "boolean") items.push([x, nice(k)]);
+      else if (typeof x === "string" || typeof x === "number") items.push([null, `${nice(k)}: ${x}`]);
+    }
+  } else if (typeof v === "boolean") items.push([v, "verifier"]);
+  else if (typeof v === "string" && v) items.push([null, `verifier: ${v}`]);
+  if (typeof r.verified === "boolean") items.push([r.verified, "verified"]);
+  if (!items.length) return "";
+  return `<ul class="rc-ver" aria-label="Verifier result">${items.map(([ok, label]) => `<li class="${ok === true ? "ok" : ok === false ? "bad" : ""}">${ok === true ? TICK : ok === false ? CROSS : ""}<span>${esc(label)}</span></li>`).join("")}</ul>`;
+}
+
 export class RulesView {
   constructor(host, ctx, cb) {
     this.ctx = ctx;
@@ -92,7 +115,7 @@ export class RulesView {
   render({ data, geo, state, latestIncident, selected, routesError }) {
     this.selected = selected;
     const rules = data?.rules || [];
-    const sig = JSON.stringify([data?.error, rules.map((r) => r.id), [...geo.keys()].map((k) => !!geo.get(k)), selected, latestIncident]);
+    const sig = JSON.stringify([data?.error, rules.map((r) => [r.id, r.verifier ?? null, r.verified ?? null]), [...geo.keys()].map((k) => !!geo.get(k)), selected, latestIncident]);
     this.count.textContent = data?.error ? "unreadable" : `${rules.length} saved`;
     if (sig !== this.sig) {
       this.sig = sig;
@@ -130,6 +153,7 @@ export class RulesView {
         <p class="rc-s">${esc(ruleSentence(r))}</p>
         <div class="chips">${r.when_holding.map((t) => `<span class="chip"><i></i>${esc(t)}</span>`).join("")}<span class="chip bad"><i></i>${esc(r.avoid)}</span><span class="chip muse"><i></i>${esc(info.kind)}</span></div>
         <p class="rc-eff">${esc(info.effect(r))}</p>
+        ${verifierHtml(r)}
         <dl class="rc-meta"><dt>Learned</dt><dd class="num rc-ago" data-t="${r.created_at}">${esc(when || "—")}</dd><dt>Incident</dt><dd class="num">${r.incident_id ? `…${esc(shortId(r.incident_id))}` : "—"}${replayable ? ` <button class="lnk" data-act="replay">replay</button>` : ""}</dd><dt>Rule</dt><dd class="num">${esc(shortId(r.id))}</dd></dl>
       </div>
       ${this.ro ? "" : '<button class="btn danger sm del" data-act="del">Delete</button>'}

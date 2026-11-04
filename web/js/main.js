@@ -11,6 +11,7 @@ const ALL_SECTIONS = [
   { id: "learn", label: "Learning", key: "5", icon: I('<path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"/><path d="M18 3v4h-4M6 21v-4h4"/>') },
   { id: "lab", label: "Lab", modes: ["live"], icon: I('<path d="M9 3h6M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2.2h12.4a1.5 1.5 0 0 0 1.3-2.2L14 9V3"/><path d="M7.5 15h9"/>') },
   { id: "replay", label: "Replay", modes: ["replay"], icon: I('<circle cx="12" cy="12" r="8.5"/><path d="M10 8.5l5.5 3.5-5.5 3.5z"/>') },
+  { id: "context", label: "Context", icon: I('<rect x="3" y="4" width="11" height="16" rx="1.5"/><path d="M17 8h4M17 12h4M17 16h4"/><circle cx="8.5" cy="10" r="2"/>') },
 ];
 // Sections valid in this mode, numbered 1..n. Replay mode has no Lab (calibration, sessions, EMG drive all actuate).
 export const SECTIONS = ALL_SECTIONS.filter((s) => !s.modes || s.modes.includes(mode)).map((s, i) => ({ ...s, key: String(i + 1) }));
