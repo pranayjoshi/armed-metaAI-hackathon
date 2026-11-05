@@ -1,6 +1,6 @@
 # What was built during the event
 
-The hackathon window is October 26 to November 4, 2026. Everything below was written inside it by me, one person, working with AI coding agents (Claude Code; their definitions are under `.claude/agents/`), except what is credited under Reused. This list has two parts:
+The hackathon window is October 26 to November 4, 2026. Everything below was written inside it by me, one person, working with AI coding agents (Claude Code), except what is credited under Reused. This list has two parts:
 
 - **Commits** (first part): dated by `git log --date=short main`. A commit date is when I committed, not when the work finished; the one-line summary is mine, the hash and subject are the repository's. Regenerate with `git log --date=short --format='%ad %h %s' main`.
 - **Working tree** (second part): files that are **not committed** when this file is generated. They have no commit date. They are listed from `git status --short` so a reader can see what the build contains beyond the history, and they are checked against the history once committed. Nothing in the second part can be dated from the repository.
