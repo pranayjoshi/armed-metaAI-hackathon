@@ -2,12 +2,22 @@
 
 <p align="center"><strong>A third arm that autocompletes you.</strong></p>
 
-<p align="center"><em>It watches the time, your room, your voice and your muscles, works out what you need, then acts, speaks, or checks with the people around you.</em></p>
+<p align="center">
+  <img alt="Muse Spark 1.3" src="https://img.shields.io/badge/Muse%20Spark%201.3-judge-7c4dff?style=flat-square">
+  <img alt="Muse Wonder 1.0" src="https://img.shields.io/badge/Muse%20Wonder%201.0-investigator-7c4dff?style=flat-square">
+  <img alt="SAM 3.1" src="https://img.shields.io/badge/SAM%203.1-eyes-7c4dff?style=flat-square">
+  <img alt="Muse Voice Transcribe 1.0" src="https://img.shields.io/badge/Voice%20Transcribe%201.0-ears-7c4dff?style=flat-square">
+  <img alt="SO-101" src="https://img.shields.io/badge/SO--101-open%20hardware-222?style=flat-square">
+  <img alt="Nine days" src="https://img.shields.io/badge/built%20in-9%20days-222?style=flat-square">
+</p>
 
-<p align="center"><img src="docs/media/desk.jpg" alt="Armed on the desk: the SO-101 beside the laptop, the phone, the shake and the overhead camera" width="900"></p>
+<p align="center"><img src="docs/media/hero.gif" alt="Water time: both hands stay on the keyboard and the arm brings the shake, straw first, to the mouth" width="800"></p>
+
+<p align="center"><sub>Water time, no water on the desk. Both hands stay on the keyboard. The shake comes to you, straw first. Nobody said a word.</sub></p>
 
 <p align="center">
   <a href="#a-day-with-it">A day with it</a> ·
+  <a href="#the-brace">The brace</a> ·
   <a href="#four-meta-models-each-where-only-it-fits">Meta models</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#from-brace-to-rule">Learning</a> ·
@@ -22,9 +32,36 @@ Armed is a robot arm for a desk or a headboard that you almost never have to ins
 
 Built in nine days by one person for the Meta Global AI Developer Hackathon, indie track, on an open-source SO-101 arm and a four-channel OpenBCI Ganglion. Four Meta models do the seeing, hearing, judging and investigating. Every motion is a taught pose.
 
-> **Nothing a model says can move a motor.** Muse Spark proposes, Muse Wonder investigates, SAM 3.1 sees, Muse Voice Transcribe listens. Motion is taught poses only, behind a pure-function gate. The stop path has no model and no network in it. Joint values from a model: zero.
+> **A model can propose. Only the gate and your muscle can move a motor.** Muse Spark proposes, Muse Wonder investigates, SAM 3.1 sees, Muse Voice Transcribe listens. Every proposal passes a pure-function permission gate and waits for a twitch. The stop path has no model and no network in it. Joint values from a model: zero.
+
+<table align="center">
+<tr>
+<td align="center"><strong>4</strong><br><sub>Meta models, every one load-bearing</sub></td>
+<td align="center"><strong>497</strong><br><sub>Muse Spark turns on demo day</sub></td>
+<td align="center"><strong>435</strong><br><sub>SAM 3.1 scans of the desk</sub></td>
+<td align="center"><strong>373</strong><br><sub>utterances, with speaker labels</sub></td>
+<td align="center"><strong>1</strong><br><sub>muscle for every yes</sub></td>
+<td align="center"><strong>0</strong><br><sub>joint values from a model</sub></td>
+<td align="center"><strong>$700</strong><br><sub>of open hardware</sub></td>
+</tr>
+</table>
 
 ## A day with it
+
+<table>
+<tr>
+<td width="50%"><img src="docs/media/film_phone.jpg" alt="The phone lights up on the desk while both hands are on the keyboard; the arm is already reaching"><br><sub><strong>Phone.</strong> It lights up while you type. Spark sees the glow: <em>Bring the phone?</em> One twitch and it is at eye level.</sub></td>
+<td width="50%"><img src="docs/media/hero_shake.jpg" alt="The arm holds the protein shake at the mouth while both hands keep typing"><br><sub><strong>Shake.</strong> Water time, no water. It offers the shake instead and brings it to the straw. Hands never leave the keys.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/media/film_freeze.jpg" alt="The arm frozen mid-carry above the laptop while the forearm braces"><br><sub><strong>Brace.</strong> It carried the shake straight over the laptop. The forearm tenses and the arm freezes in the air. No model in that loop.</sub></td>
+<td width="50%"><img src="docs/media/film_jar.jpg" alt="On a call, hands full: the arm holds the jar while the lid comes off"><br><sub><strong>Jar.</strong> On a call, hands full. It sees the jar held out, offers to hold it, and the lid comes off mid-sentence.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/media/film_palm.jpg" alt="The gripper lowering a marker into an open palm at the bedside"><br><sub><strong>Bedside.</strong> Same arm, clamped to the headboard. Someone else asks for the marker; it waits for the wearer, then lands it in an open palm.</sub></td>
+<td width="50%"><img src="docs/media/film_deskcheck.jpg" alt="The desk from the overhead camera with the trash classified and the arm reaching for it"><br><sub><strong>Desk check.</strong> Every half hour it looks at the desk. Rubbish goes in the bin after a five-second veto ring. The phone and the shake stay.</sub></td>
+</tr>
+</table>
 
 | | What happens | What you see on screen |
 |---|---|---|
@@ -38,15 +75,26 @@ Built in nine days by one person for the Meta Global AI Developer Hackathon, ind
 | **Desk check** | Every half hour it looks at the desk. Rubbish goes in the bin after a five-second veto ring. The phone and the shake stay. | The ring counting down, the chain *1/2 · 2/2* |
 | **Keys** | Standing up at the end of the day. *Your keys?* | The last card |
 
+Every yes in that day is one muscle. Words spoken to it: zero.
+
+## The brace
+
 <table>
 <tr>
-<td width="33%"><img src="docs/media/film_emg.jpg" alt="Forearm EMG beside the arm, with the arm speed readout"><br><sub>The forearm trace and the arm's speed, side by side.</sub></td>
-<td width="33%"><img src="docs/media/film_jar.jpg" alt="Holding the jar on a call while the arm holds it"><br><sub>On a call, hands full: the arm holds the jar.</sub></td>
-<td width="33%"><img src="docs/media/film_marker.jpg" alt="The arm placing a marker into an open palm"><br><sub>The marker, into an open palm.</sub></td>
+<td width="50%"><img src="docs/media/freeze.gif" alt="The carry crosses the laptop, the forearm braces, the arm freezes"><br><sub>The carry crosses the laptop. The forearm tenses. The arm stops where it is.</sub></td>
+<td width="50%"><img src="docs/media/film_emg.jpg" alt="The forearm EMG trace beside the arm, with the arm speed readout"><br><sub>The forearm trace and the arm's speed, side by side. The speed follows the muscle before the brace threshold is reached.</sub></td>
 </tr>
 </table>
 
-Every yes in that day is one muscle. Words spoken to it: zero.
+Four electrodes on the forearm, a notch filter, a band-pass, RMS, a per-user calibration and threshold and onset rules. Signal processing, no learned weights. The brace-during-motion rule writes the stop straight to the servo bus; nothing between the muscle and the motor asks a model. The same channel gives Armed five meanings by timing and context:
+
+| Signal | Meaning |
+|---|---|
+| Twitch | Yes. Select the highlighted card; a second twitch confirms anything that moves |
+| Double twitch | Next card, or send |
+| Brace, arm still | No. The card drops and is not re-proposed for half an hour; refused twice in a day, it becomes a *don't propose that* rule |
+| Brace, arm moving | Freeze. Latched until reset, then Wonder investigates |
+| Sustained effort | Speed. The carry slows as the forearm tenses, before the brace threshold |
 
 ## Four Meta models, each where only it fits
 
@@ -68,11 +116,19 @@ Every yes in that day is one muscle. Words spoken to it: zero.
 | Muse Voice Transcribe utterances | 373 | | |
 | Muse Wonder 1.0 investigation of the laptop near-miss | 1 investigation, 12 tool calls in 7 turns | 46.5 s | |
 
-Things Spark said that day, unprompted, from the scene: *"It's shake time."* · *"Desk check due."* · *"Slot two, screen up, got it."* · *"I'd bring the phone, but I can't prove my gripper is empty, and that move opens it."* · *"Pranay braced when I carried drink over laptop."*
+Things Spark said that day, unprompted, from the scene:
+
+> *"It's shake time."*
+> *"Desk check due."*
+> *"Slot two, screen up, got it."*
+> *"I'd bring the phone, but I can't prove my gripper is empty, and that move opens it."*
+> *"Pranay braced when I carried drink over laptop."*
 
 Not used, on purpose: no learned motion policy. Meta offers no motor policy on the API, and a taught pick repeats on camera. The intelligence is in what to do and whether to do it, not in how to move.
 
 ## How it works
+
+<p align="center"><img src="docs/media/film_lift.jpg" alt="A taught lift in progress, with the Stage view and the 3D twin on the laptop" width="900"><br><sub>A taught lift, with the Stage view beside it: the Card, the twin, the gate checks it passed.</sub></p>
 
 ```text
  room ──► SAM 3.1 (phrase → masks: objects, hand, face; on change, events, 10 s) ─┐
@@ -97,18 +153,6 @@ Not used, on purpose: no learned motion policy. Meta offers no motor policy on t
    Armed checker: removes options only ✓ · replay: incident prevented ✓ · twin rehearses ─► card ─► twitch ─► rule memory
 ```
 
-### One muscle, five meanings
-
-Four electrodes on the forearm, a notch filter, a band-pass, RMS, a per-user calibration and threshold and onset rules. Signal processing, no learned weights. One channel yields five meanings by timing and context:
-
-| Signal | Meaning |
-|---|---|
-| Twitch | Yes. Select the highlighted card; a second twitch confirms anything that moves |
-| Double twitch | Next card, or send |
-| Brace, arm still | No. The card drops and is not re-proposed for half an hour; refused twice in a day, it becomes a *don't propose that* rule |
-| Brace, arm moving | Freeze. Latched until reset, then Wonder investigates |
-| Sustained effort | Speed. The carry slows as the forearm tenses, before the brace threshold |
-
 ### The trust ladder
 
 <p align="center"><img src="docs/media/ladder.svg" alt="The trust ladder: does it, announces then does it, proposes, asks the named person, never" width="1000"></p>
@@ -118,7 +162,7 @@ Enforced in one pure function, never by the model:
 - **Does it:** a lamp when you sit down, turning to look at you, a spoken reminder.
 - **Announces, then does it:** a routine you pre-approved, away from your body. *Checking the desk*, a five-second veto ring, then it runs.
 - **Proposes:** everything else that moves, every message. The final approach to your mouth or your hand always waits for a twitch, even inside a routine.
-- **Asks the named person:** anything another voice requested.
+- **Asks the named person:** anything another voice requested. Voice Transcribe's speaker label says who asked; the wearer's twitch is what grants it.
 - **Never:** model text to a motor or to a stranger; anything in quiet hours but a stop.
 
 Routines are yours: a YAML list (`configs/routines.yaml`) edited on the console or by voice. Spark may suggest one new routine a day from what it has seen; only you can move anything up the ladder.
@@ -144,7 +188,7 @@ Dependencies are only numpy, scipy, pyyaml, fastapi, uvicorn, httpx and opencv, 
 <p align="center"><img src="docs/media/learn.png" alt="The Learning view: the incident clip, the timeline, Wonder's tool loop, the checker, the rule" width="900"></p>
 
 1. **The brace freezes the arm.** The decoder's onset rule writes the stop straight to the servo bus. The six seconds before the freeze, at five frames a second with joints, contract and EMG, are already in a ring buffer.
-2. **Wonder investigates.** It gets the clip and six tools. `track` asks SAM 3.1 to follow a phrase across the frames; `measure` turns two masks and a time into centimetres through the calibrated table; `arm_trace` and `body_trace` give it the joint path and the hand; `propose_rule` is the only way out.
+2. **Wonder investigates.** It gets the clip and five tools. `track` asks SAM 3.1 to follow a phrase across the frames; `measure` turns two masks and a time into centimetres through the calibrated table; `arm_trace` and `body_trace` give it the joint path and the hand; `propose_rule` is the only way out.
 3. **The rule language cannot say *allow*.** Four verbs: forbid, slow, lift, loosen. The proposal names what was held, what to avoid, and the response.
 4. **The checker proves it.** A rule is accepted only if the set of permitted actions after it is a subset of the set before, and only if replaying the incident under the rule prevents it. The 3D twin rehearses the new route beside the frozen real arm.
 5. **You approve it with a twitch.** It lands in `data/rules/`, applies to every object with the same tag, and the arm can state it to whoever asks.
@@ -174,7 +218,12 @@ A refusal uses the same machinery: brace the same card twice in a day and *don't
 
 ## Hardware
 
-<p align="center"><img src="docs/media/slots.jpg" alt="The desk from the overhead camera: four taught slots for the toy, the phone, the 3D print and the shake" width="700"><br><sub>The desk from the robot's own camera. Four taught slots; SAM 3.1 finds what is on them by phrase.</sub></p>
+<table>
+<tr>
+<td width="50%"><img src="docs/media/film_band.jpg" alt="Electrodes on the forearm, wires running to the Ganglion beside the arm"><br><sub>Four snap electrodes on the forearm, wired to the OpenBCI Ganglion beside the arm. One channel does all the talking.</sub></td>
+<td width="50%"><img src="docs/media/slots.jpg" alt="The desk from the overhead camera: four taught slots for the toy, the phone, the 3D print and the shake"><br><sub>The desk from the robot's own camera. Four taught slots; SAM 3.1 finds what is on them by phrase.</sub></td>
+</tr>
+</table>
 
 | Part | Role | List price |
 |---|---|---|
@@ -183,7 +232,7 @@ A refusal uses the same machinery: brace the same card twice in a day and *don't
 | Two USB webcams | overhead scene, wrist | about $60 |
 | A laptop | runs everything, talks to the Meta Model API | |
 
-About $700 of open hardware. 31 taught poses across the desk and the bed profiles; every skill in `configs/skills.yaml` is a sequence of them.
+About $700 of open hardware. 31 taught poses across the desk and the bed profiles; every skill in `configs/skills.yaml` is a sequence of them. The arm was assembled, calibrated and trialled in the first two of the nine days.
 
 ## Quick start
 
