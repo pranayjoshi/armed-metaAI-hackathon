@@ -23,4 +23,4 @@ models/*
 outputs/
 
 # shoot material (stills, narration, screen recordings) lives outside the repo
-media/
+/media/
