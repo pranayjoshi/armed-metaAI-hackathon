@@ -36,13 +36,13 @@ Built in nine days by one person for the Meta Global AI Developer Hackathon, ind
 
 <table align="center">
 <tr>
-<td align="center"><strong>4</strong><br><sub>Meta models, every one load-bearing</sub></td>
-<td align="center"><strong>497</strong><br><sub>Muse Spark turns on demo day</sub></td>
-<td align="center"><strong>435</strong><br><sub>SAM 3.1 scans of the desk</sub></td>
-<td align="center"><strong>373</strong><br><sub>utterances, with speaker labels</sub></td>
-<td align="center"><strong>1</strong><br><sub>muscle for every yes</sub></td>
-<td align="center"><strong>0</strong><br><sub>joint values from a model</sub></td>
-<td align="center"><strong>$700</strong><br><sub>of open hardware</sub></td>
+<td align="center"><strong>4</strong><br><sub>Meta models</sub></td>
+<td align="center"><strong>497</strong><br><sub>Spark turns</sub></td>
+<td align="center"><strong>435</strong><br><sub>SAM scans</sub></td>
+<td align="center"><strong>373</strong><br><sub>utterances</sub></td>
+<td align="center"><strong>1</strong><br><sub>muscle per yes</sub></td>
+<td align="center"><strong>0</strong><br><sub>model joint values</sub></td>
+<td align="center"><strong>$700</strong><br><sub>open hardware</sub></td>
 </tr>
 </table>
 
