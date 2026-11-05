@@ -1,4 +1,4 @@
-# Object tags and taught routes used by h2m/rules.py and h2m/routing.py.
+# Object tags and taught routes used by armed/rules.py and armed/routing.py.
 # PLACEHOLDER: every polyline and zone below is a stand-in and MUST be
 # re-measured at teach time (table coordinates, same frame as poses.yaml slots).
 # Set `measured: true` on a polyline only once it has been measured. The real arm
@@ -8,7 +8,7 @@
 tags:            # object id -> tags; rules generalize through tags
   cup: [liquid, fragile]
   block: []
-  ball: [rigid]    # the phone (h2m.yaml object id `ball`)
+  ball: [rigid]    # the phone (armed.yaml object id `ball`)
   bottle: [liquid]
   tea: [liquid]    # a rule learned on the cup applies to the tea through `liquid`
 
@@ -20,20 +20,31 @@ routes:
     slot_1: {measured: false, path: [[0.25, 0.55], [0.30, 0.20], [0.50, 0.20]]}  # PLACEHOLDER
     slot_2: {measured: false, path: [[0.50, 0.55], [0.30, 0.20], [0.50, 0.20]]}  # PLACEHOLDER
     slot_3: {measured: false, path: [[0.75, 0.55], [0.30, 0.20], [0.50, 0.20]]}  # PLACEHOLDER
+    slot_4: {"measured": true, "path": [[-0.0981, 0.4049], [0.4436, 0.1066], [0.3878, 0.1079]]}  # armed calibrate route 2026-11-04 15:01
   via_left:
     slot_1: {measured: false, path: [[0.25, 0.55], [0.20, 0.40], [0.50, 0.40]]}  # PLACEHOLDER
     slot_2: {measured: false, path: [[0.50, 0.55], [0.20, 0.40], [0.50, 0.40]]}  # PLACEHOLDER
     slot_3: {measured: false, path: [[0.75, 0.55], [0.20, 0.40], [0.50, 0.40]]}  # PLACEHOLDER
+    slot_4: {measured: false, path: [[0.90, 0.55], [0.20, 0.40], [0.50, 0.40]]}  # PLACEHOLDER
   via_high:
     slot_1: {measured: false, path: [[0.25, 0.55], [0.10, 0.40], [0.10, 0.00], [0.50, 0.00]]}  # PLACEHOLDER
     slot_2: {measured: false, path: [[0.50, 0.55], [0.10, 0.40], [0.10, 0.00], [0.50, 0.00]]}  # PLACEHOLDER
     slot_3: {measured: false, path: [[0.75, 0.55], [0.10, 0.40], [0.10, 0.00], [0.50, 0.00]]}  # PLACEHOLDER
+    slot_4: {measured: false, path: [[0.90, 0.55], [0.10, 0.40], [0.10, 0.00], [0.50, 0.00]]}  # PLACEHOLDER
 
+  bring_drink:
+    slot_4: {"measured": true, "path": [[-0.1651, 0.3773], [-0.2839, 0.0474]]}  # armed calibrate route 2026-11-04 15:02
+  bring_drink_close:
+    slot_4: {"measured": true, "path": [[-0.1084, 0.4048], [-0.1062, 0.3803], [-0.1652, 0.0115]]}  # armed calibrate route 2026-11-04 15:03
 high_routes:     # routes a lift_higher rule may still use (carried above the usual height)
   - via_high
+  - bring_drink_close   # the drink's close path: folded beside the robot, kept high over the laptop
+# The drink to the mouth has its own two routes from slot_4, named after its skills and
+# recorded with `armed calibrate route <name> slot_4 --walk ...`: bring_drink (out over the
+# laptop) and bring_drink_close. The bin carries above never use them.
 
 zones:           # named avoid zones, axis-aligned rectangles [xmin, ymin, xmax, ymax]
-  laptop: [0.25, 0.12, 0.35, 0.28]                        # PLACEHOLDER, measure at teach time
+  laptop: [-0.2849, -0.0423, -0.1042, 0.436]  # measured 2026-11-04 14:43 by armed calibrate zone
 
 # place_near_user: the one taught path to the marked spot near the user (never into a
 # hand). Rules shape it like a carry route (avoid zones, slow_down; lift_higher needs

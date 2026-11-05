@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from h2m.compiler.grammar import build_vocabulary, parse
-from h2m.compiler.resolve import compile_contract
-from h2m.contract import Verb
-from h2m.core import load_config
-from h2m.safety import Verdict, decide
+from armed.compiler.grammar import build_vocabulary, parse
+from armed.compiler.resolve import compile_contract
+from armed.contract import Verb
+from armed.core import load_config
+from armed.safety import Verdict, decide
 
 CFG = load_config()
 CATALOG = {o["id"]: o for o in CFG["objects"]}

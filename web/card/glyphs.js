@@ -1,4 +1,4 @@
-// Pictogram fallback by card `kind` (h2m.intent.KINDS), drawn here so no asset is needed.
+// Pictogram fallback by card `kind` (armed.intent.KINDS), drawn here so no asset is needed.
 // 24x24, stroke only, currentColor. A real `card.pictogram` image replaces it when the runtime sends one.
 const S = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 

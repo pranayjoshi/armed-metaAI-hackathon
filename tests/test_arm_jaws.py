@@ -1,12 +1,12 @@
-"""`h2m arm jaws <slot> <percent>` edits only that slot's two jaw values."""
+"""`armed arm jaws <slot> <percent>` edits only that slot's two jaw values."""
 
 from __future__ import annotations
 
 import pytest
 
-from h2m.cli import set_slot_jaws
-from h2m.core import ROOT
-from h2m.robot.skills import load_poses
+from armed.cli import set_slot_jaws
+from armed.core import ROOT
+from armed.robot.skills import load_poses
 
 FIXTURE = ROOT / "tests" / "fixtures" / "poses.yaml"
 

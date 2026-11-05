@@ -7,13 +7,14 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const arg = (name) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : undefined; };
-const configPort = /^server:\s*\n(?:[ \t]+.*\n)*?[ \t]+port:\s*(\d+)/m.exec(fs.readFileSync(path.join(ROOT, 'configs/h2m.yaml'), 'utf8'))?.[1];
-const PORT = Number(arg('port') ?? process.env.H2M_PORT ?? configPort ?? 8080);
+const configPort = /^server:\s*\n(?:[ \t]+.*\n)*?[ \t]+port:\s*(\d+)/m.exec(fs.readFileSync(path.join(ROOT, 'configs/armed.yaml'), 'utf8'))?.[1];
+const PORT = Number(arg('port') ?? process.env.ARMED_PORT ?? configPort ?? 8080);
 const BASE = `http://127.0.0.1:${PORT}`;
 const CORNER = arg('corner') ?? 'tr';
-const EXTRA_ARGS = (arg('h2m-args') ?? process.env.H2M_ARGS ?? '').split(/\s+/).filter(Boolean);
-const VENV_H2M = path.join(ROOT, '.venv/bin/h2m');
-const H2M_CMD = process.env.H2M_CMD ?? (fs.existsSync(VENV_H2M) ? VENV_H2M : 'h2m');
+const FILM = process.argv.includes('--film'); // the card stays on screen with an idle panel (card ?film=1)
+const EXTRA_ARGS = (arg('armed-args') ?? process.env.ARMED_ARGS ?? '').split(/\s+/).filter(Boolean);
+const VENV_ARMED = path.join(ROOT, '.venv/bin/armed');
+const ARMED_CMD = process.env.ARMED_CMD ?? (fs.existsSync(VENV_ARMED) ? VENV_ARMED : 'armed');
 const SIZE = { width: 380, height: 300 }, MARGIN = 16, START_TIMEOUT_MS = 30000;
 const COLOURS = { ready: '#5af0a4', moving: '#5af0a4', stopped: '#ff4d5e', fault: '#ff4d5e', disarmed: '#8a8f98', disconnected: '#8a8f98', unreachable: '#ffb020' };
 
@@ -27,7 +28,7 @@ async function post(url) {
   const headers = { Origin: BASE };
   if (url !== '/api/stop') {
     const page = await (await request('/')).text();
-    headers['X-H2M-Token'] = /name="h2m-token"\s+content="([^"]+)"/.exec(page)?.[1] ?? '';
+    headers['X-Armed-Token'] = /name="armed-token"\s+content="([^"]+)"/.exec(page)?.[1] ?? '';
   }
   return request(url, { method: 'POST', headers });
 }
@@ -36,12 +37,12 @@ const act = (url) => post(url).then(async (r) => {
 }).catch((e) => new Notification({ title: 'Armed', body: String(e.message ?? e) }).show());
 
 function startChild() {
-  child = spawn(H2M_CMD, ['run', '--port', String(PORT), ...EXTRA_ARGS], { cwd: ROOT, stdio: 'inherit' });
-  child.on('error', (e) => { fatal = true; dialog.showErrorBox('Armed', `Could not start "${H2M_CMD}": ${e.message}\nSet H2M_CMD to the h2m executable.`); app.exit(1); });
+  child = spawn(ARMED_CMD, ['run', '--port', String(PORT), ...EXTRA_ARGS], { cwd: ROOT, stdio: 'inherit' });
+  child.on('error', (e) => { fatal = true; dialog.showErrorBox('Armed', `Could not start "${ARMED_CMD}": ${e.message}\nSet ARMED_CMD to the armed executable.`); app.exit(1); });
   child.on('exit', (code) => {
     child = undefined;
     if (quitting || fatal) return;
-    if (++crashes > 3) { fatal = true; dialog.showErrorBox('Armed', `The runtime keeps exiting (last code ${code}). Run "h2m run --port ${PORT}" in a terminal to see why.`); app.exit(1); return; }
+    if (++crashes > 3) { fatal = true; dialog.showErrorBox('Armed', `The runtime keeps exiting (last code ${code}). Run "armed run --port ${PORT}" in a terminal to see why.`); app.exit(1); return; }
     setTimeout(startChild, 2000);
   });
 }
@@ -68,7 +69,7 @@ function position() {
 
 async function loadCard() {
   const card = await request('/card').then((r) => r.ok, () => false);
-  win.loadURL(BASE + (card ? '/card' : '/web/card/index.html'));
+  win.loadURL(BASE + (card ? '/card' : '/web/card/index.html') + `?corner=${CORNER}${FILM ? '&film=1' : ''}`);
 }
 
 function createWindow() {

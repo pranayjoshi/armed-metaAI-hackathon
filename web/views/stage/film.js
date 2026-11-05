@@ -126,13 +126,13 @@ export class Film {
   /** The definition of "words spoken to the robot" is shown the first time the counters appear, then folds away. */
   showDefinition() {
     let seen = false;
-    try { seen = sessionStorage.getItem("h2m.film.def") === "1"; } catch { /* storage blocked: show it every time */ }
+    try { seen = sessionStorage.getItem("armed.film.def") === "1"; } catch { /* storage blocked: show it every time */ }
     if (seen || this.defShown) return;
     this.defShown = true;
     this.f.def.hidden = false;
     setTimeout(() => {
       this.f.def.hidden = true;
-      try { sessionStorage.setItem("h2m.film.def", "1"); } catch { /* ignore */ }
+      try { sessionStorage.setItem("armed.film.def", "1"); } catch { /* ignore */ }
     }, 12000);
   }
 

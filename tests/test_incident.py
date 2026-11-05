@@ -8,8 +8,8 @@ import json
 import numpy as np
 import pytest
 
-import h2m.incident as incident_mod
-from h2m.incident import (  # noqa: E402
+import armed.incident as incident_mod
+from armed.incident import (  # noqa: E402
     FALLBACK_SAY,
     SAM_MODEL,
     TOOLS,
@@ -233,7 +233,7 @@ class FakeResp:
 @pytest.fixture
 def sam_http(monkeypatch):
     monkeypatch.setenv("MODEL_API_KEY", "sk-secret-123")
-    monkeypatch.delenv("H2M_SAM_MODEL", raising=False)
+    monkeypatch.delenv("ARMED_SAM_MODEL", raising=False)
     calls = []
     state = {"resp": FakeResp(sam_reply("")), "exc": None}
 
@@ -281,7 +281,7 @@ def test_segment_picks_most_confident_and_rescales(sam_http):
 def test_segment_model_comes_from_config_or_env(sam_http, monkeypatch):
     assert MuseClient().sam_model == "sam-3.1"
     assert MuseClient({"sam_model": "sam-x"}).sam_model == "sam-x"
-    monkeypatch.setenv("H2M_SAM_MODEL", "sam-env")
+    monkeypatch.setenv("ARMED_SAM_MODEL", "sam-env")
     assert MuseClient().sam_model == "sam-env"
     assert MuseClient({"sam_model": "sam-x"}).sam_model == "sam-x"
 

@@ -1,6 +1,6 @@
 ---
 name: rules-engineer
-description: Implements rule memory and deterministic route selection (h2m/rules.py), object tags, avoid zones and contract fields route/applied_rules.
+description: Implements rule memory and deterministic route selection (armed/rules.py), object tags, avoid zones and contract fields route/applied_rules.
 model: sonnet
 effort: medium
 ---

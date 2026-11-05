@@ -17,10 +17,10 @@ So: **one card page, rendered in three places, and one console.** The card page 
 
 | Surface | What it is | Where it runs | Who sees it |
 |---|---|---|---|
-| **The Card** | A small always-on-top, non-focus-stealing window showing the current proposal and the muscle meter. Hidden when there is nothing to say. | A thin Electron shell loading `http://127.0.0.1:<port>/card` from the running `h2m` | The person at the desk |
+| **The Card** | A small always-on-top, non-focus-stealing window showing the current proposal and the muscle meter. Hidden when there is nothing to say. | A thin Electron shell loading `http://127.0.0.1:<port>/card` from the running `armed` | The person at the desk |
 | **The Bedside screen** | The same `/card` page in *far* mode: one dominant card, 3× type, speech first | A tablet or phone on the headboard, or a small display mounted on the arm | The person in bed, and whoever is in the room |
 | **The Console** | The existing operator UI: home, stage, flow, signals, learn, lab, replay | Browser on the Mac, usually a second screen | The operator |
-| **The hosted replay** | `h2m demo` with the card page included in the scripted scenario | Browser, anywhere, no key, no arm | Judges |
+| **The hosted replay** | `armed demo` with the card page included in the scripted scenario | Browser, anywhere, no key, no arm | Judges |
 | **The body** | Gestures, speech through a speaker next to the arm, the status light | The arm itself | Everyone in the room |
 
 The robot's body is a surface on purpose. "Waiting for Pranay" is said out loud to the person who asked, and the arm turns to look at who is speaking. Half of what the film shows is this surface.
@@ -36,7 +36,7 @@ A rounded dark panel, about 360 × 150 px, in the top-right of the screen by def
 ```
 ┌─────────────────────────────────────────────┐
 │ ▮ likely                        asked by —   │   state edge + confidence word + who asked
-│ [pictogram]  Show you the phone              │   label from h2m.intent, never model text
+│ [pictogram]  Show you the phone              │   label from armed.intent, never model text
 │              buzzed 2 s ago · phone on desk  │   evidence line, with the scan age
 │              · 11:02, you usually look       │
 │ ────────────────────────────── ◔ 0.4 s       │   muscle meter + reaction ring (accept_in_s)
@@ -61,7 +61,7 @@ Every string on it comes from the snapshot: `selection.cards[*].label`, `confide
 - **Disarmed.** Grey edge and the words *arm it from the console*. No cards.
 
 
-### 2.6 Added by the final cut (`DEMO_STORY.md`)
+### 2.6 Added for the film
 
 - **Model chips.** Whenever a model or an Armed component acts on screen, a small chip names it: the Muse hue for `muse-spark-1.3`, `muse-wonder-1.0`, `sam-3.1`, `muse-voice-transcribe-1.0`; the Armed accent for *Armed ranker*, *Armed stop controller*, *Armed gate*, *Armed measure*, *Armed checker*, *EMG decoder*. A chip appears only for something that ran; the snapshot carries `chips: [str]` per state so the page never guesses.
 - **The auto rung.** For a pre-approved routine the Card shows the proposal with a five-second ring draining and the words *brace to cancel*; the ring is the only countdown that leads to motion, and a brace at any point ends it. After the ring the card becomes the running strip with chain progress *1/2 · 2/2*.
@@ -103,16 +103,16 @@ The screen is a tablet or phone browser on the LAN, which is a problem the runti
 
 Unchanged in its rules (`web/README.md`). Three additions:
 
-- **Film mode** on the Stage view (`?film=1`): the two EMG traces burned in with a shared timecode, the counters (*selections · flinches · rules learned · words spoken to the robot*), the current card mirrored small, and the robot's sentence as a caption. This is what the camera records beside the arm; it is the proof layer in `DEMO_STORY.md` (the evidence table and the rules of the cut).
+- **Film mode** on the Stage view (`?film=1`): the two EMG traces burned in with a shared timecode, the counters (*selections · braces · rules learned · words spoken to the robot*), the current card mirrored small, and the robot's sentence as a caption. This is what the camera records beside the arm.
 - **A Cards panel** on the Learn view: the proposal history of the session with what was accepted, stepped past or refused, and Muse's upgraded ranking where it arrived, for the top-1 number.
 - **A Rules page** already exists in Learn; each rule gets its incident clip and its verifier result, and a delete.
-- **The Mind view** (built Nov 4): senses, what it knows, Muse Spark thinking, what it says and suggests, the gate, the one confirmation and the arm, with the brace-to-rule lane below; a node glows only while its model call is in flight, a pulse runs only when a real event crossed the edge. The mock EMG dock sits in the top bar with the synthetic source. Details: `LIVE_RUNTIME.md` §6–7.
+- **The Mind view** (built Nov 4): senses, what it knows, Muse Spark thinking, what it says and suggests, the gate, the one confirmation and the arm, with the brace-to-rule lane below; a node glows only while its model call is in flight, a pulse runs only when a real event crossed the edge. Details: `LIVE_RUNTIME.md` §6.
 
 ---
 
 ## 5. The hosted replay
 
-`h2m demo` already runs the scripted scenario in a browser with the `SIMULATION` label on every payload. Add the card page to it: cards appear in the scenario as they would live, the scripted twitches accept them, the brace stops the virtual arm, and the rule card shows the verifier passing. A judge with no hardware sees the whole interaction in two minutes. The replay server has no actuation routes, so this is display only.
+`armed demo` already runs the scripted scenario in a browser with the `SIMULATION` label on every payload. Add the card page to it: cards appear in the scenario as they would live, the scripted twitches accept them, the brace stops the virtual arm, and the rule card shows the verifier passing. A judge with no hardware sees the whole interaction in two minutes. The replay server has no actuation routes, so this is display only.
 
 ---
 
@@ -120,14 +120,14 @@ Unchanged in its rules (`web/README.md`). Three additions:
 
 | Need | Where | Note |
 |---|---|---|
-| `GET /card` serving the card page, and `GET /card?mode=far` | `h2m/server.py` | Same token meta tag as `/` |
-| `evidence: [str]` per card: the reasons the ranker used, in plain words | `h2m/intent.py`, snapshot | From the deterministic ranker's features and, when Muse upgraded the order, its short reason; never free model text on a motion card |
-| `asked_by: str \| null` per card | `h2m/intent.py`, diarization | Only when the request came from another speaker |
+| `GET /card` serving the card page, and `GET /card?mode=far` | `armed/server.py` | Same token meta tag as `/` |
+| `evidence: [str]` per card: the reasons the ranker used, in plain words | `armed/intent.py`, snapshot | From the deterministic ranker's features and, when Muse upgraded the order, its short reason; never free model text on a motion card |
+| `asked_by: str \| null` per card | `armed/intent.py`, diarization | Only when the request came from another speaker |
 | `pictogram` per card id (not in the cut; optional) | a small cache in `data/pictograms/` | Muse Image, generated once per card id, served as a file; fallback glyph by `kind` |
 | stop latency in the snapshot when measured | `arm.snapshot()` | From `arm.stopped` `latency_ref` and the EMG onset |
-| investigation progress events | `h2m/incident.py` | `incident.tool` events with the tool name and its one-line result, for the Card and the film overlay |
-| rule verifier result and rehearsal state | `h2m/learning.py` | For the rule card's two ticks |
-| LAN decision for far mode | `h2m/server.py`, review | §3 |
+| investigation progress events | `armed/incident.py` | `incident.tool` events with the tool name and its one-line result, for the Card and the film overlay |
+| rule verifier result and rehearsal state | `armed/learning.py` | For the rule card's two ticks |
+| LAN decision for far mode | `armed/server.py`, review | §3 |
 
 ---
 
@@ -135,12 +135,12 @@ Unchanged in its rules (`web/README.md`). Three additions:
 
 `desktop/` with one `main.js` and a `package.json`, about a hundred lines:
 
-- Starts `h2m run` if it is not already listening, or attaches to it.
+- Starts `armed run` if it is not already listening, or attaches to it.
 - Opens one `BrowserWindow`: `frame: false`, `transparent: true`, `alwaysOnTop: true` at the floating level, `focusable: false`, `skipTaskbar: true`, `resizable: false`, loading `http://127.0.0.1:<port>/card`. Same origin as the console, so the local API rules hold with no change.
 - `setIgnoreMouseEvents(true, {forward: true})` by default; the page tells the shell to take the mouse only while the pointer is over STOP or a card's buttons.
 - Hides and shows the window on the page's say-so (`window.armed.show()` / `.hide()`), so the page owns the states and the shell owns the window.
 - A menu-bar (tray) icon with a status dot in the arm's state colour and four items: Arm / Disarm, Stop, Open console, Quit. Quit stops the arm first.
-- Launch: `h2m desktop` runs the shell; `h2m run` alone still works with the console only.
+- Launch: `armed desktop` runs the shell; `armed run` alone still works with the console only.
 
 Electron is the pragmatic choice because `focusable: false` plus `alwaysOnTop` plus click-through is three lines and works today; Tauri or a native `NSPanel` would be lighter and can replace it after the hackathon without touching the page. If the shell is not ready for a take, the fallback is the far-mode page full-screen on a second display beside the arm, which the film can shoot the same way.
 
@@ -152,7 +152,7 @@ Electron is the pragmatic choice because `focusable: false` plus `alwaysOnTop` p
 2. **The page never decides.** It renders cards, acks their paint, forwards a click to the same endpoints a twitch uses, and that is all. A card can only act through the server's gate.
 3. **It never takes the keyboard.** The Card is non-focusable, always. Typing continues.
 4. **Stop is always one click away** on every surface, never click-through, never covered.
-5. **Synthetic and virtual are labelled** wherever a signal drives a visual.
+5. **Replay and the virtual arm are labelled** wherever a signal drives a visual.
 6. **One colour, one meaning:** `--grip` flexor, `--open` extensor, `--brace` stop, `--ok` done, `--muse` model reasoning. The Card uses the console's tokens unchanged.
 7. **Readable from where the person is**: at arm's length on the desk, at a metre in bed, in a 1080p video for the judges.
 8. **Quiet by default.** Hidden when there is nothing to say; no idle animation; refusal is quiet; red means stopped and nothing else.
@@ -165,10 +165,10 @@ Electron is the pragmatic choice because `focusable: false` plus `alwaysOnTop` p
 |---|---|---|
 | Card page (`/card`, states in §2, meter, ack, sounds) | `ui-builder` | 1 day |
 | Runtime fields in §6 | `runtime-builder`, `muse-integrator` | half a day |
-| Electron shell and `h2m desktop` | `runtime-builder` or the user | half a day |
+| Electron shell and `armed desktop` | `runtime-builder` or the user | half a day |
 | Far mode CSS and the LAN decision | `ui-builder`, review | half a day |
 | Film mode on Stage | `ui-builder` | half a day |
-| Card page inside `h2m demo` | `ui-builder` | half a day |
+| Card page inside `armed demo` | `ui-builder` | half a day |
 | Pictogram cache | `muse-integrator` | half a day, cut first |
 
 If only one of these ships, it is the Card page in far mode on a second display: it is enough for every beat in the film.
@@ -178,7 +178,7 @@ If only one of these ships, it is the Card page in far mode on a second display:
 
 ## 10. What the final cut and the Meta-only runtime add (Nov 3)
 
-`DEMO_STORY.md` is now the specification the interface has to meet, and `COMPLIANCE.md` changed where its data comes from. In order of what the film needs first:
+In order of what the film needs first:
 
 ### 10.1 The Card
 - **Reasons with their age.** Every evidence line that came from a scan carries the scan age (*phone on desk · 4 s*). Head direction and glance never appear; they are gone from the runtime's display.

@@ -1,4 +1,4 @@
-"""Meta-measured grasp parameters (h2m/grasp.py) and the plan_pick_place hook.
+"""Meta-measured grasp parameters (armed/grasp.py) and the plan_pick_place hook.
 
 The model measures; these clamps decide. Every bound is tested on its own so that
 loosening it fails a test: the opening range, the roll envelope, the profile cap that can
@@ -12,8 +12,8 @@ import math
 import numpy as np
 import pytest
 
-from h2m.core import ROOT, load_config
-from h2m.grasp import (
+from armed.core import ROOT, load_config
+from armed.grasp import (
     GraspConfig,
     GraspConfigError,
     JawCalibration,
@@ -24,9 +24,9 @@ from h2m.grasp import (
     width_across_jaws,
     width_from_mask,
 )
-from h2m.robot import ArmState, build_arm
-from h2m.robot.backend import GRIPPER
-from h2m.robot.skills import Pose, PoseError, Slot, load_poses, plan_pick_place
+from armed.robot import ArmState, build_arm
+from armed.robot.backend import GRIPPER
+from armed.robot.skills import Pose, PoseError, Slot, load_poses, plan_pick_place
 
 LIB = load_poses(ROOT / "tests" / "fixtures" / "poses.yaml")
 SLOT = LIB.slots["slot_1"]

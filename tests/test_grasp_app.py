@@ -3,7 +3,7 @@
 Covers: off by default and then a pick is the one-stage taught plan; on, a two-stage pick
 (approach, one SAM call, rebuilt grasp) with the taught plan on every failure; stage 2
 dropped by a stop, a re-arm, or a changed gate decision; the cached profile
-classification; mask decoding; the `h2m arm jaw` recording. Virtual arm, fake Muse."""
+classification; mask decoding; the `armed arm jaw` recording. Virtual arm, fake Muse."""
 
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ import cv2
 import numpy as np
 import pytest
 
-from h2m.app import H2M
-from h2m.compiler.llm import parse_profile
-from h2m.core import load_config, now
-from h2m.incident import MuseClient
-from h2m.robot import ArmState
-from h2m.rules import RuleStore
+from armed.app import Armed
+from armed.compiler.llm import parse_profile
+from armed.core import load_config, now
+from armed.incident import MuseClient
+from armed.robot import ArmState
+from armed.rules import RuleStore
 
 BOX = (100.0, 100.0, 130.0, 140.0)  # 30 x 40 px; the homography below is 1 px = 1 mm
 HOMOGRAPHY = np.diag([0.001, 0.001, 1.0])
@@ -82,7 +82,7 @@ class FakeLLM:
 
 def make(monkeypatch, tmp_path, sam=True, calibrated=True, **grasp):
     monkeypatch.delenv("MODEL_API_KEY", raising=False)
-    monkeypatch.setattr("h2m.recorder.SESSIONS", tmp_path)
+    monkeypatch.setattr("armed.recorder.SESSIONS", tmp_path)
     cfg = load_config()
     for part in ("emg", "vision", "speech"):
         cfg[part] = {**cfg[part], "source": "off"}
@@ -92,7 +92,7 @@ def make(monkeypatch, tmp_path, sam=True, calibrated=True, **grasp):
         "jaw_calibration": {"calibrated": calibrated, "points": CAL},
         **grasp,
     }
-    h = H2M(cfg)
+    h = Armed(cfg)
     h.rules = RuleStore("t", root=tmp_path / "rules")
     h.arm.backend.connect()
     h.arm._measured = h.arm.backend.read_joints()
@@ -243,10 +243,10 @@ def test_a_changed_gate_decision_drops_stage_two(app, monkeypatch):
 
 
 def test_a_bad_grasp_section_fails_closed(monkeypatch, tmp_path):
-    monkeypatch.setattr("h2m.recorder.SESSIONS", tmp_path)
+    monkeypatch.setattr("armed.recorder.SESSIONS", tmp_path)
     cfg = load_config()
     cfg["grasp"] = {"sam_width": True, "margin_mm": -1}
-    h = H2M(cfg)
+    h = Armed(cfg)
     assert h.grasp_cfg.sam_width is False and h.grasp_error
 
 
@@ -287,7 +287,7 @@ def test_segment_mask_returns_box_and_polygon(monkeypatch):
         return Resp()
 
     monkeypatch.setenv("MODEL_API_KEY", "k")
-    monkeypatch.setattr("h2m.incident.httpx.post", post)
+    monkeypatch.setattr("armed.incident.httpx.post", post)
     client = MuseClient()
     img = np.zeros((40, 60, 3), np.uint8)
     box, poly = client.segment_mask("sam-3.1", img, "cup", timeout=1.5)
@@ -299,7 +299,7 @@ def test_segment_mask_returns_box_and_polygon(monkeypatch):
 # ── profile reply parsing ─────────────────────────────────────────────────────
 
 
-# ── h2m arm jaw ───────────────────────────────────────────────────────────────
+# ── armed arm jaw ───────────────────────────────────────────────────────────────
 CONFIG = """grasp:
   jaw_calibration:
     calibrated: false

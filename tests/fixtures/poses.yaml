@@ -3,8 +3,8 @@
 # PLACEHOLDERS: the virtual arm can run them, the real arm refuses any pose
 # with `taught: false`. Teach each by hand-guiding the follower (torque off):
 #
-#   h2m arm teach home
-#   h2m arm teach slot_1.above
+#   armed arm teach home
+#   armed arm teach slot_1.above
 #
 # Slots are marked table positions. `table_xy` uses the same coordinates as
 # vision objects (normalized image coords, or table coords after calibration).
@@ -35,7 +35,7 @@ poses:
 
 # Carry routes: taught via poses visited between the lift and the tray, in order.
 # Names match configs/routes.yaml; a route listed there but not here is never used.
-# `direct` is the plain plan (no via poses). Teach via poses with `h2m arm teach via_left`.
+# `direct` is the plain plan (no via poses). Teach via poses with `armed arm teach via_left`.
   # Skill poses (configs/skills.yaml): placeholders, taught at teach time.
   wave_up:
     taught: false
@@ -82,6 +82,31 @@ poses:
   jar_hold:
     taught: false
     joints: {shoulder_pan: 60.0, shoulder_lift: -65.0, elbow_flex: 55.0, wrist_flex: 35.0, wrist_roll: 0.0, gripper: 30.0}
+
+  drink_above:
+    taught: false
+    joints: {shoulder_pan: 0.0, shoulder_lift: -60.0, elbow_flex: 40.0, wrist_flex: 60.0, wrist_roll: 0.0, gripper: 5.0}
+  drink_up:
+    taught: false
+    joints: {shoulder_pan: 0.0, shoulder_lift: -60.0, elbow_flex: 40.0, wrist_flex: 60.0, wrist_roll: 0.0, gripper: 5.0}
+  drink_tuck:
+    taught: false
+    joints: {shoulder_pan: 0.0, shoulder_lift: -60.0, elbow_flex: 40.0, wrist_flex: 60.0, wrist_roll: 0.0, gripper: 5.0}
+  drink_close:
+    taught: false
+    joints: {shoulder_pan: 0.0, shoulder_lift: -60.0, elbow_flex: 40.0, wrist_flex: 60.0, wrist_roll: 0.0, gripper: 5.0}
+  x_take_above:
+    taught: false
+    joints: {shoulder_pan: 0.0, shoulder_lift: -60.0, elbow_flex: 40.0, wrist_flex: 60.0, wrist_roll: 0.0, gripper: 5.0}
+  x_take_release:
+    taught: false
+    joints: {shoulder_pan: 0.0, shoulder_lift: -60.0, elbow_flex: 40.0, wrist_flex: 60.0, wrist_roll: 0.0, gripper: 5.0}
+  give_above:
+    taught: false
+    joints: {shoulder_pan: 0.0, shoulder_lift: -60.0, elbow_flex: 40.0, wrist_flex: 60.0, wrist_roll: 0.0, gripper: 5.0}
+  give_release:
+    taught: false
+    joints: {shoulder_pan: 0.0, shoulder_lift: -60.0, elbow_flex: 40.0, wrist_flex: 60.0, wrist_roll: 0.0, gripper: 5.0}
 
 routes:
   direct: []

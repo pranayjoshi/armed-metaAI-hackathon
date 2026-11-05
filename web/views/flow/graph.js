@@ -1,5 +1,5 @@
 // Topology of the Reflex pipeline: nodes, edges, and the plain-words role of each node.
-// Every node and edge here corresponds to code in h2m/ (see the `src` field); nothing is decorative.
+// Every node and edge here corresponds to code in armed/ (see the `src` field); nothing is decorative.
 // Grid: col 0..5 left to right, row 0 at the bottom (inputs) .. row 7 at the top (the arm).
 
 export const ROWS = 8;

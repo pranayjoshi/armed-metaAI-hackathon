@@ -1,11 +1,11 @@
-# Bed profile: `h2m run --profile bed` (and `h2m --profile bed arm teach <pose>`) merges this
-# onto configs/h2m.yaml. The arm is clamped to the headboard: its own poses file, the bedside
+# Bed profile: `armed run --profile bed` (and `armed --profile bed arm teach <pose>`) merges this
+# onto configs/armed.yaml. The arm is clamped to the headboard: its own poses file, the bedside
 # objects in slot order (cup, pill cup, marker), and the bed routines.
 arm:
   poses_file: configs/poses_bed.yaml
   # On the headboard the elbow lifts the bottle against gravity: at LeRobot's soft default (16)
   # it stalled 20 deg behind at cup_slot.above and the tracking guard faulted (Nov 4). Same
-  # fix as shoulder_lift (configs/h2m.yaml); mappings merge, so shoulder_lift stays 28.
+  # fix as shoulder_lift (configs/armed.yaml); mappings merge, so shoulder_lift stays 28.
   p_gains:
     elbow_flex: 28
   # On the bed the arm hands the pill cup, then the water bottle, to the wearer's hand and
@@ -32,10 +32,18 @@ safety:
   # operator_release_confirm_s (the arm panel's "Gripper empty"); anything held drops on the bed.
   operator_release: true
   operator_release_poses: [home]
+vision:
+  # The desk's table calibration (configs/armed.yaml) is for the desk camera view only. On the
+  # bed an object SAM sees stays on its taught slot, as before.
+  table_homography: null
+  assume_slots: true
 proactive:
   profile: bed
 rules:
   routes_file: configs/routes_bed.yaml   # the bed's own handover spot and routes (measured separately from the desk)
+  # The bed's own rule memory (data/rules/bed.json): the desk's rules name desk zones (the
+  # laptop) and would hold every hand over of a liquid here, where those zones don't exist.
+  user: bed
 objects:
   - id: cup              # the id stays: the routines and the liquid tag key on it
     name: water bottle

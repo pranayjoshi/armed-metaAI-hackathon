@@ -1,6 +1,6 @@
 # Bed routes: a copy of routes.yaml for the bed profile (configs/bed.yaml). The handover spot,
 # polyline and camera_sees_past_arm here are measured on the bed; the rest is unused on the bed.
-# Object tags and taught routes used by h2m/rules.py and h2m/routing.py.
+# Object tags and taught routes used by armed/rules.py and armed/routing.py.
 # PLACEHOLDER: every polyline and zone below is a stand-in and MUST be
 # re-measured at teach time (table coordinates, same frame as poses.yaml slots).
 # Set `measured: true` on a polyline only once it has been measured. The real arm
@@ -10,7 +10,7 @@
 tags:            # object id -> tags; rules generalize through tags
   cup: [liquid, fragile]
   block: []
-  ball: [rigid]    # the phone (h2m.yaml object id `ball`)
+  ball: [rigid]    # the phone (armed.yaml object id `ball`)
   bottle: [liquid]
   tea: [liquid]    # a rule learned on the cup applies to the tea through `liquid`
 

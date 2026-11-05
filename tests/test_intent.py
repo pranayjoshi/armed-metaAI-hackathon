@@ -8,10 +8,10 @@ import time
 
 import pytest
 
-from h2m import intent as intent_mod
-from h2m.contract import StepContract, Verb
-from h2m.head import face_centre_x, face_third, third_of_x
-from h2m.intent import (
+from armed import intent as intent_mod
+from armed.contract import StepContract, Verb
+from armed.head import face_centre_x, face_third, third_of_x
+from armed.intent import (
     DEFAULT_MODEL,
     IntentRanker,
     SparkClient,
@@ -259,7 +259,7 @@ def test_candidates_carry_contract_ready_dicts():
     client = Fake(choose(("o1", "maybe")))
     c = rank(client)[0]
     assert c.contract["verb"] == "pick_place" and c.contract["object_id"] == "cup"
-    assert c.contract["source"] == "llm" and c.label == "Bring paper cup"
+    assert c.contract["source"] == "llm" and c.label == "Put paper cup in the tray"
     assert c.tool_call == ("pick_place", {"object_id": "cup"})
     sc = c.to_contract()
     assert isinstance(sc, StepContract) and sc.verb is Verb.PICK_PLACE
@@ -400,7 +400,7 @@ class FakeResp:
 @pytest.fixture
 def http(monkeypatch):
     monkeypatch.setenv("MODEL_API_KEY", "sk-secret-123")
-    monkeypatch.delenv("H2M_SPARK_MODEL", raising=False)
+    monkeypatch.delenv("ARMED_SPARK_MODEL", raising=False)
     calls: list[dict] = []
     state = {"resp": FakeResp(choose(("o2", "maybe"))), "exc": None}
 
@@ -432,7 +432,7 @@ def test_spark_model_from_config_then_env(http, monkeypatch):
     calls, _ = http
     rank(SparkClient({"model": "cfg-model"}))
     assert calls[-1]["json"]["model"] == "cfg-model"
-    monkeypatch.setenv("H2M_SPARK_MODEL", "env-model")
+    monkeypatch.setenv("ARMED_SPARK_MODEL", "env-model")
     rank(SparkClient())
     assert calls[-1]["json"]["model"] == "env-model"
     rank(SparkClient({"reasoning_effort": None}))

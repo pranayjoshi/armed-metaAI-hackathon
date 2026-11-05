@@ -8,7 +8,7 @@
 #   - {pose: <name>, gripper: open|soft|keep, dwell: <s>}   move the arm (gripper optional)
 #   - {gripper: open|soft, dwell: <s>}                       gripper only
 # `{slot}` in a pose name is the slot of the requested object (requires_object: true).
-# `{handover}` is the pose set for that object (arm.handover_sets in configs/h2m.yaml):
+# `{handover}` is the pose set for that object (arm.handover_sets in configs/armed.yaml):
 # `{handover}_above` / `{handover}_release`. Both must be taught; the gate checks the
 # object's own hand spot (routes handover.sets) and the hand watchdog runs while lowering.
 # A {handover} skill needs requires_object and near_person.
@@ -86,17 +86,24 @@ skills:
       - {gripper: open, dwell: 0.3}
       - {pose: tray_above}
   hold_jar:
-    # Open at the hand spot, wait for the jar to be held out, close softly, hold while the
-    # person twists the lid off, then let go and retreat.
+    # Open at the hand spot, wait for the jar to be held out, close softly and hold it while
+    # the person twists the lid off. It stays closed: the card "Let go?" (let_go) opens it.
     needs_empty: true
     near_person: true
     speed: 0.4
     say: "I've got it."
+    holds: jar
     steps:
       - {pose: jar_hold, gripper: open, dwell: 3.0}
-      - {gripper: soft, dwell: 12.0}
-      - {gripper: open, dwell: 0.3}
-      - {pose: home, gripper: keep}
+      - {gripper: soft, dwell: 0.5}
+  let_go:
+    # Open where it is (the jar at the hand spot) and go home.
+    needs_holding: true
+    near_person: true
+    speed: 0.4
+    steps:
+      - {gripper: open, dwell: 0.5}
+      - {pose: home}
   sip:
     # Bring what is held (a cup with a straw) toward the mouth from below, hold, retreat.
     needs_holding: true
@@ -133,3 +140,104 @@ skills:
       - {pose: "{handover}_release", dwell: 1.0}
       - {gripper: open, dwell: 0.5}
       - {pose: "{handover}_above"}
+  bring_drink:
+    # Pick the drink (the protein shake, straw in it) and bring it up to the taught spot by the
+    # mouth, hold it while they sip, then put it back on its slot. Muse chooses it when it is
+    # water time (or they ask for water) and this is the drink on the desk.
+    requires_object: true
+    needs_empty: true
+    carries: true
+    near_person: true
+    speed: 0.3
+    # Its path is slot 4's `direct` route (out over the laptop). A rule that removes direct
+    # for what it carries (liquids off the laptop) runs the close twin on `via_high` instead.
+    via_high: bring_drink_close
+    steps:
+      - {pose: "{slot}.above", gripper: open}
+      - {pose: "{slot}.grasp", gripper: open, dwell: 0.4}
+      - {gripper: soft, dwell: 0.4}
+      - {pose: "{slot}.above"}
+      - {pose: drink_above}
+      - {pose: drink_up, dwell: 8.0}
+      - {pose: drink_above}
+      - {pose: "{slot}.above"}
+      - {pose: "{slot}.grasp", dwell: 0.4}
+      - {gripper: open, dwell: 0.3}
+      - {pose: "{slot}.above"}
+  bring_drink_close:
+    # The same drink on slot 4's `via_high` route: folded in close to the robot, turned while
+    # folded, up to the mouth beside the laptop. Chosen by the rules, never offered alone.
+    requires_object: true
+    needs_empty: true
+    carries: true
+    near_person: true
+    speed: 0.3
+    steps:
+      - {pose: "{slot}.above", gripper: open}
+      - {pose: "{slot}.grasp", gripper: open, dwell: 0.4}
+      - {gripper: soft, dwell: 0.4}
+      - {pose: "{slot}.above"}
+      - {pose: drink_tuck}
+      - {pose: drink_close}
+      - {pose: drink_up, dwell: 8.0}
+      - {pose: drink_close}
+      - {pose: drink_tuck}
+      - {pose: "{slot}.above"}
+      - {pose: "{slot}.grasp", dwell: 0.4}
+      - {gripper: open, dwell: 0.3}
+      - {pose: "{slot}.above"}
+  accept_item:
+    # Someone offers something ("have some chips"): open to 70% at the visitor's spot, wait
+    # three seconds for it to be put in, close softly and lift. It stays held: two cards
+    # follow (stow_held into the tray, or hold_out_held for you).
+    needs_empty: true
+    near_person: true
+    speed: 0.4
+    say: "Thank you."
+    holds: chips
+    steps:
+      - {pose: x_take_above, gripper: 70}
+      - {pose: x_take_release, gripper: 70, dwell: 3.0}
+      - {gripper: soft, dwell: 0.5}
+      - {pose: x_take_above}
+  stow_held:
+    # What was taken in goes in the tray.
+    needs_holding: true
+    carries: true
+    speed: 0.4
+    steps:
+      - {pose: tray_above}
+      - {pose: tray_release, dwell: 0.4}
+      - {gripper: open, dwell: 0.3}
+      - {pose: tray_above}
+  hold_out_held:
+    # What was taken in is held up by the person (the hand-off spot) and stays there: the
+    # tray move (stow_held) then waits as the question until they say "done".
+    needs_holding: true
+    carries: true
+    near_person: true
+    speed: 0.3
+    say: "Here you go."
+    holds: chips
+    steps:
+      - {pose: give_above}
+  hand_keys:
+    # The person gets up to leave: pick the keys from their slot and hold them out at the
+    # taught spot by their hand, open, and go back.
+    requires_object: true
+    needs_empty: true
+    carries: true
+    near_person: true
+    speed: 0.4
+    say: "Keys. I'd come along, but I'm clamped to the desk."
+    steps:
+      - {pose: "{slot}.above", gripper: open}
+      - {pose: "{slot}.grasp", gripper: open, dwell: 0.4}
+      - {gripper: soft, dwell: 0.4}
+      - {pose: "{slot}.above"}
+      - {pose: give_above}
+      - {pose: give_release, dwell: 2.0}
+      - {gripper: open, dwell: 0.5}
+      - {pose: give_above}
+      - {pose: home}   # the door clicks; the arm settles home
+      - {pose: give_above}

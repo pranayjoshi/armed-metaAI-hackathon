@@ -49,9 +49,9 @@ class Replay {
               <b>Nothing to replay yet</b>
               <p>There is no simulation running and no recording in this folder.</p>
               <div class="cmds">
-                <div><span class="kicker">Run the scripted story</span><code>h2m demo</code></div>
+                <div><span class="kicker">Run the scripted story</span><code>armed demo</code></div>
                 <div><span class="kicker">Make the bundled sample clip</span><code>python scripts/make_demo_sample.py</code></div>
-                <div><span class="kicker">Replay your own folder</span><code>h2m replay data/incidents</code></div>
+                <div><span class="kicker">Replay your own folder</span><code>armed replay data/incidents</code></div>
               </div>
             </div>
           </section>

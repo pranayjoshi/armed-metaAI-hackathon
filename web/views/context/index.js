@@ -18,6 +18,7 @@ const html = `
       <div class="cx-stage" id="cx-stage">
         <div class="cx-fit" id="cx-fit"><img class="cx-img" id="cx-img" alt="Overhead camera frame" draggable="false" /></div>
         <div class="cx-nofr" id="cx-nofr" hidden></div>
+        <figure class="cx-pip" id="cx-pip" hidden><img id="cx-laptop" alt="Laptop camera frame" draggable="false" /><figcaption>Laptop camera · what Muse sees of you</figcaption></figure>
       </div>
       <div class="cx-foot"><span class="cx-cap" id="cx-cap"></span><span id="cx-fcalls" class="cx-fcalls"></span></div>
     </section>
@@ -123,7 +124,9 @@ export default {
   // The raw frame, refreshed ~1.4 Hz until a scan freezes it. A scan's own frame_url wins.
   pollFrame() {
     const s = this.s;
-    if (s.frozen || !s.active) return;
+    if (!s.active) return;
+    this.pollLaptop();
+    if (s.frozen) return;
     const probe = new Image();
     probe.onload = () => {
       if (s.frozen) return;
@@ -135,6 +138,22 @@ export default {
       if (!s.hasFrame) this.noFrame();
     };
     probe.src = `/api/camera/scene.jpg?t=${Date.now()}`;
+  },
+
+  // The laptop camera (vision.laptop_camera), inset over the overhead frame; hidden when it is off.
+  pollLaptop() {
+    const s = this.s;
+    if (s.ctx.mode === "replay" || s.state?.vision?.laptop_live !== true) {
+      s.$("#cx-pip").hidden = true;
+      return;
+    }
+    const probe = new Image();
+    probe.onload = () => {
+      s.$("#cx-laptop").src = probe.src;
+      s.$("#cx-pip").hidden = false;
+    };
+    probe.onerror = () => { s.$("#cx-pip").hidden = true; };
+    probe.src = `/api/camera/laptop.jpg?t=${Date.now()}`;
   },
 
   noFrame() {

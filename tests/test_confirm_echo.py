@@ -9,16 +9,16 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import h2m.app as app_mod
-from h2m.compiler.llm import ToolReply
-from h2m.core import now
-from h2m.robot import ArmState
-from h2m.sensors.speech import SpeechService
-from h2m.speech_out import is_echo_of
+import armed.app as app_mod
+from armed.compiler.llm import ToolReply
+from armed.core import now
+from armed.robot import ArmState
+from armed.sensors.speech import SpeechService
+from armed.speech_out import is_echo_of
 from tests import test_app_embodied as base
 from tests.test_app_embodied import FakeLLM, prove_empty, started
 
-h2m = base.h2m  # the shared app fixture
+armed = base.armed  # the shared app fixture
 
 SAID = "Okay, squeeze or say yes to confirm."
 LATE = 5.0  # seconds: well past the reaction-time gate
@@ -38,39 +38,39 @@ def heard(h, text, *, echo=False, asr_ms=250, audio_s=0.4):
 
 
 # ── H1: echo ─────────────────────────────────────────────────────────────────
-def test_robot_voice_heard_back_never_confirms(h2m):
+def test_robot_voice_heard_back_never_confirms(armed):
     """Review repro: the TTS line comes back through the mic."""
-    p = ask_cup(h2m, said=SAID)
-    assert h2m.spoken == [SAID]
+    p = ask_cup(armed, said=SAID)
+    assert armed.spoken == [SAID]
     p.announced_at = now() - LATE  # even past the reaction gate
-    heard(h2m, SAID, audio_s=1.5)  # the mic tagged nothing (e.g. heard after the tail)
-    assert not started(h2m) and h2m.pending is p
-    assert [e for e in h2m.log.recent(50, {"speech.echo_dropped"})]
-    heard(h2m, "say yes to confirm")  # a run of the robot's words
-    assert not started(h2m)
+    heard(armed, SAID, audio_s=1.5)  # the mic tagged nothing (e.g. heard after the tail)
+    assert not started(armed) and armed.pending is p
+    assert [e for e in armed.log.recent(50, {"speech.echo_dropped"})]
+    heard(armed, "say yes to confirm")  # a run of the robot's words
+    assert not started(armed)
 
 
-def test_anything_heard_while_the_robot_talks_can_only_stop(h2m):
-    p = ask_cup(h2m, said=SAID)
+def test_anything_heard_while_the_robot_talks_can_only_stop(armed):
+    p = ask_cup(armed, said=SAID)
     p.announced_at = now() - LATE
-    heard(h2m, "yes", echo=True)
-    heard(h2m, "pick up the block", echo=True)
-    assert not started(h2m) and h2m.pending is p
-    heard(h2m, "stop", echo=True)  # a spoken stop over the robot's voice still freezes
-    assert h2m.arm.state is ArmState.STOPPED and h2m.pending is None
+    heard(armed, "yes", echo=True)
+    heard(armed, "pick up the block", echo=True)
+    assert not started(armed) and armed.pending is p
+    heard(armed, "stop", echo=True)  # a spoken stop over the robot's voice still freezes
+    assert armed.arm.state is ArmState.STOPPED and armed.pending is None
 
 
-def test_cancel_over_the_robot_voice_still_cancels(h2m):
-    ask_cup(h2m, said=SAID)
-    heard(h2m, "never mind", echo=True)
-    assert h2m.pending is None
+def test_cancel_over_the_robot_voice_still_cancels(armed):
+    ask_cup(armed, said=SAID)
+    heard(armed, "never mind", echo=True)
+    assert armed.pending is None
 
 
-def test_a_real_yes_after_the_robot_spoke_confirms(h2m):
-    p = ask_cup(h2m, said=SAID)
+def test_a_real_yes_after_the_robot_spoke_confirms(armed):
+    p = ask_cup(armed, said=SAID)
     p.announced_at = now() - LATE
-    heard(h2m, "yes")  # short: not an echo by text, not in the echo window
-    assert started(h2m) and started(h2m)[-1]["confirmed_by"] == "voice"
+    heard(armed, "yes")  # short: not an echo by text, not in the echo window
+    assert started(armed) and started(armed)[-1]["confirmed_by"] == "voice"
 
 
 def test_echo_text_match_needs_a_real_run_of_words():
@@ -80,32 +80,32 @@ def test_echo_text_match_needs_a_real_run_of_words():
 
 
 # ── H1: reaction-time gate on voice and typed confirms ───────────────────────
-def test_voice_confirm_that_began_before_the_question_is_rejected(h2m):
+def test_voice_confirm_that_began_before_the_question_is_rejected(armed):
     """Review repro: "okay" whose audio began before the request existed."""
-    p = ask_cup(h2m)
-    heard(h2m, "okay", asr_ms=300, audio_s=1.7)
-    assert not started(h2m) and h2m.pending is p
-    assert [e for e in h2m.log.recent(50, {"speech.confirm_rejected"})]
+    p = ask_cup(armed)
+    heard(armed, "okay", asr_ms=300, audio_s=1.7)
+    assert not started(armed) and armed.pending is p
+    assert [e for e in armed.log.recent(50, {"speech.confirm_rejected"})]
     p.announced_at = now() - LATE
-    heard(h2m, "okay", asr_ms=300, audio_s=1.7)
-    assert started(h2m)[-1]["confirmed_by"] == "voice"
+    heard(armed, "okay", asr_ms=300, audio_s=1.7)
+    assert started(armed)[-1]["confirmed_by"] == "voice"
 
 
-def test_typed_confirm_passes_the_same_gate(h2m):
-    p = ask_cup(h2m)
-    h2m.on_utterance("yes", source="typed")
-    assert not started(h2m) and h2m.pending is p
+def test_typed_confirm_passes_the_same_gate(armed):
+    p = ask_cup(armed)
+    armed.on_utterance("yes", source="typed")
+    assert not started(armed) and armed.pending is p
     p.announced_at = now() - app_mod.MIN_CONFIRM_REACTION_S - 0.05
-    h2m.on_utterance("yes", source="typed")
-    assert started(h2m)[-1]["confirmed_by"] == "typed"
+    armed.on_utterance("yes", source="typed")
+    assert started(armed)[-1]["confirmed_by"] == "typed"
 
 
-def test_spoken_confirm_pins_the_request_it_answered(h2m, monkeypatch):
-    p = ask_cup(h2m)
+def test_spoken_confirm_pins_the_request_it_answered(armed, monkeypatch):
+    p = ask_cup(armed)
     p.announced_at = now() - LATE
     seen = []
-    monkeypatch.setattr(h2m, "confirm", lambda **kw: seen.append(kw) or (False, ""))
-    heard(h2m, "yes")
+    monkeypatch.setattr(armed, "confirm", lambda **kw: seen.append(kw) or (False, ""))
+    heard(armed, "yes")
     assert seen and seen[0]["expected"] is p
 
 
@@ -179,7 +179,7 @@ def speak_over_robot(on_utterance, person_word, robot_until, person_from, person
     """Re-review repro, through the real VAD + echo tagging + utterance
     callback on the shipped speech config. The fake ASR hears ``person_word`` in any
     utterance holding the person's audio (after the robot's own words)."""
-    from h2m.core import load_config
+    from armed.core import load_config
 
     speaking = {"now": False}
     svc = SpeechService(
@@ -221,29 +221,29 @@ STOP_TIMINGS = {  # robot speaks 0..2.0 s; the echo window closes at 2.5 s
 
 
 @pytest.mark.parametrize("when", sorted(STOP_TIMINGS))
-def test_stop_around_the_end_of_robot_speech_reaches_the_app_as_stop(h2m, when):
+def test_stop_around_the_end_of_robot_speech_reaches_the_app_as_stop(armed, when):
     a, b = STOP_TIMINGS[when]
     heard = []
 
     def on_utterance(text, meta):
         heard.append(meta["echo"])
-        h2m.on_utterance(text, meta, "voice")
+        armed.on_utterance(text, meta, "voice")
 
-    ask_cup(h2m)
+    ask_cup(armed)
     person = speak_over_robot(on_utterance, "stop", 2.0, a, b)
     assert person == round((b - a) / 0.03)  # every frame of the person's word delivered
-    assert h2m.arm.state is ArmState.STOPPED and h2m.pending is None
-    assert any(e.data["verb"] == "stop" for e in h2m.log.recent(50, {"speech.utterance"}))
+    assert armed.arm.state is ArmState.STOPPED and armed.pending is None
+    assert any(e.data["verb"] == "stop" for e in armed.log.recent(50, {"speech.utterance"}))
 
 
 @pytest.mark.parametrize("when", ["overlapping the end of robot speech", "late in the tail"])
-def test_yes_glued_to_the_robot_voice_is_echo_and_never_confirms(h2m, when):
+def test_yes_glued_to_the_robot_voice_is_echo_and_never_confirms(armed, when):
     a, b = STOP_TIMINGS[when]
-    p = ask_cup(h2m)
+    p = ask_cup(armed)
     p.announced_at = now() - LATE
-    speak_over_robot(lambda text, meta: h2m.on_utterance(text, meta, "voice"), "yes", 2.0, a, b)
-    assert not started(h2m) and h2m.pending is p
-    assert [e for e in h2m.log.recent(50, {"speech.echo_dropped"})]
+    speak_over_robot(lambda text, meta: armed.on_utterance(text, meta, "voice"), "yes", 2.0, a, b)
+    assert not started(armed) and armed.pending is p
+    assert [e for e in armed.log.recent(50, {"speech.echo_dropped"})]
 
 
 def test_a_failing_speaking_check_counts_as_speaking():
@@ -255,59 +255,59 @@ def test_a_failing_speaking_check_counts_as_speaking():
 
 
 # ── M7: request epoch ────────────────────────────────────────────────────────
-def test_never_mind_while_muse_answers_drops_the_reply(h2m):
+def test_never_mind_while_muse_answers_drops_the_reply(armed):
     """Review repro."""
-    prove_empty(h2m)
-    h2m.llm = FakeLLM(
+    prove_empty(armed)
+    armed.llm = FakeLLM(
         ToolReply([("gesture", {"name": "nod"})]),
-        hook=lambda: h2m.on_utterance("never mind", {}, "typed"),
+        hook=lambda: armed.on_utterance("never mind", {}, "typed"),
     )
-    h2m.on_utterance("could you nod at me", source="typed")
-    assert not started(h2m) and h2m.arm.state is ArmState.READY
-    assert [e for e in h2m.log.recent(50, {"compiler.dropped"})]
+    armed.on_utterance("could you nod at me", source="typed")
+    assert not started(armed) and armed.arm.state is ArmState.READY
+    assert [e for e in armed.log.recent(50, {"compiler.dropped"})]
 
 
-def test_stop_reset_and_rearm_while_muse_answers_drops_the_old_reply(h2m):
+def test_stop_reset_and_rearm_while_muse_answers_drops_the_old_reply(armed):
     """Review repro: re-arming must not resurrect a pre-stop request."""
-    prove_empty(h2m)
+    prove_empty(armed)
 
     def stop_and_rearm():
-        h2m.stop("voice: stop")
-        h2m.arm.reset()
-        h2m.arm.arm()
+        armed.stop("voice: stop")
+        armed.arm.reset()
+        armed.arm.arm()
 
-    h2m.llm = FakeLLM(ToolReply([("gesture", {"name": "shake"})]), hook=stop_and_rearm)
-    h2m.on_utterance("shake your head", source="typed")
-    assert not started(h2m) and h2m.arm.state is ArmState.READY
+    armed.llm = FakeLLM(ToolReply([("gesture", {"name": "shake"})]), hook=stop_and_rearm)
+    armed.on_utterance("shake your head", source="typed")
+    assert not started(armed) and armed.arm.state is ArmState.READY
 
 
 @pytest.mark.parametrize("bump", ["brace", "open_hand"])
-def test_brace_or_open_hand_while_muse_answers_queues_nothing(h2m, bump):
+def test_brace_or_open_hand_while_muse_answers_queues_nothing(armed, bump):
     def hook():
         if bump == "brace":
-            h2m.log.emit("emg.brace", onset_t=0.0)
+            armed.log.emit("emg.brace", onset_t=0.0)
         else:
-            h2m.log.emit("emg.open_hand", extensor=0.9)
-        h2m.arm.reset()
-        h2m.arm.arm()
+            armed.log.emit("emg.open_hand", extensor=0.9)
+        armed.arm.reset()
+        armed.arm.arm()
 
-    h2m.llm = FakeLLM(ToolReply([("pick_place", {"object_id": "cup"})]), hook=hook)
-    h2m.on_utterance("could you tidy the cup away", source="typed")
-    assert h2m.pending is None and not started(h2m)
+    armed.llm = FakeLLM(ToolReply([("pick_place", {"object_id": "cup"})]), hook=hook)
+    armed.on_utterance("could you tidy the cup away", source="typed")
+    assert armed.pending is None and not started(armed)
 
 
-def test_cancel_after_the_confirm_pop_drops_the_plan(h2m):
-    ask_cup(h2m)
-    real = h2m._publish
+def test_cancel_after_the_confirm_pop_drops_the_plan(armed):
+    ask_cup(armed)
+    real = armed._publish
 
     def publish_then_cancel(c, d, **kw):
         if kw.get("confirmed_by"):
-            h2m.cancel("never mind")  # lands after the pop, before the arm starts
+            armed.cancel("never mind")  # lands after the pop, before the arm starts
         return real(c, d, **kw)
 
-    h2m._publish = publish_then_cancel
-    ok, why = h2m.confirm(by="ui")
+    armed._publish = publish_then_cancel
+    ok, why = armed.confirm(by="ui")
     assert not ok and "cancelled" in why
-    assert not started(h2m) and h2m.arm.state is ArmState.READY
+    assert not started(armed) and armed.arm.state is ArmState.READY
 
 # imports added with the tests below

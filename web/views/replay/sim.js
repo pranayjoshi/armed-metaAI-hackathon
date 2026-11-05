@@ -1,4 +1,4 @@
-// Simulation: the scripted story from h2m/scenario.py as a cinematic player.
+// Simulation: the scripted story from armed/scenario.py as a cinematic player.
 // Everything shown is read from /api/replay/scenario (+ /timeline, the live frame and the live snapshot).
 // Progress is derived from the real step statuses; nothing is hard-coded to advance.
 import { Trace, modelFromEmg } from "./trace.js";
@@ -437,7 +437,7 @@ export class Sim {
         this.doneAt ??= performance.now();
         const left = Math.max(0, (sc.settings?.loop_pause_s ?? 0) - (performance.now() - this.doneAt) / 1000);
         b = `Complete · restarting in about ${Math.ceil(left)} s (loop pause ${sc.settings?.loop_pause_s} s)`;
-      } else b = "Complete. It runs again only if `h2m demo` was started with --loop.";
+      } else b = "Complete. It runs again only if `armed demo` was started with --loop.";
       tone = "ok";
     } else this.doneAt = null;
     const bsig = b + tone;
@@ -496,7 +496,7 @@ export class Sim {
     const key = `${sc.run}:${ex.say}`;
     const firstTime = this.typed !== key;
     this.exp.innerHTML = `
-      <div class="exp-head"><h3>Why did it stop?</h3>${canned ? '<span class="src canned" title="Fixed text from h2m/replay.py. No model was called.">CANNED · fixed demo text</span>' : `<span class="src model">${esc(words(ex.source))}</span>`}</div>
+      <div class="exp-head"><h3>Why did it stop?</h3>${canned ? '<span class="src canned" title="Fixed text from armed/replay.py. No model was called.">CANNED · fixed demo text</span>' : `<span class="src model">${esc(words(ex.source))}</span>`}</div>
       <p class="exp-say"></p>
       <dl class="exp-facts">
         <div><dt>blamed</dt><dd>${esc(ex.cause_object || "—")}</dd></div>

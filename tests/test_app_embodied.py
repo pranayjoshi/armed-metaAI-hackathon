@@ -14,23 +14,23 @@ from dataclasses import replace
 
 import pytest
 
-import h2m.app as app_mod
-from h2m.app import H2M, Pending
-from h2m.compiler.llm import ToolReply
-from h2m.contract import StepContract, Verb
-from h2m.core import load_config, now
-from h2m.robot import ArmState
-from h2m.routing import (
+import armed.app as app_mod
+from armed.app import Armed, Pending
+from armed.compiler.llm import ToolReply
+from armed.contract import StepContract, Verb
+from armed.core import load_config, now
+from armed.robot import ArmState
+from armed.routing import (
     Handover,
     RouteConfig,
     RoutesUnavailable,
     load_routes,
     plan_handover,
 )
-from h2m.rules import Rule, RuleStore
-from h2m.safety import Decision, Verdict
-from h2m.speech_out import SpeechOut
-from h2m.world import (
+from armed.rules import Rule, RuleStore
+from armed.safety import Decision, Verdict
+from armed.speech_out import SpeechOut
+from armed.world import (
     EMPTY,
     HOLDING,
     UNKNOWN,
@@ -105,13 +105,13 @@ class FakeLLM:
 
 
 @pytest.fixture
-def h2m(monkeypatch, tmp_path):
+def armed(monkeypatch, tmp_path):
     monkeypatch.delenv("MODEL_API_KEY", raising=False)
-    monkeypatch.setattr("h2m.recorder.SESSIONS", tmp_path)
+    monkeypatch.setattr("armed.recorder.SESSIONS", tmp_path)
     cfg = load_config()
     for part in ("emg", "vision", "speech"):
         cfg[part] = {**cfg[part], "source": "off"}
-    h = H2M(cfg)
+    h = Armed(cfg)
     h.rules = RuleStore("t", root=tmp_path / "rules")
     h.spoken, h.procs = [], []
     h.say_s = None  # how long each fake `say` plays (None: until cut off)
@@ -154,108 +154,108 @@ def set_cfg(h, **kw):
 
 
 # ── gestures ───────────────────────────────────────────────────────────────────
-def test_gesture_runs_unconfirmed_only_when_gripper_proven_empty(h2m):
-    prove_empty(h2m)
-    [r] = h2m.run_tool_calls([("gesture", {"name": "nod"})])
+def test_gesture_runs_unconfirmed_only_when_gripper_proven_empty(armed):
+    prove_empty(armed)
+    [r] = armed.run_tool_calls([("gesture", {"name": "nod"})])
     assert r.decision.verdict is Verdict.APPROVE and r.executed
-    assert h2m.arm.state is ArmState.MOVING and h2m.pending is None
-    [s] = started(h2m)
+    assert armed.arm.state is ArmState.MOVING and armed.pending is None
+    [s] = started(armed)
     assert s["skill"] == "gesture.nod" and s["verb"] == "gesture" and s["speed"] <= 0.3
-    assert h2m._in_flight == 0
-    assert run(h2m, 20, until=lambda: h2m.arm.state is ArmState.READY)
+    assert armed._in_flight == 0
+    assert run(armed, 20, until=lambda: armed.arm.state is ArmState.READY)
 
 
-def test_gesture_at_startup_unknown_gripper_waits_for_confirmation(h2m):
-    assert h2m.gripper.state().status == UNKNOWN
-    [r] = h2m.run_tool_calls([("gesture", {"name": "tilt"})])
+def test_gesture_at_startup_unknown_gripper_waits_for_confirmation(armed):
+    assert armed.gripper.state().status == UNKNOWN
+    [r] = armed.run_tool_calls([("gesture", {"name": "tilt"})])
     assert r.decision.verdict is Verdict.ASK and not r.executed
-    assert h2m.arm.state is ArmState.READY and not started(h2m)
-    assert h2m.pending is not None and h2m.pending.plan.skill == "gesture.tilt"
-    ok, why = h2m.confirm(by="ui")
+    assert armed.arm.state is ArmState.READY and not started(armed)
+    assert armed.pending is not None and armed.pending.plan.skill == "gesture.tilt"
+    ok, why = armed.confirm(by="ui")
     assert ok, why
-    assert started(h2m)[-1]["skill"] == "gesture.tilt"
+    assert started(armed)[-1]["skill"] == "gesture.tilt"
 
 
-def test_gesture_unknown_gripper_confirms_even_with_always_confirm_off(h2m):
+def test_gesture_unknown_gripper_confirms_even_with_always_confirm_off(armed):
     """The gate's fall-through would approve; the app still needs the full exemption."""
-    set_cfg(h2m, always_confirm=False)
-    [r] = h2m.run_tool_calls([("gesture", {"name": "nod"})])
+    set_cfg(armed, always_confirm=False)
+    [r] = armed.run_tool_calls([("gesture", {"name": "nod"})])
     assert r.decision.verdict is Verdict.APPROVE  # the gate's own answer ...
-    assert h2m.arm.state is ArmState.READY and not started(h2m)  # ... but nothing ran
-    assert h2m.pending is not None and h2m.pending.decision.verdict is Verdict.ASK
+    assert armed.arm.state is ArmState.READY and not started(armed)  # ... but nothing ran
+    assert armed.pending is not None and armed.pending.decision.verdict is Verdict.ASK
 
 
-def test_gesture_load_reading_vetoes_empty(h2m):
-    prove_empty(h2m)
-    h2m.arm.load = 0.4  # something is in the jaws after all
-    h2m.run_tool_calls([("gesture", {"name": "nod"})])
-    assert not started(h2m) and h2m.pending is not None
+def test_gesture_load_reading_vetoes_empty(armed):
+    prove_empty(armed)
+    armed.arm.load = 0.4  # something is in the jaws after all
+    armed.run_tool_calls([("gesture", {"name": "nod"})])
+    assert not started(armed) and armed.pending is not None
 
 
-def test_gesture_far_from_home_is_rejected_even_confirmed(h2m, monkeypatch):
-    prove_empty(h2m)
-    far = {**h2m.arm.measured(), "shoulder_pan": 45.0}
-    monkeypatch.setattr(h2m.arm, "measured", lambda: dict(far))
-    [r] = h2m.run_tool_calls([("gesture", {"name": "nod"})])
+def test_gesture_far_from_home_is_rejected_even_confirmed(armed, monkeypatch):
+    prove_empty(armed)
+    far = {**armed.arm.measured(), "shoulder_pan": 45.0}
+    monkeypatch.setattr(armed.arm, "measured", lambda: dict(far))
+    [r] = armed.run_tool_calls([("gesture", {"name": "nod"})])
     assert r.decision.verdict is Verdict.REJECT and "home" in r.decision.reason
-    assert not started(h2m) and h2m.pending is None
+    assert not started(armed) and armed.pending is None
 
 
-def test_gesture_unreadable_pose_fails_closed(h2m, monkeypatch):
-    prove_empty(h2m)
-    monkeypatch.setattr(h2m.arm, "measured", lambda: {})
-    [r] = h2m.run_tool_calls([("gesture", {"name": "nod"})])
-    assert r.decision.verdict is Verdict.REJECT and not started(h2m)
+def test_gesture_unreadable_pose_fails_closed(armed, monkeypatch):
+    prove_empty(armed)
+    monkeypatch.setattr(armed.arm, "measured", lambda: {})
+    [r] = armed.run_tool_calls([("gesture", {"name": "nod"})])
+    assert r.decision.verdict is Verdict.REJECT and not started(armed)
 
 
-def test_gesture_disarmed_or_stopped_holds(h2m):
-    prove_empty(h2m)
-    h2m.stop("test")
-    [r] = h2m.run_tool_calls([("gesture", {"name": "nod"})])
-    assert r.decision.verdict is Verdict.HOLD and not started(h2m)
+def test_gesture_disarmed_or_stopped_holds(armed):
+    prove_empty(armed)
+    armed.stop("test")
+    [r] = armed.run_tool_calls([("gesture", {"name": "nod"})])
+    assert r.decision.verdict is Verdict.HOLD and not started(armed)
 
 
-def test_tampered_gesture_plan_is_refused(h2m):
-    prove_empty(h2m)
+def test_tampered_gesture_plan_is_refused(armed):
+    prove_empty(armed)
     c = StepContract(Verb.GESTURE, speed=0.25, confidence=0.9, utterance="nod")
     d = Decision(Verdict.APPROVE, "test", {})
-    good = h2m.embodied.handle_tool_call("gesture", {"name": "nod"}).plan
-    h2m.arm.stop("x")
-    h2m.arm.reset()
-    h2m.arm.arm()
+    good = armed.embodied.handle_tool_call("gesture", {"name": "nod"}).plan
+    armed.arm.stop("x")
+    armed.arm.reset()
+    armed.arm.arm()
     wp = replace(good.waypoints[0], joints={**good.waypoints[0].joints, "shoulder_pan": 80.0})
     bad = replace(good, waypoints=(wp, *good.waypoints[1:]))
-    n = len(started(h2m))
-    assert h2m._execute(c, d, "test", plan=bad) == (False, "plan does not match the taught poses")
-    assert len(started(h2m)) == n and h2m.arm.state is ArmState.READY
+    n = len(started(armed))
+    assert armed._execute(c, d, "test", plan=bad) == (False, "plan does not match the taught poses")
+    assert len(started(armed)) == n and armed.arm.state is ArmState.READY
     unknown = StepContract(Verb.GESTURE, speed=0.25, confidence=0.9, utterance="salute")
-    assert not h2m._execute(unknown, d, "test")[0]
+    assert not armed._execute(unknown, d, "test")[0]
 
 
 # ── confirmable tools ──────────────────────────────────────────────────────────
-def test_pick_place_tool_always_confirms(h2m):
-    set_cfg(h2m, always_confirm=False)
-    [r] = h2m.run_tool_calls([("pick_place", {"object_id": "cup"})])
+def test_pick_place_tool_always_confirms(armed):
+    set_cfg(armed, always_confirm=False)
+    [r] = armed.run_tool_calls([("pick_place", {"object_id": "cup"})])
     assert r.decision.verdict is Verdict.ASK  # the gate itself asks for every carry
-    assert h2m.pending is not None and h2m.pending.decision.verdict is Verdict.ASK
-    assert h2m.arm.state is ArmState.READY and not started(h2m)
-    assert h2m.pending.contract.source == "llm"
+    assert armed.pending is not None and armed.pending.decision.verdict is Verdict.ASK
+    assert armed.arm.state is ArmState.READY and not started(armed)
+    assert armed.pending.contract.source == "llm"
 
 
-def test_tool_pending_uses_reaction_gate_and_compare_and_set(h2m):
-    h2m.run_tool_calls([("pick_place", {"object_id": "cup"})])
-    p = h2m.pending
-    h2m.log.emit("emg.squeeze", effort=0.6, held_ms=350)  # began before the question
+def test_tool_pending_uses_reaction_gate_and_compare_and_set(armed):
+    armed.run_tool_calls([("pick_place", {"object_id": "cup"})])
+    p = armed.pending
+    armed.log.emit("emg.squeeze", effort=0.6, held_ms=350)  # began before the question
     time.sleep(0.1)
-    assert h2m.pending is p and not started(h2m)
-    assert [e for e in h2m.log.recent(50) if e.kind == "emg.squeeze_rejected"]
+    assert armed.pending is p and not started(armed)
+    assert [e for e in armed.log.recent(50) if e.kind == "emg.squeeze_rejected"]
     other = Pending(None, p.contract, p.decision, now() + 5)
-    assert h2m.confirm(by="emg", expected=other) == (False, "request changed")
-    assert h2m.pending is p
+    assert armed.confirm(by="emg", expected=other) == (False, "request changed")
+    assert armed.pending is p
 
 
-def test_one_motion_per_reply_and_bad_tools_rejected(h2m):
-    prove_empty(h2m)
+def test_one_motion_per_reply_and_bad_tools_rejected(armed):
+    prove_empty(armed)
     calls = [
         ("set_joints", {"shoulder_pan": 90}),
         ("gesture", {"name": "nod", "speed": 1.0}),
@@ -267,121 +267,121 @@ def test_one_motion_per_reply_and_bad_tools_rejected(h2m):
 
     def ticker():  # the control loop, faster than real time
         while not stop.is_set():
-            h2m.arm.tick(0.05)
+            armed.arm.tick(0.05)
             time.sleep(0.005)
 
     t = threading.Thread(target=ticker, daemon=True)
     t.start()
     try:
-        results = h2m.run_tool_calls(calls)
+        results = armed.run_tool_calls(calls)
     finally:
         stop.set()
         t.join(1)
     assert [r.ok for r in results] == [False, False, True, True]
-    assert [s["skill"] for s in started(h2m)] == ["gesture.nod"]
+    assert [s["skill"] for s in started(armed)] == ["gesture.nod"]
     # the request was gated after the nod finished, and waits for a confirmation
-    assert h2m.pending is not None and h2m.pending.contract.verb is Verb.PICK_PLACE
-    assert [e.data["tool"] for e in h2m.log.recent(50, {"embodied.skipped"})] == ["gesture"]
+    assert armed.pending is not None and armed.pending.contract.verb is Verb.PICK_PLACE
+    assert [e.data["tool"] for e in armed.log.recent(50, {"embodied.skipped"})] == ["gesture"]
 
 
-def test_request_after_a_gesture_that_is_still_moving_holds(h2m):
-    prove_empty(h2m)
-    set_cfg(h2m, gesture_wait_s=0.1)  # no control loop: the nod never ends
-    results = h2m.run_tool_calls([("gesture", {"name": "nod"}), ("pick_place", {"object_id": "cup"})])
-    assert results[1].decision.verdict is Verdict.HOLD and h2m.pending is None
-    assert [s["skill"] for s in started(h2m)] == ["gesture.nod"]
+def test_request_after_a_gesture_that_is_still_moving_holds(armed):
+    prove_empty(armed)
+    set_cfg(armed, gesture_wait_s=0.1)  # no control loop: the nod never ends
+    results = armed.run_tool_calls([("gesture", {"name": "nod"}), ("pick_place", {"object_id": "cup"})])
+    assert results[1].decision.verdict is Verdict.HOLD and armed.pending is None
+    assert [s["skill"] for s in started(armed)] == ["gesture.nod"]
 
 
-def test_choose_refuses_a_non_clarify_request(h2m):
-    set_cfg(h2m, always_confirm=False)
-    h2m.run_tool_calls([("pick_place", {"object_id": "cup"})])
-    ok, _ = h2m.choose("cup", by="ui")
-    assert not ok and h2m.pending is not None and not started(h2m)
+def test_choose_refuses_a_non_clarify_request(armed):
+    set_cfg(armed, always_confirm=False)
+    armed.run_tool_calls([("pick_place", {"object_id": "cup"})])
+    ok, _ = armed.choose("cup", by="ui")
+    assert not ok and armed.pending is not None and not started(armed)
 
 
 # ── Muse routing ───────────────────────────────────────────────────────────────
-def test_muse_tool_reply_is_routed_through_embodied(h2m):
-    prove_empty(h2m)
-    h2m.llm = FakeLLM(ToolReply([("say", {"text": "Sure."}), ("gesture", {"name": "nod"})]))
-    h2m.on_utterance("give me a little nod", source="typed")
-    assert h2m.spoken == ["Sure."] and h2m.reply == "Sure."
-    assert [s["skill"] for s in started(h2m)] == ["gesture.nod"]
-    assert h2m._in_flight == 0
+def test_muse_tool_reply_is_routed_through_embodied(armed):
+    prove_empty(armed)
+    armed.llm = FakeLLM(ToolReply([("say", {"text": "Sure."}), ("gesture", {"name": "nod"})]))
+    armed.on_utterance("give me a little nod", source="typed")
+    assert armed.spoken == ["Sure."] and armed.reply == "Sure."
+    assert [s["skill"] for s in started(armed)] == ["gesture.nod"]
+    assert armed._in_flight == 0
 
 
-def test_muse_text_only_reply_is_spoken_through_say(h2m):
-    h2m.llm = FakeLLM(ToolReply([], "I can't do that."))
-    h2m.on_utterance("juggle", source="typed")
-    assert h2m.spoken == ["I can't do that."] and not started(h2m)
+def test_muse_text_only_reply_is_spoken_through_say(armed):
+    armed.llm = FakeLLM(ToolReply([], "I can't do that."))
+    armed.on_utterance("juggle", source="typed")
+    assert armed.spoken == ["I can't do that."] and not started(armed)
 
 
-def test_muse_failure_falls_back_to_the_grammar_and_holds(h2m):
-    h2m.llm = FakeLLM(None)
-    h2m.on_utterance("juggle", source="typed")
-    assert not started(h2m) and h2m.pending is None
-    assert h2m.last["decision"]["verdict"] == "hold"
+def test_muse_failure_falls_back_to_the_grammar_and_holds(armed):
+    armed.llm = FakeLLM(None)
+    armed.on_utterance("juggle", source="typed")
+    assert not started(armed) and armed.pending is None
+    assert armed.last["decision"]["verdict"] == "hold"
 
 
-def test_brace_while_muse_is_answering_latches_the_stop(h2m):
-    prove_empty(h2m)
-    h2m.llm = FakeLLM(
+def test_brace_while_muse_is_answering_latches_the_stop(armed):
+    prove_empty(armed)
+    armed.llm = FakeLLM(
         ToolReply([("gesture", {"name": "nod"})]),
-        hook=lambda: h2m.log.emit("emg.brace", onset_t=0.0),
+        hook=lambda: armed.log.emit("emg.brace", onset_t=0.0),
     )
-    h2m.on_utterance("nod please", source="typed")
-    assert h2m.arm.state is ArmState.STOPPED and not started(h2m)
-    assert h2m._in_flight == 0 and h2m.pending is None
+    armed.on_utterance("nod please", source="typed")
+    assert armed.arm.state is ArmState.STOPPED and not started(armed)
+    assert armed._in_flight == 0 and armed.pending is None
 
 
-def test_slow_muse_never_blocks_the_speech_thread(h2m):
+def test_slow_muse_never_blocks_the_speech_thread(armed):
     """A voice request waiting on Muse must not delay the next utterance ("stop")."""
-    prove_empty(h2m)
-    _moving(h2m)
+    prove_empty(armed)
+    _moving(armed)
     release = threading.Event()
-    h2m.llm = FakeLLM(ToolReply([("gesture", {"name": "nod"})]), hook=lambda: release.wait(5))
+    armed.llm = FakeLLM(ToolReply([("gesture", {"name": "nod"})]), hook=lambda: release.wait(5))
     t0 = time.monotonic()
-    h2m.on_utterance("give me a nod", {"echo": False}, source="voice")  # returns at once
-    h2m.on_utterance("stop", source="voice")
+    armed.on_utterance("give me a nod", {"echo": False}, source="voice")  # returns at once
+    armed.on_utterance("stop", source="voice")
     assert time.monotonic() - t0 < 0.5
-    assert h2m.arm.state is ArmState.STOPPED
+    assert armed.arm.state is ArmState.STOPPED
     release.set()
     deadline = now() + 2
-    while h2m._in_flight and now() < deadline:
+    while armed._in_flight and now() < deadline:
         time.sleep(0.02)
-    assert h2m._in_flight == 0 and started(h2m)[-1]["skill"] == "home"  # nod never started
+    assert armed._in_flight == 0 and started(armed)[-1]["skill"] == "home"  # nod never started
 
 
-def test_grammar_stop_never_reaches_muse(h2m):
+def test_grammar_stop_never_reaches_muse(armed):
     calls = []
-    h2m.llm = FakeLLM(ToolReply([("gesture", {"name": "nod"})]), hook=lambda: calls.append(1))
-    h2m.on_utterance("stop", source="voice")
-    assert calls == [] and h2m.arm.state is ArmState.STOPPED
+    armed.llm = FakeLLM(ToolReply([("gesture", {"name": "nod"})]), hook=lambda: calls.append(1))
+    armed.on_utterance("stop", source="voice")
+    assert calls == [] and armed.arm.state is ArmState.STOPPED
 
 
-def test_scene_question(h2m):
-    h2m.vision = FakeVision(_scene(h2m))
-    r = h2m.ask("what do you see?")
-    assert r.spoken and h2m.spoken[-1] == app_mod.NO_VISION_MODEL  # no key: stock line
-    h2m.llm = FakeLLM()
-    h2m.ask("what do you see?")
-    assert h2m.spoken[-1] == "A cup and a block." and h2m.llm.questions[-1][1] == b"JPEG"
-    h2m.vision.scene = FakeCam(None)
-    h2m.ask("and now?")
-    assert h2m.spoken[-1] == "I can't see the scene right now."
-    assert not started(h2m)
+def test_scene_question(armed):
+    armed.vision = FakeVision(_scene(armed))
+    r = armed.ask("what do you see?")
+    assert r.spoken and armed.spoken[-1] == app_mod.NO_VISION_MODEL  # no key: stock line
+    armed.llm = FakeLLM()
+    armed.ask("what do you see?")
+    assert armed.spoken[-1] == "A cup and a block." and armed.llm.questions[-1][1] == b"JPEG"
+    armed.vision.scene = FakeCam(None)
+    armed.ask("and now?")
+    assert armed.spoken[-1] == "I can't see the scene right now."
+    assert not started(armed)
 
 
-def test_ask_endpoint(h2m):
+def test_ask_endpoint(armed):
     from fastapi.testclient import TestClient
 
-    from h2m.server import create_app
+    from armed.server import create_app
 
     client = TestClient(
-        create_app(h2m, token="t0k"), base_url="http://127.0.0.1", headers={"X-H2M-Token": "t0k"}
+        create_app(armed, token="t0k"), base_url="http://127.0.0.1", headers={"X-Armed-Token": "t0k"}
     )
     resp = client.post("/api/ask", json={"question": "what is here?"})
     assert resp.status_code == 200 and resp.json()["ok"]
-    assert h2m.spoken[-1] == "I can't see the scene right now."
+    assert armed.spoken[-1] == "I can't see the scene right now."
     assert client.post("/api/ask", json={"question": "  "}).status_code == 400
 
 
@@ -396,7 +396,7 @@ def _order(h):
 
 
 def _moving(h):
-    from h2m.robot.skills import plan_home
+    from armed.robot.skills import plan_home
 
     assert h.arm.execute(plan_home(h.arm.poses))[0]
 
@@ -412,34 +412,34 @@ def _moving(h):
     ],
     ids=["ui", "voice", "cancel", "brace", "open_hand"],
 )
-def test_every_stop_path_cuts_speech_after_the_arm(h2m, trigger):
-    _moving(h2m)
-    order = _order(h2m)
-    trigger(h2m)
-    assert h2m.arm.state is ArmState.STOPPED
-    assert order[:2] == ["arm", "speech"] and h2m.procs[-1].killed
+def test_every_stop_path_cuts_speech_after_the_arm(armed, trigger):
+    _moving(armed)
+    order = _order(armed)
+    trigger(armed)
+    assert armed.arm.state is ArmState.STOPPED
+    assert order[:2] == ["arm", "speech"] and armed.procs[-1].killed
 
 
-def test_brace_when_idle_still_cuts_speech(h2m):
-    h2m.embodied.handle_tool_call("say", {"text": "talking"})
-    h2m.log.emit("emg.brace", onset_t=0.0)
-    assert h2m.procs[-1].killed and h2m.arm.state is ArmState.READY
+def test_brace_when_idle_still_cuts_speech(armed):
+    armed.embodied.handle_tool_call("say", {"text": "talking"})
+    armed.log.emit("emg.brace", onset_t=0.0)
+    assert armed.procs[-1].killed and armed.arm.state is ArmState.READY
 
 
-def test_broken_speech_cannot_break_the_freeze(h2m):
-    _moving(h2m)
+def test_broken_speech_cannot_break_the_freeze(armed):
+    _moving(armed)
 
     def boom():
         raise RuntimeError("audio device gone")
 
-    h2m.embodied.cutoff = boom
-    h2m.log.emit("emg.brace", onset_t=0.0)
-    assert h2m.arm.state is ArmState.STOPPED
-    assert h2m.log.recent(50, {"incident.triggered"})  # the rest of the handler still ran
-    h2m.arm.reset()
-    h2m.arm.arm()
-    h2m.stop("ui")
-    assert h2m.arm.state is ArmState.STOPPED
+    armed.embodied.cutoff = boom
+    armed.log.emit("emg.brace", onset_t=0.0)
+    assert armed.arm.state is ArmState.STOPPED
+    assert armed.log.recent(50, {"incident.triggered"})  # the rest of the handler still ran
+    armed.arm.reset()
+    armed.arm.arm()
+    armed.stop("ui")
+    assert armed.arm.state is ArmState.STOPPED
 
 
 # ── held object and place_near_user ────────────────────────────────────────────
@@ -472,48 +472,48 @@ def _scene(h):
     return objs
 
 
-def test_pick_completion_proves_empty_and_stop_mid_carry_means_holding(h2m):
-    h2m.on_utterance("pick up the block", source="typed")
-    assert h2m.confirm(by="ui")[0]
-    assert run(h2m, 60, until=lambda: h2m.arm.state is ArmState.READY)
-    assert h2m.gripper.state().empty
-    _carry_then_stop(h2m)
-    held = h2m.gripper.state()
+def test_pick_completion_proves_empty_and_stop_mid_carry_means_holding(armed):
+    armed.on_utterance("pick up the block", source="typed")
+    assert armed.confirm(by="ui")[0]
+    assert run(armed, 60, until=lambda: armed.arm.state is ArmState.READY)
+    assert armed.gripper.state().empty
+    _carry_then_stop(armed)
+    held = armed.gripper.state()
     assert held.status == HOLDING and held.object_id == "cup"
     # stopped over the table: too far from home for any gesture
-    [r] = h2m.run_tool_calls([("gesture", {"name": "nod"})])
+    [r] = armed.run_tool_calls([("gesture", {"name": "nod"})])
     assert r.decision.verdict is Verdict.REJECT and not r.decision.checks["gesture_start_near_home"]
     # back home but still holding the cup: the gesture needs a confirmation
-    _go_home(h2m)
-    n = len(started(h2m))
-    [r] = h2m.run_tool_calls([("gesture", {"name": "nod"})])
+    _go_home(armed)
+    n = len(started(armed))
+    [r] = armed.run_tool_calls([("gesture", {"name": "nod"})])
     assert r.decision.verdict is Verdict.ASK and not r.decision.checks["gripper_empty"]
-    assert len(started(h2m)) == n and h2m.pending is not None
+    assert len(started(armed)) == n and armed.pending is not None
 
 
-def test_place_near_user_fails_closed_until_everything_is_proven(h2m):
+def test_place_near_user_fails_closed_until_everything_is_proven(armed):
     # unknown gripper
-    [r] = h2m.run_tool_calls([("place_near_user", {})])
-    assert r.decision.verdict is Verdict.HOLD and h2m.pending is None
-    _carry_then_stop(h2m)
+    [r] = armed.run_tool_calls([("place_near_user", {})])
+    assert r.decision.verdict is Verdict.HOLD and armed.pending is None
+    _carry_then_stop(armed)
     # holding, but not at the taught start pose
-    [r] = h2m.run_tool_calls([("place_near_user", {})])
+    [r] = armed.run_tool_calls([("place_near_user", {})])
     assert r.decision.verdict is Verdict.HOLD and "home" in r.decision.reason
-    _go_home(h2m)
-    assert h2m.gripper.state().holding  # going home does not release anything
+    _go_home(armed)
+    assert armed.gripper.state().holding  # going home does not release anything
     # at home, but no camera: the spot is not proven clear
-    [r] = h2m.run_tool_calls([("place_near_user", {})])
+    [r] = armed.run_tool_calls([("place_near_user", {})])
     assert r.decision.verdict is Verdict.HOLD and not r.decision.checks["spot_clear"]
     # stale hand view
-    _hands(h2m, [], age=5.0)
-    [r] = h2m.run_tool_calls([("place_near_user", {})])
+    _hands(armed, [], age=5.0)
+    [r] = armed.run_tool_calls([("place_near_user", {})])
     assert r.decision.verdict is Verdict.HOLD
     # a hand over the spot
-    spot = h2m.routes.handover.spot
-    _hands(h2m, [(spot[0] + 0.02, spot[1])])
-    [r] = h2m.run_tool_calls([("place_near_user", {})])
-    assert r.decision.verdict is Verdict.HOLD and h2m.pending is None
-    assert not started(h2m)[-1]["skill"] == "place_near_user"
+    spot = armed.routes.handover.spot
+    _hands(armed, [(spot[0] + 0.02, spot[1])])
+    [r] = armed.run_tool_calls([("place_near_user", {})])
+    assert r.decision.verdict is Verdict.HOLD and armed.pending is None
+    assert not started(armed)[-1]["skill"] == "place_near_user"
 
 
 def _sees_past_arm(h):
@@ -531,55 +531,55 @@ def run_live(h, seconds, until, points=((0.9, 0.1),)):
     return run(h, seconds, until=step)
 
 
-def test_place_near_user_confirms_rechecks_and_runs_taught_plan(h2m):
-    _carry_then_stop(h2m)
-    _go_home(h2m)
-    _sees_past_arm(h2m)
-    set_cfg(h2m, always_confirm=False)  # still confirms: it carries
-    _hands(h2m, [(0.9, 0.1)])
-    [r] = h2m.run_tool_calls([("place_near_user", {})])
-    assert h2m.pending is not None and h2m.pending.decision.verdict is Verdict.ASK
-    assert h2m.pending.contract.object_id == "cup" and h2m.pending.contract.route == "handover"
+def test_place_near_user_confirms_rechecks_and_runs_taught_plan(armed):
+    _carry_then_stop(armed)
+    _go_home(armed)
+    _sees_past_arm(armed)
+    set_cfg(armed, always_confirm=False)  # still confirms: it carries
+    _hands(armed, [(0.9, 0.1)])
+    [r] = armed.run_tool_calls([("place_near_user", {})])
+    assert armed.pending is not None and armed.pending.decision.verdict is Verdict.ASK
+    assert armed.pending.contract.object_id == "cup" and armed.pending.contract.route == "handover"
     # a hand moves over the spot before the squeeze: the confirm re-check holds
-    spot = h2m.routes.handover.spot
-    _hands(h2m, [tuple(spot)])
-    ok, why = h2m.confirm(by="ui")
-    assert not ok and "spot" in why and started(h2m)[-1]["skill"] != "place_near_user"
+    spot = armed.routes.handover.spot
+    _hands(armed, [tuple(spot)])
+    ok, why = armed.confirm(by="ui")
+    assert not ok and "spot" in why and started(armed)[-1]["skill"] != "place_near_user"
     # ask again with the spot clear: stage 1 stops above the spot, still holding
-    _hands(h2m, [(0.9, 0.1)])
-    h2m.run_tool_calls([("place_near_user", {})])
-    assert h2m.confirm(by="ui")[0]
-    s = started(h2m)[-1]
+    _hands(armed, [(0.9, 0.1)])
+    armed.run_tool_calls([("place_near_user", {})])
+    assert armed.confirm(by="ui")[0]
+    s = started(armed)[-1]
     assert s["skill"] == "place_near_user" and s["speed"] <= 0.3 and s["object_id"] == "cup"
     assert s["phase"] == "approach"
     # stage 2 starts only after a fresh look, lowers, releases, and ends empty
-    assert run_live(h2m, 30, until=lambda: started(h2m)[-1]["skill"] == "place_near_user.lower")
-    assert run_live(h2m, 60, until=lambda: h2m.arm.state is ArmState.READY)
-    assert h2m.gripper.state().empty
+    assert run_live(armed, 30, until=lambda: started(armed)[-1]["skill"] == "place_near_user.lower")
+    assert run_live(armed, 60, until=lambda: armed.arm.state is ArmState.READY)
+    assert armed.gripper.state().empty
 
 
-def test_place_near_user_obeys_rules_and_missing_routes(h2m):
-    _carry_then_stop(h2m)
-    _go_home(h2m)
-    _hands(h2m, [(0.9, 0.1)])
-    poly = h2m.routes.handover.polyline
+def test_place_near_user_obeys_rules_and_missing_routes(armed):
+    _carry_then_stop(armed)
+    _go_home(armed)
+    _hands(armed, [(0.9, 0.1)])
+    poly = armed.routes.handover.polyline
     mid = ((poly[0][0] + poly[1][0]) / 2, (poly[0][1] + poly[1][1]) / 2)
     zone = (mid[0] - 0.02, mid[1] - 0.02, mid[0] + 0.02, mid[1] + 0.02)
-    h2m.routes = replace(h2m.routes, zones={**h2m.routes.zones, "mug": zone})
+    armed.routes = replace(armed.routes, zones={**armed.routes.zones, "mug": zone})
     rule = Rule(["liquid"], "mug", "route_around", approved=True)
-    h2m.rules.add(rule)
-    [r] = h2m.run_tool_calls([("place_near_user", {})])
+    armed.rules.add(rule)
+    [r] = armed.run_tool_calls([("place_near_user", {})])
     assert r.decision.verdict is Verdict.HOLD and rule.id in r.contract.applied_rules
-    h2m.routes = None
-    [r] = h2m.run_tool_calls([("place_near_user", {})])
-    assert r.decision.verdict is Verdict.HOLD and h2m.pending is None
+    armed.routes = None
+    [r] = armed.run_tool_calls([("place_near_user", {})])
+    assert r.decision.verdict is Verdict.HOLD and armed.pending is None
 
 
-def test_place_execute_refuses_unproven_decision(h2m):
+def test_place_execute_refuses_unproven_decision(armed):
     c = StepContract(Verb.PLACE_NEAR_USER, speed=0.25, confidence=0.9)
     for checks in ({}, {"route_clear": True, "holding": True}, {"spot_clear": True}):
-        assert not h2m._execute(c, Decision(Verdict.APPROVE, "x", checks), "t")[0]
-    assert not started(h2m)
+        assert not armed._execute(c, Decision(Verdict.APPROVE, "x", checks), "t")[0]
+    assert not started(armed)
 
 
 # ── R1: choose / pointing re-resolve keep the plan in flight ───────────────────
@@ -604,53 +604,53 @@ def _brace_on_publish(h):
     h._publish = pub
 
 
-def test_r1_brace_between_choose_pop_and_execute_stops(h2m):
-    set_cfg(h2m, always_confirm=False, auto_approve=0.0)
-    prove_empty(h2m)  # pointing with a held object is a carry and always asks (M1)
-    _clarify(h2m)
-    _brace_on_publish(h2m)
-    ok, why = h2m.choose(_scene(h2m)[0]["id"], by="ui")
+def test_r1_brace_between_choose_pop_and_execute_stops(armed):
+    set_cfg(armed, always_confirm=False, auto_approve=0.0)
+    prove_empty(armed)  # pointing with a held object is a carry and always asks (M1)
+    _clarify(armed)
+    _brace_on_publish(armed)
+    ok, why = armed.choose(_scene(armed)[0]["id"], by="ui")
     assert not ok and "stopped" in why
-    assert h2m.arm.state is ArmState.STOPPED and not started(h2m)
-    assert h2m._in_flight == 0
+    assert armed.arm.state is ArmState.STOPPED and not started(armed)
+    assert armed._in_flight == 0
 
 
-def test_r1_choose_approve_counts_in_flight_in_the_pop(h2m, monkeypatch):
-    set_cfg(h2m, always_confirm=False, auto_approve=0.0)
-    prove_empty(h2m)
-    _clarify(h2m)
+def test_r1_choose_approve_counts_in_flight_in_the_pop(armed, monkeypatch):
+    set_cfg(armed, always_confirm=False, auto_approve=0.0)
+    prove_empty(armed)
+    _clarify(armed)
     seen = []
     monkeypatch.setattr(
-        H2M, "_execute", lambda self, c, d, confirmed_by, plan=None, epoch=None: (
+        Armed, "_execute", lambda self, c, d, confirmed_by, plan=None, epoch=None: (
             seen.append((self.pending, self._in_flight)) or (True, "ok")
         )
     )
-    assert h2m.choose(_scene(h2m)[0]["id"], by="ui") == (True, "ok")
-    assert seen == [(None, 1)] and h2m._in_flight == 0
+    assert armed.choose(_scene(armed)[0]["id"], by="ui") == (True, "ok")
+    assert seen == [(None, 1)] and armed._in_flight == 0
 
 
-def test_r1_pointing_re_resolve_brace_in_gap_stops(h2m):
-    set_cfg(h2m, always_confirm=False, auto_approve=0.0)
-    prove_empty(h2m)
-    h2m.vision = FakeVision(_scene(h2m))
-    _clarify(h2m)
-    _brace_on_publish(h2m)
-    h2m._running = True
-    t = threading.Thread(target=h2m._loop, daemon=True)
+def test_r1_pointing_re_resolve_brace_in_gap_stops(armed):
+    set_cfg(armed, always_confirm=False, auto_approve=0.0)
+    prove_empty(armed)
+    armed.vision = FakeVision(_scene(armed))
+    _clarify(armed)
+    _brace_on_publish(armed)
+    armed._running = True
+    t = threading.Thread(target=armed._loop, daemon=True)
     t.start()
     deadline = now() + 2
-    while h2m.pending is not None and now() < deadline:
+    while armed.pending is not None and now() < deadline:
         time.sleep(0.02)
-    h2m._running = False
+    armed._running = False
     t.join(1)
-    assert h2m.arm.state is ArmState.STOPPED and not started(h2m)
-    assert h2m._in_flight == 0
+    assert armed.arm.state is ArmState.STOPPED and not started(armed)
+    assert armed._in_flight == 0
 
 
-def test_r1_default_config_choose_still_asks(h2m):
-    _clarify(h2m)
-    ok, why = h2m.choose(_scene(h2m)[0]["id"], by="ui")
-    assert ok and h2m.pending is not None and h2m.arm.state is ArmState.READY
+def test_r1_default_config_choose_still_asks(armed):
+    _clarify(armed)
+    ok, why = armed.choose(_scene(armed)[0]["id"], by="ui")
+    assert ok and armed.pending is not None and armed.arm.state is ArmState.READY
 
 
 # ── units ──────────────────────────────────────────────────────────────────────
@@ -758,7 +758,7 @@ def test_plan_handover_only_restricts():
     assert plan_handover(["liquid"], [high], replace(routes, high_routes=["handover"])).route
     ghost = Rule(["liquid"], "nowhere", "route_around", approved=True)
     assert plan_handover(["liquid"], [ghost], routes).problem  # unknown zone fails closed
-    from h2m.rules import RulesUnavailable
+    from armed.rules import RulesUnavailable
 
     assert plan_handover(["liquid"], RulesUnavailable("bad"), routes).problem
     assert plan_handover([], RulesUnavailable("bad"), routes).route == "handover"

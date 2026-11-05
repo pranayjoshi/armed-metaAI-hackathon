@@ -1,16 +1,16 @@
 # Local API access
 
-The runtime's HTTP and WebSocket API (`h2m/server.py`) can move the arm, so it only
+The runtime's HTTP and WebSocket API (`armed/server.py`) can move the arm, so it only
 answers the operator UI it serves itself.
 
 | Check | Rule | Failure |
 |---|---|---|
 | Host | `Host` must be `127.0.0.1` or `localhost` (any port). Blocks DNS rebinding. | 403 `host not allowed` |
 | Origin | If a request (or the `/api/live` WebSocket) has an `Origin`, it must be this same origin (`http://<Host>`). Blocks other web pages in the browser. | 403 `origin not allowed`, WebSocket closed with 1008 |
-| Token | `POST`, `PUT`, `PATCH` and `DELETE` need header `X-H2M-Token: <token>`, except `POST /api/stop` (stopping is always safe, so STOP works even from a page without the token). | 403 `missing or wrong session token` |
+| Token | `POST`, `PUT`, `PATCH` and `DELETE` need header `X-Armed-Token: <token>`, except `POST /api/stop` (stopping is always safe, so STOP works even from a page without the token). | 403 `missing or wrong session token` |
 
 The token is random per process (`secrets.token_urlsafe(32)`) and changes on every
-restart. `GET /` writes it into the page as `<meta name="h2m-token" content="...">`
+restart. `GET /` writes it into the page as `<meta name="armed-token" content="...">`
 (served with `Cache-Control: no-store`). `web/js/core.js` reads that tag once and sends
 the header on every `api(...)` call, so views that use `api` need nothing else. A
 different site cannot read the page (no CORS headers), so it cannot get the token.
@@ -18,12 +18,12 @@ different site cannot read the page (no CORS headers), so it cannot get the toke
 Scripts and `curl` (no `Origin` header) read the token from the page first:
 
 ```bash
-TOKEN=$(curl -s http://127.0.0.1:8080/ | sed -n 's/.*name="h2m-token" content="\([^"]*\)".*/\1/p')
-curl -X POST -H "X-H2M-Token: $TOKEN" http://127.0.0.1:8080/api/stop
+TOKEN=$(curl -s http://127.0.0.1:8080/ | sed -n 's/.*name="armed-token" content="\([^"]*\)".*/\1/p')
+curl -X POST -H "X-Armed-Token: $TOKEN" http://127.0.0.1:8080/api/stop
 ```
 
 `GET` endpoints (state, cameras, rules, incidents) need no token but still pass the
-Host and Origin checks. Tests build the app with `create_app(h2m, token="...")` and a
+Host and Origin checks. Tests build the app with `create_app(armed, token="...")` and a
 `TestClient(..., base_url="http://127.0.0.1")`.
 
 ## Operator gripper release (`POST /api/gripper/release`)
@@ -33,7 +33,7 @@ jaws. It is flagged for safety review and **off by default**.
 
 - `safety.operator_release: false` (shipped): every call answers 403 with
   `the operator gripper release is off (set safety.operator_release: true in
-  configs/h2m.yaml to enable it)`. Only the literal `true` enables it.
+  configs/armed.yaml to enable it)`. Only the literal `true` enables it.
 - When enabled, the release is refused (409) unless the arm is READY (a STOPPED arm is
   reset and armed first), nothing is in flight, the EMG guard is clear, and the measured
   arm joints are within `operator_release_tol_deg` of a pose in
@@ -67,7 +67,7 @@ the measured opening reaches `gripper_open`. `GET /api/state` shows
 `operator_release: {enabled, offer: {pose, holding, expires_in_s}}` (never the id).
 
 ```bash
-curl -s -X POST -H "X-H2M-Token: $TOKEN" http://127.0.0.1:8080/api/gripper/release
-curl -s -X POST -H "X-H2M-Token: $TOKEN" -H "Content-Type: application/json" \
+curl -s -X POST -H "X-Armed-Token: $TOKEN" http://127.0.0.1:8080/api/gripper/release
+curl -s -X POST -H "X-Armed-Token: $TOKEN" -H "Content-Type: application/json" \
   -d '{"release_id": "<id from the first call>"}' http://127.0.0.1:8080/api/gripper/release
 ```

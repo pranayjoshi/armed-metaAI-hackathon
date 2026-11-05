@@ -86,7 +86,7 @@ export function createSessions(pane, ctx) {
           <div class="flinch-body" data-ref="fbody"></div>
         </section>
 
-        <p class="bench-note">Full report (wrong-action rate, ask rate, latency, grip outcomes per condition): run <code>h2m bench</code>. Sessions are written to <code>data/sessions/&lt;session id&gt;/</code>.</p>
+        <p class="bench-note">Full report (wrong-action rate, ask rate, latency, grip outcomes per condition): run <code>armed bench</code>. Sessions are written to <code>data/sessions/&lt;session id&gt;/</code>.</p>
       </div>
     </div>`;
   const q = {};
@@ -204,7 +204,7 @@ export function createSessions(pane, ctx) {
       q.fchip.innerHTML = "<i></i>not readable";
       q.fbody.innerHTML = `<p class="empty-t">The runtime has no endpoint that serves flinch-test results yet, so none can be shown here.</p>
         <p class="fine muted">Record and score a run from the terminal. Results are written to <code>data/flinch/&lt;run&gt;/report.md</code>:</p>
-        <ul class="cmds"><li><code>h2m flinch record</code></li><li><code>h2m flinch analyse</code></li></ul>`;
+        <ul class="cmds"><li><code>armed flinch record</code></li><li><code>armed flinch analyse</code></li></ul>`;
       return;
     }
     const verdict = String(run.verdict || "").toUpperCase();

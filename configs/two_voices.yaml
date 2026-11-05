@@ -1,0 +1,12 @@
+# Two voices: `armed run --profile live,bed,two_voices --i-have-the-estop` for the takes where
+# someone else speaks and that must show (the bedside beat of the film, "Can you pass Pranay the marker?").
+# Voice Transcribe labels each speaker; the wearer is whoever gives the first "yes" of the
+# session (or the Card's claim). Others' requests become "X asked" cards the wearer answers,
+# and the arm says "Waiting for Pranay." Solo takes stay on live.yaml's ENDPOINTING: with room
+# noise DIARIZATION held a turn open for 16 s (Nov 4).
+speech:
+  mode: DIARIZATION
+  other_speakers: true
+  # Labels are handed out in order of first speech: Pranay speaks first in each session
+  # ("arm yourself", "yes"), so Pranay is A and the chip reads Pranay -> X.
+  speakers: {A: Pranay, B: X}

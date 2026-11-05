@@ -1,4 +1,4 @@
-# H2M operator UI
+# Armed operator UI
 
 Vanilla ES modules, no build step. Three.js is vendored at `web/vendor/three/` and reachable as `import * as THREE from "three"` (import map in `index.html`). Sections open one at a time; there is no long scrolling page.
 
@@ -61,7 +61,7 @@ Dark "instrument bench": ink-blue grounds, one signal hue per meaning, Bricolage
 ## Run it
 
 ```bash
-.venv/bin/h2m run --arm virtual --emg synthetic --vision off --speech off --llm off --port 8091
+.venv/bin/armed run --arm virtual --emg synthetic --vision off --speech off --llm off --port 8091
 ```
 
 Open `http://localhost:8091/`. With the virtual arm, `POST /api/arm/arm` then `POST /api/say {"text":"hand me the cup"}` produces real events. Synthetic EMG can be driven with `POST /api/emg/synthetic {"flexor":0.8,"extensor":0}`. Old UI source (API usage reference): `git show HEAD:web/app.js`.

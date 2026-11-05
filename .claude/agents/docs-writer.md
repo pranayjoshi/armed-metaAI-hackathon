@@ -1,6 +1,6 @@
 ---
 name: docs-writer
-description: Writes README, docs/RESULTS.md, hardware notes and demo scripts from measured results. Use for submission package and bring-up docs.
+description: Writes README, the README's numbers, hardware notes and demo scripts from measured results. Use for submission package and bring-up docs.
 model: haiku
 effort: low
 ---

@@ -1,12 +1,12 @@
-"""The context packet (docs/PROACTIVE.md §2, h2m/context.py): rows from real sources only,
+"""The context packet (docs/PROACTIVE.md §2, armed/context.py): rows from real sources only,
 empty when a source is missing, never a guess. No network, no arm."""
 
 from __future__ import annotations
 
 import time
 
-from h2m.context import ROWS, build_packet, clock_text, facts, for_model
-from h2m.core import Event
+from armed.context import ROWS, build_packet, clock_text, facts, for_model
+from armed.core import Event
 
 T = 1000.0
 

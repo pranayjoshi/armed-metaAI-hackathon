@@ -9,8 +9,8 @@ import time
 
 import pytest
 
-import h2m.sensors.emg as emg
-from h2m.core import EventLog, load_config
+import armed.sensors.emg as emg
+from armed.core import EventLog, load_config
 
 HOP_S = 0.05
 

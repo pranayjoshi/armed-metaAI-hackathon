@@ -1,17 +1,17 @@
 # Replay mode and the software demo
 
 The entry runs with
-**no arm, no API key and no network**. Backend: `h2m/replay.py` (loaders),
-`h2m/scenario.py` (scripted simulation), `h2m/sim_view.py` (schematic table view),
-`h2m/server.py::create_replay_app` (HTTP).
+**no arm, no API key and no network**. Backend: `armed/replay.py` (loaders),
+`armed/scenario.py` (scripted simulation), `armed/sim_view.py` (schematic table view),
+`armed/server.py::create_replay_app` (HTTP).
 
 ```bash
-h2m demo                       # bundled sample + the scripted scenario, http://127.0.0.1:8080
-h2m demo --loop                # re-run the scenario after it ends (demo.loop_pause_s)
-h2m demo --no-scenario         # the bundled sample only
-h2m replay data/incidents/<id> # one saved incident
-h2m replay data/sessions/<id>  # a session, plus the incidents it saved
-h2m replay data/incidents      # a folder of incidents (newest 200)
+armed demo                       # bundled sample + the scripted scenario, http://127.0.0.1:8080
+armed demo --loop                # re-run the scenario after it ends (demo.loop_pause_s)
+armed demo --no-scenario         # the bundled sample only
+armed replay data/incidents/<id> # one saved incident
+armed replay data/sessions/<id>  # a session, plus the incidents it saved
+armed replay data/incidents      # a folder of incidents (newest 200)
 .venv/bin/python scripts/make_demo_sample.py   # regenerate data/demo/ (about 10 s)
 ```
 
@@ -23,8 +23,8 @@ h2m replay data/incidents      # a folder of incidents (newest 200)
   `/api/stop`.
 - **Same local-API rules** as the live server (`docs/LOCAL_API.md`): Host must be
   `127.0.0.1` or `localhost`, a foreign `Origin` is refused (403, WebSocket 1008), and any
-  non-GET except `/api/stop` needs `X-H2M-Token`. `GET /` writes the token meta tag and
-  also `<meta name="h2m-mode" content="replay">`. A hosted deployment therefore needs to
+  non-GET except `/api/stop` needs `X-Armed-Token`. `GET /` writes the token meta tag and
+  also `<meta name="armed-mode" content="replay">`. A hosted deployment therefore needs to
   reach it as `localhost` (for example a tunnel); the Host check is not relaxed.
 - **Labels.** Every payload carries `label` and `simulation`:
 
@@ -33,24 +33,24 @@ h2m replay data/incidents      # a folder of incidents (newest 200)
   | `SIMULATION` | the scenario, the bundled sample (`"synthetic": true` in meta.json), or an incident whose saved `provenance.simulation` is true (virtual arm, synthetic EMG or the virtual camera) |
   | `RECORDED` | `provenance.simulation` is false: real arm, real EMG, real camera |
   | `UNKNOWN SOURCE` | no provenance (incidents saved before this change) |
-  | `REPLAY` | the server-level label in `h2m replay` (each recording has its own) |
+  | `REPLAY` | the server-level label in `armed replay` (each recording has its own) |
 
 - **Explanations.** A stored `explanation.json` is shown as stored, with its `source`
   (`wonder`, `fallback` or `canned`). With none stored, the fixed text in
-  `h2m/replay.py::CANNED_EXPLANATION` is shown with `"source": "canned"`,
+  `armed/replay.py::CANNED_EXPLANATION` is shown with `"source": "canned"`,
   `"canned": true`, `"stored": false` and a `note`. Never present it as model output.
 - **Proposed rules** are shown with `"approved": false` and the problems the runtime's
   validation would find (unknown zone or tag). Replay never saves one.
 
-## The scripted scenario (`h2m demo`)
+## The scripted scenario (`armed demo`)
 
-The real runtime (`H2M`: grammar, gate, rules, routing, learner, incident capture) with
+The real runtime (`Armed`: grammar, gate, rules, routing, learner, incident capture) with
 the virtual arm, `SyntheticSource` EMG on the default profile, no camera (the learner
 samples a rendered schematic of the virtual table instead), speech and voice off, the
 compiler LLM off and the Muse client replaced by `CannedMuse`. It refuses to start
 unless the arm backend is `virtual` and the EMG is synthetic. Rules and incidents go to a
 temp work dir, never `data/rules` or `data/incidents`. Pacing is `demo:` in
-`configs/h2m.yaml`; every gate, rule and arm threshold is the shipped one.
+`configs/armed.yaml`; every gate, rule and arm threshold is the shipped one.
 
 Steps (`steps[].name`): `setup`, `request` ("hand me the cup": the gate asks), `confirm`
 (scripted, the same `confirm(by="ui")` as a click), `carry` (direct route, until the

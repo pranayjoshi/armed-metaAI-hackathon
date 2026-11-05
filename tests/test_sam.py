@@ -1,4 +1,4 @@
-"""SAM 3.1 client and scan scheduler (h2m/sensors/sam.py). No network: the HTTP layer is a
+"""SAM 3.1 client and scan scheduler (armed/sensors/sam.py). No network: the HTTP layer is a
 fake ``post``; the key is a fake value set in the environment for the duration of a test."""
 
 from __future__ import annotations
@@ -11,11 +11,11 @@ import httpx
 import numpy as np
 import pytest
 
-from h2m.core import EventLog, now
-from h2m.sensors.sam import (
+from armed.core import EventLog, now
+from armed.sensors.sam import (
     _B85 as B85,
 )
-from h2m.sensors.sam import (
+from armed.sensors.sam import (
     EVENT_REASONS,
     SamClient,
     ScanScheduler,
@@ -32,7 +32,7 @@ def box_token(x1, y1, x2, y2, w=640, h=360, c=None):
     return f"<|box;x1={x1};y1={y1};x2={x2};y2={y2};w={w};h={h}{extra}|>"
 
 
-# ── a one_bit mask encoder, the mirror of h2m.sensors.sam.decode_one_bit_mask ────────────
+# ── a one_bit mask encoder, the mirror of armed.sensors.sam.decode_one_bit_mask ────────────
 _TOP, _BOTTOM, _M32 = 1 << 24, 1 << 16, 0xFFFFFFFF
 
 
@@ -206,7 +206,7 @@ def test_live_face_reply_fixture_decodes_to_a_face_sized_blob():
     xs, ys = [p[0] for p in m.polygon], [p[1] for p in m.polygon]
     assert m.bbox[0] - 0.01 <= min(xs) and max(xs) <= m.bbox[2] + 0.01
     assert m.bbox[1] - 0.01 <= min(ys) and max(ys) <= m.bbox[3] + 0.01
-    from h2m.sensors.sam import _mask_rasters
+    from armed.sensors.sam import _mask_rasters
 
     [raster] = _mask_rasters(text)
     assert raster.shape == (154, 159) and 0.5 < raster.mean() < 0.9  # a face fills most of its box
@@ -301,7 +301,7 @@ def test_bad_frame_is_reported_not_sent(key):
 
 # ── scene change ──────────────────────────────────────────────────────────────
 def test_scene_change_needs_a_real_pixel_difference():
-    from h2m.sensors.sam import _thumbnail
+    from armed.sensors.sam import _thumbnail
 
     a = _thumbnail(np.zeros((360, 640, 3), np.uint8))
     b = _thumbnail(np.zeros((360, 640, 3), np.uint8))

@@ -18,7 +18,7 @@ export function portalFacts(s, history, rulesCount, rulesError) {
   const out = {};
   out.replay = replayFact(s);
   if (!s.arm) {
-    // Replay server with no running simulation (`h2m replay <dir>`): the snapshot has no arm, EMG, vision or events.
+    // Replay server with no running simulation (`armed replay <dir>`): the snapshot has no arm, EMG, vision or events.
     const quiet = { text: "no simulation running", tone: "" };
     return { ...out, mind: quiet, stage: quiet, flow: quiet, signals: quiet, learn: quiet, lab: quiet };
   }
@@ -132,6 +132,18 @@ export function healthItems(s) {
     tag: "",
     tone: l.error ? "bad" : l.enabled ? "muse" : "",
   });
+
+  // Desk: the desk check's counter (rubbish to the bin, what it keeps), from state.proactive.desk
+  const d = s.proactive?.desk;
+  if (d && d.total) {
+    items.push({
+      key: "Desk",
+      value: `${d.cleared}/${d.total} cleared`,
+      tag: d.kept?.length ? `${d.kept.join(", ")} kept` : "",
+      tone: d.cleared >= d.total ? "ok" : "",
+      title: "rubbish carried to the bin this session",
+    });
+  }
 
   // Cards: straight from state.selection (absent in snapshots that predate it, so no item then)
   const c = s.selection;

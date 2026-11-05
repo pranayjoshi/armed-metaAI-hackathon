@@ -4,7 +4,7 @@ Run from a shell that has camera access (your own terminal):
     python scripts/cam_preview.py
 
 Press q or Esc in the preview window to quit. The top camera is rotated 180 degrees,
-the same as in scripts/hw_env.sh. Override indices with H2M_TOP_CAM / H2M_WRIST_CAM.
+the same as in scripts/hw_env.sh. Override indices with ARMED_TOP_CAM / ARMED_WRIST_CAM.
 """
 
 import os
@@ -13,8 +13,8 @@ import time
 
 import cv2
 
-TOP = int(os.environ.get("H2M_TOP_CAM", "0"))
-WRIST = int(os.environ.get("H2M_WRIST_CAM", "1"))
+TOP = int(os.environ.get("ARMED_TOP_CAM", "0"))
+WRIST = int(os.environ.get("ARMED_WRIST_CAM", "1"))
 SIZE = (640, 480)
 
 

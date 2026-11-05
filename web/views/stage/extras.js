@@ -41,7 +41,7 @@ function routeOf(r, routes) {
   return Array.isArray(r) && r.length > 1 && r.every((p) => Array.isArray(p) && p.length >= 2 && p.every(Number.isFinite)) ? r : null;
 }
 
-// the nine-step chain (docs/DEMO_STORY.md "Naming what runs")
+// the nine-step chain (docs/ARMED_IDEA.md)
 const CHAIN = [
   { n: 1, chips: [["Muse Spark 1.3", MUSE]], why: "image in, tools out, under 2 s", key: "spark" },
   { n: 2, chips: [["EMG decoder", ARMED]], why: "signal processing, no weights" },

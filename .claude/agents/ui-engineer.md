@@ -1,6 +1,6 @@
 ---
 name: ui-engineer
-description: Frontend and server work in web/ and h2m/server.py: brace meter, Stage view, incident view, rules page, setup/flinch-test results.
+description: Frontend and server work in web/ and armed/server.py: brace meter, Stage view, incident view, rules page, setup/flinch-test results.
 model: sonnet
 effort: medium
 ---

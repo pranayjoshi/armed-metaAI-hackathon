@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from h2m.core import load_config
-from h2m.robot import ArmState, build_arm
-from h2m.robot.skills import plan_home, plan_pick_place
+from armed.core import load_config
+from armed.robot import ArmState, build_arm
+from armed.robot.skills import plan_home, plan_pick_place
 
 
 @pytest.fixture
@@ -153,9 +153,9 @@ def test_a_failing_empty_check_keeps_the_grip(arm):
 
 
 def test_home_and_point_never_command_the_gripper_unless_asked():
-    from h2m.robot.skills import load_poses, plan_point
+    from armed.robot.skills import load_poses, plan_point
 
-    lib = load_poses(__import__("h2m.core", fromlist=["ROOT"]).ROOT / "tests" / "fixtures" / "poses.yaml")
+    lib = load_poses(__import__("armed.core", fromlist=["ROOT"]).ROOT / "tests" / "fixtures" / "poses.yaml")
     slot = lib.slots["slot_1"]
     for plan in (plan_home(lib), plan_point(lib, slot)):
         assert all("gripper" not in wp.joints for wp in plan.waypoints)

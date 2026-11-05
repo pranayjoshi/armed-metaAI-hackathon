@@ -53,7 +53,7 @@ function cards(s, mem, ctx, confirming) {
   const answer = !confirming && asked ? freshReply(s, mem, ctx.now - 15000) : "";
   if (confirming) {
     const said = s.reply && String(s.reply).startsWith(card.label) ? String(s.reply) : "";
-    // The runtime speaks this exact question (h2m/app.py); it is only repeated here if the reply is not it.
+    // The runtime speaks this exact question (armed/app.py); it is only repeated here if the reply is not it.
     cap = said || `${card.label}? Twitch again to confirm, or double twitch to go back.`;
   }
   const body = `<div class="hero${confirming ? " big" : ""}" data-kind="${esc(card.kind)}">

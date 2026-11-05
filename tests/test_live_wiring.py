@@ -6,18 +6,18 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from h2m.compiler.llm import MuseCompiler
-from h2m.core import EventLog, load_config
-from h2m.robot import ArmState
-from h2m.sensors.emg import EmgService, SyntheticSource
-from h2m.server import create_app
+from armed.compiler.llm import MuseCompiler
+from armed.core import EventLog, load_config
+from armed.robot import ArmState
+from armed.sensors.emg import EmgService, SyntheticSource
+from armed.server import create_app
 from tests import test_app_embodied as base
 from tests.test_app_embodied import FakeVision, prove_empty, run
 
-h2m = base.h2m  # the shared app fixture
+armed = base.armed  # the shared app fixture
 
 TOKEN = "t0k"
-GOOD = {"X-H2M-Token": TOKEN}
+GOOD = {"X-Armed-Token": TOKEN}
 
 
 def emg_service(log, hardware=False):
@@ -43,49 +43,49 @@ def test_mock_is_refused_with_the_real_band_and_for_unknown_gestures():
         emg_service(EventLog()).mock("wave")
 
 
-def test_the_emg_source_switches_live_and_disarms_first(h2m):
-    c = TestClient(create_app(h2m, token=TOKEN), base_url="http://127.0.0.1")
+def test_the_emg_source_switches_live_and_disarms_first(armed):
+    c = TestClient(create_app(armed, token=TOKEN), base_url="http://127.0.0.1")
     r = c.post("/api/emg/source", json={"source": "synthetic"}, headers=GOOD)
-    assert r.json()["changed"] is True and h2m.emg.source.name == "synthetic"
-    assert h2m.arm.state is ArmState.DISARMED and h2m._emg_problem in h2m.arm.guards
+    assert r.json()["changed"] is True and armed.emg.source.name == "synthetic"
+    assert armed.arm.state is ArmState.DISARMED and armed._emg_problem in armed.arm.guards
     assert c.post("/api/emg/mock/twitch", headers=GOOD).status_code == 200
     assert c.post("/api/emg/source", json={"source": "synthetic"}, headers=GOOD).json()["changed"] is False
     assert c.post("/api/emg/source", json={"source": "myo"}, headers=GOOD).status_code == 409
-    h2m.emg.stop(wait_s=1.0)
+    armed.emg.stop(wait_s=1.0)
 
 
-def test_a_mock_brace_freezes_a_moving_arm(h2m):
-    prove_empty(h2m)
-    [r] = h2m.run_tool_calls([("gesture", {"name": "nod"})])
-    assert r.executed and h2m.arm.state is ArmState.MOVING
-    run(h2m, 0.3)
-    emg_service(h2m.log).mock("brace")  # the same event path the decoder uses
-    assert h2m.arm.state is ArmState.STOPPED
+def test_a_mock_brace_freezes_a_moving_arm(armed):
+    prove_empty(armed)
+    [r] = armed.run_tool_calls([("gesture", {"name": "nod"})])
+    assert r.executed and armed.arm.state is ArmState.MOVING
+    run(armed, 0.3)
+    emg_service(armed.log).mock("brace")  # the same event path the decoder uses
+    assert armed.arm.state is ArmState.STOPPED
 
 
-def test_mock_endpoints_need_the_synthetic_source_and_the_proactive_layer(h2m):
-    c = TestClient(create_app(h2m, token=TOKEN), base_url="http://127.0.0.1")
+def test_mock_endpoints_need_the_synthetic_source_and_the_proactive_layer(armed):
+    c = TestClient(create_app(armed, token=TOKEN), base_url="http://127.0.0.1")
     assert c.post("/api/emg/mock/twitch", headers=GOOD).status_code == 409  # EMG off
     assert c.post("/api/emg/mock/twitch").status_code == 403  # no token
-    h2m.emg = emg_service(h2m.log)
+    armed.emg = emg_service(armed.log)
     assert c.post("/api/emg/mock/twitch", headers=GOOD).json()["gesture"] == "twitch"
     assert c.post("/api/emg/mock/flinch", headers=GOOD).status_code == 409
-    assert h2m.proactive is None
+    assert armed.proactive is None
     assert c.post("/api/sound/mock", json={"label": "knock"}, headers=GOOD).status_code == 409
 
 
-def test_seen_objects_take_their_taught_slot_until_the_table_is_calibrated(h2m):
+def test_seen_objects_take_their_taught_slot_until_the_table_is_calibrated(armed):
     seen = [{"id": "cup", "name": "paper cup", "table_xy": (0.91, 0.07), "stale": False},
             {"id": "mug", "name": "mug", "table_xy": (0.5, 0.5), "stale": False}]
-    h2m.vision = FakeVision(seen)
-    assert h2m.visible_objects() == seen  # off by default: positions are SAM's
-    h2m.cfg["vision"] = {**h2m.cfg["vision"], "assume_slots": True}
-    first_slot = list(h2m.arm.poses.slots.values())[0].table_xy
-    [cup] = h2m.visible_objects()  # an object outside the catalog has no slot: dropped
+    armed.vision = FakeVision(seen)
+    assert armed.visible_objects() == seen  # off by default: positions are SAM's
+    armed.cfg["vision"] = {**armed.cfg["vision"], "assume_slots": True}
+    first_slot = list(armed.arm.poses.slots.values())[0].table_xy
+    [cup] = armed.visible_objects()  # an object outside the catalog has no slot: dropped
     assert cup["table_xy"] == first_slot and cup["position"] == "assumed_slot"
-    assert cup["stale"] is False and h2m.arm.slot_for(cup["table_xy"]) is not None
-    h2m.vision.homography = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
-    assert h2m.visible_objects() == seen  # calibrated: the mapping wins
+    assert cup["stale"] is False and armed.arm.slot_for(cup["table_xy"]) is not None
+    armed.vision.homography = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    assert armed.visible_objects() == seen  # calibrated: the mapping wins
 
 
 def test_every_spark_call_carries_the_token_budget_and_effort(monkeypatch):
@@ -107,12 +107,12 @@ def test_live_profile_turns_the_whole_loop_on():
     assert cfg["selection"]["spark"]["max_tokens"] >= 2048
 
 
-def test_a_profile_can_lift_the_routines_files_quiet_hours(h2m, tmp_path):
-    from h2m.proactive import Proposer
+def test_a_profile_can_lift_the_routines_files_quiet_hours(armed, tmp_path):
+    from armed.proactive import Proposer
 
     def make(**extra):
         cfg = {"proactive": {"enabled": True, **extra}}
-        return Proposer(h2m, cfg, state_dir=tmp_path)
+        return Proposer(armed, cfg, state_dir=tmp_path)
 
     assert make().book.quiet is not None  # configs/routines.yaml: 23:00-07:00
     off = make(quiet_hours="off")
@@ -139,9 +139,9 @@ class _Jaws:
     (("empty", "unsure", "unsure"), False),  # the cable hides the jaws: fail closed
     (("empty", "empty", "holding"), False),
 ])
-def test_the_wrist_camera_proves_the_gripper_empty_only_on_agreement(h2m, answers, empty):
-    h2m.vision = FakeVision([])
-    h2m.vision.wrist = _Wrist()
-    h2m._wrist_client = _Jaws(*answers)
-    ok, _ = h2m.check_gripper_by_wrist()
-    assert ok is empty and h2m.gripper.state().empty is empty
+def test_the_wrist_camera_proves_the_gripper_empty_only_on_agreement(armed, answers, empty):
+    armed.vision = FakeVision([])
+    armed.vision.wrist = _Wrist()
+    armed._wrist_client = _Jaws(*answers)
+    ok, _ = armed.check_gripper_by_wrist()
+    assert ok is empty and armed.gripper.state().empty is empty

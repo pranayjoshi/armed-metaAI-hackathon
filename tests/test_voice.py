@@ -10,8 +10,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from h2m.core import EventLog, now
-from h2m.sensors.voice import (
+from armed.core import EventLog, now
+from armed.sensors.voice import (
     APPROVAL_WORDS,
     DEFAULT_ENDPOINT,
     DEFAULT_MODEL,

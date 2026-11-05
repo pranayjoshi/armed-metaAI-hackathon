@@ -79,7 +79,7 @@ export class Sessions {
     this.listSig = sig;
     this.pane.querySelector(".ses-count").textContent = String(items.length);
     if (!items.length) {
-      this.listEl.innerHTML = `<div class="empty-mini"><b>No sessions recorded in this folder</b><p>A session is a folder with <code>meta.json</code>, <code>events.jsonl</code> and <code>trials.jsonl</code>, written while recording from the Lab. Try <code>h2m replay data/sessions</code>.</p></div>`;
+      this.listEl.innerHTML = `<div class="empty-mini"><b>No sessions recorded in this folder</b><p>A session is a folder with <code>meta.json</code>, <code>events.jsonl</code> and <code>trials.jsonl</code>, written while recording from the Lab. Try <code>armed replay data/sessions</code>.</p></div>`;
       return;
     }
     const keep = this.listEl.scrollTop;
@@ -116,7 +116,7 @@ export class Sessions {
   paintDetail() {
     const d = this.data;
     if (!this.hub.lib.sessions.length) {
-      this.detail.innerHTML = `<div class="panel ses-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3.5" width="16" height="17" rx="2.5"/><path d="M8 8.5h8M8 12h8M8 15.5h5"/></svg><b>No sessions recorded in this folder</b><p>Point replay at a folder of sessions: <code>h2m replay data/sessions</code>.</p></div>`;
+      this.detail.innerHTML = `<div class="panel ses-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3.5" width="16" height="17" rx="2.5"/><path d="M8 8.5h8M8 12h8M8 15.5h5"/></svg><b>No sessions recorded in this folder</b><p>Point replay at a folder of sessions: <code>armed replay data/sessions</code>.</p></div>`;
       return;
     }
     if (!d) {

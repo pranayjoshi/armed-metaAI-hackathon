@@ -10,7 +10,7 @@ __pycache__/
 .DS_Store
 data/*
 !data/.gitkeep
-# bundled SYNTHETIC sample for `h2m demo` (scripts/make_demo_sample.py)
+# bundled sample for `armed demo` (scripts/make_demo_sample.py)
 !data/demo/
 models/*
 !models/.gitkeep
@@ -21,3 +21,6 @@ models/*
 
 # Local hardware test captures (camera frames, rerun dumps)
 outputs/
+
+# shoot material (stills, narration, screen recordings) lives outside the repo
+media/

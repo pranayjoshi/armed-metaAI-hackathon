@@ -1,6 +1,8 @@
 # Armed: acting without being asked
 
-Written November 3, 2026. How context reaches Muse continuously, what Muse is allowed to do with it, how the person shapes it, and the full list of things that happen on their own at the desk and at the headboard. Builds on `ACTIONS.md` (what the arm can do), `UI.md` (the card), `SELECTION_API.md` (the card state machine; unchanged) and the trust ladder in `PROACTIVE.md` §2. What exists today: the ranker already uses history, time of day and head direction (`h2m/intent.py`), the world tracker knows the gripper and the hands (`h2m/world.py`), and cards can appear on their own when the arm is idle. What does not exist: routines, triggers, a context packet, or any action that runs without a twitch.
+Written November 3, 2026. How context reaches Muse continuously, what Muse is allowed to do with it, how the person shapes it, and the full list of things that happen on their own at the desk and at the headboard. Builds on the skills in `configs/skills.yaml` (what the arm can do), `UI.md` (the card), `SELECTION_API.md` (the card state machine; unchanged) and the trust ladder in `PROACTIVE.md` §2. What exists today: the ranker already uses history, time of day and head direction (`armed/intent.py`), the world tracker knows the gripper and the hands (`armed/world.py`), and cards can appear on their own when the arm is idle. What does not exist: routines, triggers, a context packet, or any action that runs without a twitch.
+
+**Revised November 4, 2026 (desk replan).** Water is a `think` routine (Muse judges it; no card of its own). `desk_check` clears trash with a veto ring per item. `hold_it` raises on `on_call_holding`, `chips` on `offered`, and `keys` on `leaving`. `pills` announces. Two trust flags, `trust.announce_near_person` and `trust.announce_carries`, let announce run near a person and while carrying (§3). The routine lists below match `configs/routines.yaml`.
 
 ---
 
@@ -43,12 +45,15 @@ The model proposes. A deterministic policy decides what each proposal is allowed
 | Rung | Allowed for | What happens | Person's control |
 |---|---|---|---|
 | **Does it** | non-motion, non-message actions that cannot harm: a lamp, turning to look at you, a spoken reminder, a card going quiet | Happens, with a one-line note on the card strip | Toggle per action; quiet hours apply |
-| **Announces, then does it** (reviewed relaxation) | motion the person has pre-approved as a routine, away from the body: bring the cup to the hand spot, tidy at six, phone to the holder | Robot says what it is about to do, a 5 s veto window with the card showing *brace to cancel*, then it runs. Brace stops it at any point as always | Only for routines the person set to *auto*; off by default; never for near-person stages |
+| **Announces, then does it** (reviewed relaxation) | motion the person has pre-approved as a routine: tidy the desk, take the chips from a visitor, hand the pills over, or (away from the body) bring the cup to the hand spot | Robot says what it is about to do, a 5 s veto window with the card showing *brace to cancel*, then it runs. Brace stops it at any point as always | Only for routines the person set to `announce` (`auto` is the same word); off unless `trust.announce_enabled` is literally true; near a person or carrying only with the two flags below |
 | **Proposes** | everything else that moves, every message, anything near the body | A card; nothing happens without a twitch; the final approach to the face or hand always waits for a twitch even inside an auto routine | Always on |
 | **Asks the named person** | requests that came from someone else's voice | Card says *X asked*; the robot says who it is waiting for | Always on |
 | **Never** | free model text to a motor, a message or a stranger; a rule that widens anything; anything during quiet hours except a stop | — | — |
 
-The twitch at the moment of approach is kept even for automatic routines because it is cheap for the person and it is the thing that makes "the robot came at my face on its own" impossible to say. The arm can come to the hand spot by itself; it comes to the mouth only when asked, every time.
+The twitch at the moment of approach is kept for every routine except one the two trust flags let announce near a person or while carrying (the chips, the desk clean-up, the pills). For those, the veto ring replaces the twitch: a brace or *stop* cancels the ring and freezes the motion. Everything else keeps the twitch, because it is cheap for the person and it is the thing that makes "the robot came at my face on its own" impossible to say. The arm can come to the hand spot by itself; it comes to the mouth only when asked, every time.
+
+### The two trust flags
+`trust.announce_near_person` and `trust.announce_carries` (in `configs/live.yaml`, set literally `true` for the film; not set in `configs/armed.yaml`, so a missing flag is off) let a routine set to `announce` run its veto ring when the arm would otherwise make it a card because it goes near a person or carries something. With either flag off, that routine is a card. `trust.announce_enabled` must still be true for any announce to run. Nothing else in the gate changes: the brace freeze, quiet hours and the `after_stop_s` window still apply (`armed/safety.py`, `ladder`).
 
 ### Rate and manners
 - At most one unsolicited card every `propose_min_gap_s` (default 120 s) unless the trigger is a sound, another person, or a routine that is overdue.
@@ -65,13 +70,17 @@ The twitch at the moment of approach is kept even for automatic routines because
 |---|---|---|
 | Routine due | the clock and the routine list | the routine's card, or its announce-then-do |
 | Elapsed since last X | history | water, a break, a position change reminder |
-| Phone buzz or ring | mic event, phone on the table seen moving | *Show you the phone?* |
+| Phone buzz or ring | a *phone buzz* event (from the console's event panel, or any sound hook), phone on the table seen moving | *Show you the phone?* |
 | Knock, doorbell, a voice at the door | mic event, diarization | *Say you're coming?*, or the robot announces on its own if set |
 | Another person asks | diarization + speech | an *X asked* card, waits for you |
 | You sit down / lie down / stand up | posture change | lamp, routine context switches between desk and bed profiles |
 | Hands go under the desk, head down | posture | *Light on your hands?* |
 | Hand held out with an object | world tracker | *Take this?* |
-| Desk check every `desk_check_every` (default 30 min) | the clock, then a scene sort by Spark over the overhead frame and the world tracker | nothing if the desk is clear; otherwise *Put it back?* for catalog objects off their slot, *Clear N things?* for unwanted items |
+| Water due (every 60 min, `water`, `think`) | the clock; Muse is woken with the routine as its reason | Muse says *It's water time.* and suggests the closest thing on the desk: the protein shake, with `bring_drink` |
+| On a phone call, something held out (phone at the ear, jar held out) | laptop camera, Muse's `on_call_holding` moment | *Hold the jar?* (`hold_it`, ask) |
+| Someone offers something (a visitor in frame says *have some chips*) | laptop camera and speech, Muse's `offered` moment | `chips` (announce): a veto ring, then the arm takes it at the visitor's spot |
+| Getting up to leave | laptop camera, Muse's `leaving` moment | *Your keys?* (`keys`, ask), then the keys are held out from slot 3 |
+| Desk check every 30 min (`desk_check`, announce) | the clock, then the overhead scan: items tagged `trash` | nothing when no trash is out; otherwise one card and one five-second ring per item, into the tray. Never the phone or the keys |
 | New object appears | scene diff | *Read it?* for paper; otherwise nothing |
 | You look at the same thing twice in a minute | head direction | that object's card moves to the top; it is a tie-breaker, never a trigger on its own |
 | Your own speech mentions a need | diarized speech | the matching card ("so thirsty" → water); never acted on without the card |
@@ -83,15 +92,18 @@ The twitch at the moment of approach is kept even for automatic routines because
 ## 5. Routines: the person's schedule, editable, and suggested by Muse
 
 ### 5.1 What a routine is
-`name · action · when · mode · window · profile`. *When* is a time, an interval, or a trigger from §4. *Mode* is *ask* (a card), *auto* (announce-then-do, §3) or *off*. *Window* is how long the card waits before it lapses. *Profile* is desk or bed.
+`name · action · when · mode · window · profile`. *When* is a time, an interval, or a trigger from §4. *Mode* is *never*, *ask* (a card), *announce* (announce-then-do, §3; `auto` is the same word), or *do* (no motion, e.g. speech). *Window* is how long the card waits before it lapses. *Profile* is desk or bed.
 
 ```yaml
 routines:
-  water:   {action: bring_cup_to_hand,  every: 60m,  mode: ask,  window: 5m,  profile: bed}
-  pills:   {action: pills_to_hand,      at: ["08:00", "20:00"], mode: ask, window: 30m, profile: bed}
+  water:   {action: think,              every: 60m,  mode: ask,  window: 5m,  profile: desk}   # Muse judges it from the frame
+  pills:   {action: hand_over,          object: pill_cup, every: 30m, mode: announce, window: 5m, profile: bed, say: "It's {time} Pranay, time for your pills."}
   temp:    {action: thermometer,        at: ["09:00", "21:00"], mode: ask, profile: bed}
   phone:   {action: show_phone,         on: phone_buzz, mode: ask, window: 90s}
-  desk_check: {action: clear_desk,      every: 30m, mode: auto, profile: desk, keep: [pen_cup], never_touch: [anything within 15 cm of a hand]}
+  desk_check: {action: pick_place, object: trash, every: 30m, mode: announce, window: 2m, profile: desk, conditions: ["hand not at keyboard"]}
+  hold_it: {action: hold_jar,           on: on_call_holding, mode: ask, window: 30s, profile: desk}
+  chips:   {action: accept_item,        on: offered, mode: announce, window: 30s, profile: desk}
+  keys:    {action: hand_keys,          object: keys, on: leaving, mode: ask, window: 60s, profile: desk}
   lamp:    {action: lamp_on,            on: sit_down,  mode: does, profile: desk}
   night:   {action: lights_off,         on: lie_down_after_22, mode: ask}
   knock:   {action: say_coming,         on: knock, mode: ask}
@@ -100,18 +112,20 @@ quiet_hours: "23:00-07:00"
 named_person: X
 ```
 
+The block is the design. `configs/routines.yaml` is what runs: it has `water`, `desk_check`, `phone`, `knock`, `take_it`, `hold_it`, `chips`, `keys` and `pills`. `temp`, `lamp`, `night` and `checkin` are not in that file yet.
+
 ### 5.1b The bed's hand overs (built Nov 4)
-One taught skill, `hand_over` (`configs/skills.yaml`: pick from `{slot}`, carry to `{handover}_above`, lower to `{handover}_release`, dwell, open, retreat), serves every object. `{handover}` is the object's **pose set**, from `arm.handover_sets` in `configs/bed.yaml`: pill cup → `handover`, water bottle (`cup`) → `handover_bottle`, marker → `x_hand`. Each set has its own measured hand spot in `routes_bed.yaml` (`handover.sets`), and the hand-over-the-spot check (`spot_clear`), the "can I watch the lowering" check (`spot_watchable`) and the hand watchdog all run against that set's spot, never another's. A set with a missing or untaught pose, or with no spot, is refused at the gate before anything moves. The close uses the slot's taught `point` jaws (`arm.use_taught_touch_close`) like every other grasp. The skill is `near_person`, `carries`, capped at `near_person_speed_cap`, and always a card; `trust.announce_enabled` and `near_person_enabled` are untouched.
+One taught skill, `hand_over` (`configs/skills.yaml`: pick from `{slot}`, carry to `{handover}_above`, lower to `{handover}_release`, dwell, open, retreat), serves every object. `{handover}` is the object's **pose set**, from `arm.handover_sets` in `configs/bed.yaml`: pill cup → `handover`, water bottle (`cup`) → `handover_bottle`, marker → `x_hand`. Each set has its own measured hand spot in `routes_bed.yaml` (`handover.sets`), and the hand-over-the-spot check (`spot_clear`), the "can I watch the lowering" check (`spot_watchable`) and the hand watchdog all run against that set's spot, never another's. A set with a missing or untaught pose, or with no spot, is refused at the gate before anything moves. The close uses the slot's taught `point` jaws (`arm.use_taught_touch_close`) like every other grasp. The skill is `near_person`, `carries`, capped at `near_person_speed_cap`, and a card. A routine that sets it to `announce` runs the veto ring instead only when `trust.announce_near_person` and `trust.announce_carries` are both on (§3). `near_person_enabled` is untouched.
 
 ```yaml
-pills: {action: hand_over, object: pill_cup, every: 30m, mode: ask, profile: bed, label: "Pills?",
+pills: {action: hand_over, object: pill_cup, every: 30m, mode: announce, window: 5m, profile: bed, label: "Pills?",
         say: "It's {time} Pranay, time for your pills."}
 ```
 
-- **Spoken at card time.** In *ask* mode a routine's `say` line is spoken once, when its card goes up (`{time}` is the local time, "8 pm" or "8:30 pm"). Speech only; the handover starts only after the person confirms the card. It stays silent in quiet hours, when speech is muted (`/api/speech/mute`) or `proactive.speak` is false. The announce rung still says its line with "Brace to cancel", and stays off.
+- **Spoken at card time.** A routine's `say` line is spoken once, when its card goes up (`{time}` is the local time, "8 pm" or "8:30 pm"). In *ask* mode the handover starts only after the person confirms the card. In *announce* mode the line is said, then the veto ring runs, then the handover starts unless a brace or *stop* cancels it; the pills need the two trust flags, since the handover is near a hand. The line stays silent in quiet hours, when speech is muted (`/api/speech/mute`) or `proactive.speak` is false. The announce rung is off unless `trust.announce_enabled` is literally true; `configs/live.yaml` sets it for the film.
 - **Pills, then water.** `arm.handover_then: {pill_cup: cup}`: when the pill hand over completes and the gripper is proven empty, the water card is raised straight away through the normal tool path. Two cards, two confirmations. A stop, cancel or re-arm in between drops it.
 - **The marker is two-stage** (`arm.handover_two_stage: [marker]`). *X asked: marker* (or `hand_over` on the marker from any card) ends its first confirm at the lift: the arm picks the marker and stops holding at `marker_slot.above`, nothing else moves, and a second card *Hand it to X?* goes up. Only its confirm runs the carry: `x_hand_above`, lower, open, retreat, home. Like the handover's two stages, the second runs the gate again on fresh facts (holding the marker, above the slot, the spot clear for `x_hand`) under the request epoch and arm_count stage 1 started at, in flight so a brace latches. A brace, stop, cancel or re-arm between the stages drops the card; the marker stays held and the arm stays stopped (*go home* brings it back).
-- **Typed or spoken.** "pills", "my pills" and "hand me my pills" resolve to the pill cup's `hand_over` and go through the same gate and confirmation (`h2m/compiler/grammar.py`).
+- **Typed or spoken.** "pills", "my pills" and "hand me my pills" resolve to the pill cup's `hand_over` and go through the same gate and confirmation (`armed/compiler/grammar.py`).
 
 ### 5.2 How the person edits it
 A Routines page on the console: one row per routine, a cadence picker, the mode as three words, a snooze count, and *last ran*. From the chair or the bed, the same edits by voice ("water every two hours", "stop the water reminders", "pills at nine instead"), each confirmed by a card and a twitch. Changes by voice from anyone else go through the *X asked* rung.
@@ -128,8 +142,8 @@ Bed profile: the arm clamped to the headboard, the bedside screen in far mode, s
 | What happens | Trigger | Rung | What the arm does | Notes |
 |---|---|---|---|---|
 | **Morning** | 08:00 or the first stir after 06:30 | ask | Card *Pills, then water?*; on twitch, the pill cup comes to the hand spot, then the water bottle to the same hand (the bed arm does not reach the mouth; the straw to the mouth is a desk clip) | Muse reads the pill cup's day label aloud before offering it |
-| **Water every hour** | interval, user-set | ask, or auto to the hand spot | Cup from its slot to the hand spot (auto allowed); straw to the mouth on a twitch | A refused water card snoozes an hour; a brace mid-approach freezes and the cup goes back |
-| **Pills** | 08:00 and 20:00 | ask | Pill cup to the hand; the label read aloud; logged | Never auto; a missed window is announced once and logged for X |
+| **Water every hour** | interval, user-set | ask (desk only now, §7) | Not a bed routine any more: the water routine is `think` on the desk, and Muse suggests the shake. The bedside bottle comes up only on the morning card (§5.1b) |
+| **Pills** | every 30 min in `routines.yaml`; 08:00 and 20:00 in the design | announce | The line *It's {time} Pranay, time for your pills.* is said, the veto ring runs, then the pill cup goes to the hand | Near a hand, so it needs the two trust flags; a brace cancels the ring; the label read aloud is design, not built |
 | **Temperature** | 09:00 and 21:00 | ask | Thermometer to the forehead distance; the reading read aloud from the wrist camera and logged | Reviewed; same approach cap as the straw |
 | **Phone** | buzz or ring | ask | Phone from its holder to eye level, follows the face; put back on double twitch or after the call | The holder is a taught slot |
 | **Hold this** | hand held out with a book, a tablet, a cup | ask | `take_this` grasp, then held beside the bed until a twitch releases it | Time-limited hold; load watchdog |
@@ -147,23 +161,22 @@ Bed profile: the arm clamped to the headboard, the bedside screen in far mode, s
 | What happens | Trigger | Rung | What the arm does |
 |---|---|---|---|
 | **You sit down** | posture | does | Lamp on; the arm looks up and nods; the desk profile loads |
-| **Phone buzzes while you type** | mic, scene | ask | Phone to eye level; follows your face; back on double twitch |
-| **Hand held out with the mug** | world tracker | ask | Takes it, waits for your fingers, puts it away |
-| **Hands under the desk, head down** | posture | ask | Holds the torch and points it at your hands |
-| **Jar or bottle held toward the arm** | world tracker, scene | ask | Grips it and holds while you open it; releases on twitch |
+| **Phone buzzes while you type** | the phone-buzz event, scene | ask | Phone to eye level; follows your face; back on double twitch |
+| **A visitor offers something** | laptop camera and speech (`offered`) | announce | Says *I'll take that.*, rings, opens to 70% at the visitor's spot, waits three seconds, closes softly, puts it in the tray. No twitch; a brace or *stop* cancels |
+| **Jar held out while on a call** | laptop camera (`on_call_holding`) | ask | *Hold the jar?*; grips it, holds about 12 s (the fixed dwell in `hold_jar`), then lets go |
 | **Paper held up to the camera** | scene | ask | Reads it aloud |
 | **Something out of place for 60 s** | scene diff | ask | Puts it back |
-| **Every 30 min** (user-editable) | routine, then scene | auto (if set) | If the sort finds out-of-place or unwanted items: announces "checking the desk", shows what and why, 5 s veto, then puts catalog objects back and moves unwanted items to the bin or tray. If it finds nothing it says nothing |
+| **Every 30 min** (user-editable) | routine, then scene | announce (`desk_check`) | If the scan finds trash on the desk (the toy, the printed part, a finished shake): announces "Clearing the desk.", then one five-second ring per item, then puts each into the tray. Never the phone or the keys. If it finds nothing it says nothing. A brace during a ring is a no, and writes a don't-propose |
 | **Ninety minutes of typing** | EMG activity and keyboard posture | does (speech) | "You've been at it ninety minutes." No motion; a stretch is not proposed, since the arm has no business there |
 | **Knock** | mic | ask | Says you're coming |
 | **Another voice asks for something** | diarization | asks the named person | Waits for you |
-| **You stand up and leave** | posture, no person for 5 min | does | Lamp off; the robot goes request-only until you return |
+| **You get up to leave** | laptop camera (`leaving`) | ask | *Your keys?*; the keys come out of slot 3 and are held out at the give spot. The arm says *"Keys. I'd come along, but I'm clamped to the desk."* |
 
 ---
 
 ## 8. What the film gains
 
-Four beats in `DEMO_STORY.md` become unprompted instead of requested, which is the difference the viewer feels: the morning card nobody asked for, the lamp when you sit, the tidy at six that announces itself and waits five seconds, and *Are you okay?* in the bed scene followed by the twitch that clears it. The counters stay: selections up, words to the robot zero.
+Four beats of the film become unprompted instead of requested, which is the difference the viewer feels: the morning card nobody asked for, the lamp when you sit, the tidy at six that announces itself and waits five seconds, and *Are you okay?* in the bed scene followed by the twitch that clears it. The counters stay: selections up, words to the robot zero.
 
 ---
 
@@ -171,11 +184,11 @@ Four beats in `DEMO_STORY.md` become unprompted instead of requested, which is t
 
 | Piece | Where | Cost |
 |---|---|---|
-| Context packet assembler and cadence | `h2m/context.py` (new), fed from world, head, speech, EMG, recorder | half a day |
-| Routines: file, loader, scheduler, the Routines page, voice edits through cards | `h2m/routines.py` (new), console `learn` or a new view | one day |
-| The ladder policy as a pure function with tests; the *auto* rung as a reviewed relaxation with the 5 s veto window and the twitch at the final approach | `h2m/safety.py`, `h2m/selection.py` | half a day plus review |
-| Triggers: mic events (buzz, knock), posture changes, out-of-place timer, hand-held-out | `h2m/sensors/`, `h2m/world.py` | one day |
-| Daily Wonder summary and the one-routine suggestion | `h2m/learning.py` | half a day |
-| Escalation (`are_you_okay`, `get_x`, triple brace) | `h2m/routines.py`, `send_message` | half a day plus review |
+| Context packet assembler and cadence | `armed/context.py` (new), fed from world, head, speech, EMG, recorder | half a day |
+| Routines: file, loader, scheduler, the Routines page, voice edits through cards | `armed/routines.py` (new), console `learn` or a new view | one day |
+| The ladder policy as a pure function with tests; the *auto* rung as a reviewed relaxation with the 5 s veto window and the twitch at the final approach | `armed/safety.py`, `armed/selection.py` | half a day plus review |
+| Triggers: mic events (buzz, knock), posture changes, out-of-place timer, hand-held-out | `armed/sensors/`, `armed/world.py` | one day |
+| Daily Wonder summary and the one-routine suggestion | `armed/learning.py` | half a day |
+| Escalation (`are_you_okay`, `get_x`, triple brace) | `armed/routines.py`, `send_message` | half a day plus review |
 
 Cut order if behind: the daily Wonder suggestion → posture triggers → the auto rung (everything stays *ask*) → escalation. Never cut: routines with *ask* mode, the phone trigger, the context packet, quiet hours.

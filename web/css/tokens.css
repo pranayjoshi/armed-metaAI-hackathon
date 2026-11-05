@@ -1,4 +1,4 @@
-/* H2M design tokens + shared components. Views use these; they never redefine them. */
+/* Armed design tokens + shared components. Views use these; they never redefine them. */
 :root {
   /* ground: ink with a blue cast, three steps */
   --bg-0: #05070b;

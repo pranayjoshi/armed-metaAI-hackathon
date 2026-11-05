@@ -1,4 +1,4 @@
-"""VisionService on SAM masks (h2m/sensors/vision.py, h2m/head.py) and the snapshot fields
+"""VisionService on SAM masks (armed/sensors/vision.py, armed/head.py) and the snapshot fields
 the app publishes from it. No camera (the scene camera is a stub), no network (fake post)."""
 
 from __future__ import annotations
@@ -6,13 +6,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from h2m.app import H2M
-from h2m.core import EventLog, load_config, now
-from h2m.head import face_centre_x, face_third, third_of_x, valid_third
-from h2m.rules import RuleStore
-from h2m.sensors.sam import SamClient
-from h2m.sensors.vision import VisionService, hand_axis, pointing_scores
-from h2m.world import HandsSeen
+from armed.app import Armed
+from armed.core import EventLog, load_config, now
+from armed.head import face_centre_x, face_third, third_of_x, valid_third
+from armed.rules import RuleStore
+from armed.sensors.sam import SamClient
+from armed.sensors.vision import VisionService, hand_axis, pointing_scores
+from armed.world import HandsSeen
 from tests.test_sam import FRAME, FakePost, box_token, mask_token
 
 OBJECTS = [
@@ -187,24 +187,24 @@ def test_offline_vision_starts_with_an_error_and_a_stale_scene(monkeypatch):
 
 # ── the app's gate and snapshot ──────────────────────────────────────────────
 @pytest.fixture
-def h2m(monkeypatch, tmp_path, key):
-    monkeypatch.setattr("h2m.recorder.SESSIONS", tmp_path)
+def armed(monkeypatch, tmp_path, key):
+    monkeypatch.setattr("armed.recorder.SESSIONS", tmp_path)
     cfg = load_config()
     for part in ("emg", "vision", "speech"):
         cfg[part] = {**cfg[part], "source": "off"}
     cfg["arm"] = {**cfg["arm"], "backend": "virtual"}
-    h = H2M(cfg)
+    h = Armed(cfg)
     h.rules = RuleStore("t", root=tmp_path / "rules")
     return h
 
 
-def test_snapshot_publishes_scene_and_calls_from_the_scans(h2m):
-    snap = h2m.snapshot()
+def test_snapshot_publishes_scene_and_calls_from_the_scans(armed):
+    snap = armed.snapshot()
     assert snap["scene"] is None and snap["calls"] == []  # virtual table: nothing to say
     post = FakePost({"paper cup": CUP})
-    h2m.vision = make_vision(post, objects=h2m.cfg["objects"], log=h2m.log)
-    scan = h2m.vision.scheduler.scan_now("card accepted")
-    snap = h2m.snapshot()
+    armed.vision = make_vision(post, objects=armed.cfg["objects"], log=armed.log)
+    scan = armed.vision.scheduler.scan_now("card accepted")
+    snap = armed.snapshot()
     scene = snap["scene"]
     assert set(scene) >= {"masks", "scan_age_s", "scan_ms", "stale", "limit_s"}
     assert scene["masks"] == [{"phrase": "paper cup", "bbox": [0.1, 0.1, 0.5, 0.5]}]
@@ -214,20 +214,20 @@ def test_snapshot_publishes_scene_and_calls_from_the_scans(h2m):
     assert "vision.scan" in {e["kind"] for e in snap["events"]}
 
 
-def test_gate_refuses_to_move_toward_a_stale_target(h2m):
-    from h2m.contract import StepContract, Verb
+def test_gate_refuses_to_move_toward_a_stale_target(armed):
+    from armed.contract import StepContract, Verb
 
-    h2m.vision = make_vision(FakePost({"paper cup": CUP}), objects=h2m.cfg["objects"])
-    scan = h2m.vision.scheduler.scan_now("test")
+    armed.vision = make_vision(FakePost({"paper cup": CUP}), objects=armed.cfg["objects"])
+    scan = armed.vision.scheduler.scan_now("test")
     contract = StepContract(verb=Verb.POINT, object_id="cup", object_name="paper cup", table_xy=(0.192, 0.108))
-    assert h2m._world(contract)["target_visible"] is True
+    assert armed._world(contract)["target_visible"] is True
     scan.t -= 100.0
-    assert h2m._world(contract)["target_visible"] is False
-    assert h2m.visible_objects()[0]["stale"] is True  # still known, just not a target
+    assert armed._world(contract)["target_visible"] is False
+    assert armed.visible_objects()[0]["stale"] is True  # still known, just not a target
 
 
 def test_a_scan_keeps_its_frame_and_fills_the_hand_and_present_rows():
-    from h2m.sensors.sam import FACE, HAND, Mask, Scan
+    from armed.sensors.sam import FACE, HAND, Mask, Scan
 
     vs = make_vision(FakePost({}))
     frame, t = vs._frame_for_scan()
@@ -249,7 +249,7 @@ def test_a_scan_keeps_its_frame_and_fills_the_hand_and_present_rows():
 
 
 def test_scan_diff_emits_hand_out_new_object_and_person_arrived():
-    from h2m.sensors.sam import FACE, HAND, Mask, Scan
+    from armed.sensors.sam import FACE, HAND, Mask, Scan
 
     log = EventLog()
     vs = make_vision(FakePost({}), log=log)

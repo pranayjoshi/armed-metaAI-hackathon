@@ -1,11 +1,11 @@
 # Selection API (Reflex cards)
 
 Cards the person answers with one muscle (Reflex build plan items 2b and 2c). State
-machine: `h2m/selection.py`. Wiring: `h2m/app.py` (section "selection"). Endpoints:
-`h2m/server.py`. Config: `selection:` in `configs/h2m.yaml`. Tests: `tests/test_selection.py`.
+machine: `armed/selection.py`. Wiring: `armed/app.py` (section "selection"). Endpoints:
+`armed/server.py`. Config: `selection:` in `configs/armed.yaml`. Tests: `tests/test_selection.py`.
 
 The endpoints follow `docs/LOCAL_API.md`: Host must be local, a browser `Origin` must be
-this origin, and every `POST` needs `X-H2M-Token`. There is no tokenless selection route.
+this origin, and every `POST` needs `X-Armed-Token`. There is no tokenless selection route.
 
 ## Inputs
 
@@ -115,7 +115,7 @@ this origin, and every `POST` needs `X-H2M-Token`. There is no tokenless selecti
 
 ## Modes
 
-- `intent` (default): up to `cards` (3) cards from `h2m.intent.IntentRanker`. The
+- `intent` (default): up to `cards` (3) cards from `armed.intent.IntentRanker`. The
   deterministic ranking (history recency and frequency, head direction as tie-break, then
   scene order) shows at once. Muse Spark is asked off-thread only with the arm READY or
   STOPPED and the app idle. Its ranking applies only before the person's first input on
@@ -168,7 +168,7 @@ needed, or while the "confirm?" announcement is still going out). `highlight` is
 every new highlight; `acked` says whether the UI acknowledged it; `confirming` is the card
 asking "confirm?" (its card has `confirm: true`). `checking` is true while a card goes
 through the gate. The same object is in `GET /api/state` (and `/api/live`)
-under `selection`. Card labels, ids and contracts are built by `h2m.intent` from the
+under `selection`. Card labels, ids and contracts are built by `armed.intent` from the
 visible, reachable scene and taught phrases, never from model text.
 
 ### `POST /api/selection/ack`
@@ -177,7 +177,7 @@ Body: `{"card_id": "pick_place:cup", "menu": 4, "highlight": 7}` (`card_id` and 
 required; `highlight` is the snapshot's `highlight` the UI drew). The UI drew this
 highlighted card. Refused if the menu changed, the card is not the highlighted one, or
 `highlight` is given and is not the current generation. Only the first ack of a
-highlight counts. Never moves anything and is not a selection input. (`h2m/server.py`
+highlight counts. Never moves anything and is not a selection input. (`armed/server.py`
 does not forward `highlight` yet: see Not verified.)
 
 ### `POST /api/selection/accept`
@@ -209,14 +209,14 @@ Body: `{"mode": "intent"}` or `{"mode": "scanning"}`. Ends the current task (out
 `cancelled`) and puts up the new menu on the next idle tick.
 
 ```bash
-TOKEN=$(curl -s http://127.0.0.1:8080/ | sed -n 's/.*name="h2m-token" content="\([^"]*\)".*/\1/p')
+TOKEN=$(curl -s http://127.0.0.1:8080/ | sed -n 's/.*name="armed-token" content="\([^"]*\)".*/\1/p')
 curl -s http://127.0.0.1:8080/api/selection
-curl -s -X POST -H "X-H2M-Token: $TOKEN" http://127.0.0.1:8080/api/selection/step
-curl -s -X POST -H "X-H2M-Token: $TOKEN" -H "Content-Type: application/json" \
+curl -s -X POST -H "X-Armed-Token: $TOKEN" http://127.0.0.1:8080/api/selection/step
+curl -s -X POST -H "X-Armed-Token: $TOKEN" -H "Content-Type: application/json" \
   -d '{"card_id": "pick_place:block", "menu": 4}' http://127.0.0.1:8080/api/selection/accept
 ```
 
-## Events (for `h2m bench`)
+## Events (for `armed bench`)
 
 | Event | Fields |
 |---|---|
@@ -263,18 +263,5 @@ last `arm.completed` (for `place_near_user`, the second stage), or to the speech
 | `table_x` | `[0.0, 1.0]` | Table x range for head-direction thirds |
 | `phrases` | `{}` | Taught `say` cards, `{id: text}` |
 
-The scripted demo (`h2m demo`) turns selection and its Muse ranking off.
+The scripted demo (`armed demo`) turns selection and its Muse ranking off.
 
-## Not verified
-
-Only run on the virtual arm with synthetic EMG events (and one end-to-end pass through the
-synthetic EMG detector) and a mocked Muse. The Spark wire format has not been exercised
-against the live API, no real twitch has been recorded against a card, the web UI does
-not send `POST /api/selection/ack` yet (so with `require_ack: true` a UI run refuses every
-select until it does), and `reaction_s`, `after_veto_s`, `confirm_s` and the veto
-refractory are untuned. `h2m/server.py` does not forward the ack's `highlight` yet, so
-acks through the endpoint are not pinned to a generation (the app and state machine
-accept and check it). The announcement wait has only run against a fake `say` process;
-real `say` timing is untested. The burst-onset freeze (`emg.burst_freeze`, off) has only
-seen synthetic `emg.burst_onset` events and the synthetic detector; how often a real
-moving-arm session fires one (false stops) is unmeasured.

@@ -1,8 +1,8 @@
-"""Regenerate the bundled SYNTHETIC sample incident served by `h2m demo`.
+"""Regenerate the bundled SYNTHETIC sample incident served by `armed demo`.
 
     .venv/bin/python scripts/make_demo_sample.py
 
-Runs the scripted scenario (h2m/scenario.py) on the virtual arm up to the explanation
+Runs the scripted scenario (armed/scenario.py) on the virtual arm up to the explanation
 (about 10 s, real time) and copies the incident it saved to
 data/demo/demo-liquid-over-laptop/, marked ``"synthetic": true`` in meta.json. Frames
 are a schematic render of the virtual table, the EMG is SyntheticSource and the
@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import sys
 
-from h2m.core import ROOT, load_config
-from h2m.scenario import make_sample
+from armed.core import ROOT, load_config
+from armed.scenario import make_sample
 
 
 def main() -> int:

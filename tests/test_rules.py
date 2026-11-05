@@ -1,7 +1,7 @@
 import pytest
 
-from h2m.contract import StepContract, Verb
-from h2m.rules import Rule, RuleStore, RulesUnavailable, choose_route
+from armed.contract import StepContract, Verb
+from armed.rules import Rule, RuleStore, RulesUnavailable, choose_route
 
 ROUTES = {
     "direct": [(0.0, 0.0), (1.0, 0.0)],
@@ -132,7 +132,7 @@ def test_wrong_typed_fields_are_rules_unavailable(tmp_path, bad):
         Rule(**bad)
 
 # imports added with the tests below
-from h2m.rules import Permitted, is_restrictive, permitted_options  # noqa: E402
+from armed.rules import Permitted, is_restrictive, permitted_options  # noqa: E402
 
 
 # added alongside today's changes

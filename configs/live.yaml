@@ -1,5 +1,5 @@
-# Live profile: `h2m run --profile live --i-have-the-estop` merges this onto
-# configs/h2m.yaml. The real SO-101, the overhead camera through SAM 3.1, the mic through
+# Live profile: `armed run --profile live --i-have-the-estop` merges this onto
+# configs/armed.yaml. The real SO-101, the overhead camera through SAM 3.1, the mic through
 # Voice Transcribe, Spark ranking every card and Wonder on every stop. EMG is the mock
 # dock in the UI (Twitch / Double / Brace, keys T / D / B) until the band is worn.
 arm:
@@ -8,11 +8,18 @@ emg:
   source: synthetic      # the UI's mock dock emits the decoder's events
 vision:
   source: camera
-  # Until `h2m calibrate table` runs: an object SAM sees sits on its taught slot.
+  # Until `armed calibrate table` runs: an object SAM sees sits on its taught slot.
   assume_slots: true
+  # The laptop's own camera (faces you): Muse reads "on a call", a visitor offering
+  # something and "getting up to leave" from it. Find the index with
+  # `ARMED_TOP_CAM=<n> python scripts/cam_preview.py`, then set it here. null = off.
+  laptop_camera: 2       # found Nov 4 (0 overhead, 1 wrist, 2 laptop)
+  # For the film: an object with a home slot counts as present even when SAM has not seen
+  # it lately (the arm over it, a missed scan), so a card is never refused as "not visible".
+  trust_catalog: true
 speech:
   source: mic
-  other_speakers: false  # solo: every voice is the wearer's (labels drift; see h2m.yaml)
+  other_speakers: false  # solo: every voice is the wearer's (labels drift; see armed.yaml)
   # ENDPOINTING closes a turn at the end of speech; DIARIZATION held "get me my pills" open
   # for 16 s with room noise (Nov 4), so everything had to be said twice. Labels are not
   # needed solo; switch back with other_speakers for a second person.
@@ -27,10 +34,81 @@ proactive:
   profile: desk
   propose_min_gap_s: 20  # demo pace: the default waits 2 minutes between unsolicited cards
   quiet_hours: "off"     # proposals at any hour while working on it (routines.yaml keeps 23:00-07:00)
+  wearer_name: Pranay    # "Waiting for Pranay." when someone else asks
 think:
   enabled: true          # Muse watches, listens, remarks and suggests (one confirmation)
+  # The moments Muse can only see (the phone screen lighting up, a jar held out on a call,
+  # standing up to leave) have no event to wake it: look every 6 s, not every 25 s, so a
+  # ring is caught while it rings. One Spark call at a time; a slow reply only delays the next.
+  every_s: 6
 trust:
   # The desk check (a routine set to `announce`) runs after the 5 s veto ring
-  # (docs/DEMO_STORY.md 1:39). The ladder still makes anything near a person or
+  # (README, What runs where). The ladder still makes anything near a person or
   # carrying a card.
   announce_enabled: true
+  # The veto ring also covers the routines set to `announce` that move near a person or
+  # carry (the chips, the desk clean-up, the pills on the bed). A brace or "stop" cancels
+  # the ring and freezes the motion; everything else in the gate is unchanged.
+  announce_near_person: true
+  announce_carries: true
+# The desk on film (Nov 4): four slots, re-taught. Slot 3 holds the 3D print, and the keys
+# once the print has gone in the bin. The id `cup` stays for the shake: the water routine,
+# the liquid tag and the learned rule key on it. `ball` stays the phone's id.
+objects:
+  - id: toy
+    name: toy
+    prompt: toy
+    slot: slot_1
+    tags: [trash]
+    max_grip: 1.0
+  - id: ball
+    name: phone
+    prompt: phone
+    slot: slot_2
+    max_grip: 1.0
+  - id: print
+    name: 3D printed part
+    prompt: 3d printed part
+    aliases: [print, plastic part, 3d print]
+    slot: slot_3
+    tags: [trash]
+    max_grip: 1.0
+    touch_squeeze_pct: 8   # thin: touches at 6, so the usual 24 would close to 0
+  - id: cup
+    name: protein shake
+    prompt: protein shake bottle
+    aliases: [shake, bottle]   # not "water": Muse decides the shake stands in for it
+    slot: slot_4
+    tags: [drink]
+    max_grip: 0.8
+  - id: keys
+    name: keys
+    prompt: keys
+    aliases: [key, car keys]
+    slot: slot_3
+    max_grip: 1.0
+    touch_squeeze_pct: 8   # thin, same slot as the print
+  # Only ever held, never picked from the desk (no slot): what accept_item takes from X, and the
+  # jar hold_jar holds while the lid comes off.
+  - id: jar
+    name: jar
+    prompt: jar
+    slot: null
+    tags: [jar]
+    max_grip: 0.8
+  - id: chips
+    name: chips
+    prompt: bag of chips
+    slot: null
+    tags: [snack]
+    max_grip: 0.8
+safety:
+  # For the film: the gripper counts as empty unless the arm knows it is holding something
+  # (no "gripper is not empty" refusals, no wrist-camera check before a grab).
+  trust_empty_gripper: true
+incident:
+  # SAM found nothing (not even the laptop) in 320 px clip frames on the Nov 4 near miss:
+  # keep the clip at the scan size, and give Wonder room for the track -> measure -> propose loop.
+  downscale: 960
+  max_tool_calls: 16
+  budget_s: 75

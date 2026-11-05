@@ -20,9 +20,9 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from h2m.core import ROOT, load_config, now
-from h2m.incident import Frame, Incident, explain
-from h2m.replay import (
+from armed.core import ROOT, load_config, now
+from armed.incident import Frame, Incident, explain
+from armed.replay import (
     CANNED_NOTE,
     ReplayError,
     ReplayLibrary,
@@ -31,8 +31,8 @@ from h2m.replay import (
     rule_check,
     source_label,
 )
-from h2m.robot import ArmState
-from h2m.scenario import (
+from armed.robot import ArmState
+from armed.scenario import (
     STEP_NAMES,
     CannedMuse,
     Scenario,
@@ -40,16 +40,16 @@ from h2m.scenario import (
     ScenarioSettings,
     scenario_config,
 )
-from h2m.server import create_replay_app
+from armed.server import create_replay_app
 from tests import test_learning as learning
 
 SAMPLE = ROOT / "data" / "demo" / "demo-liquid-over-laptop"
 TOKEN = "t0k"
 LOCAL = "http://127.0.0.1"
-GOOD = {"X-H2M-Token": TOKEN}
+GOOD = {"X-Armed-Token": TOKEN}
 ZONES, TAGS = ["laptop"], ["fragile", "liquid"]
 
-h2m = learning.h2m  # the learning fixture: virtual arm, mocked Muse, tmp stores
+armed = learning.armed  # the learning fixture: virtual arm, mocked Muse, tmp stores
 
 
 def fast_cfg() -> dict:
@@ -246,8 +246,8 @@ def test_replay_server_keeps_the_local_rules(sample):
     assert c.post("/api/stop", headers={"Origin": "https://evil.example"}).status_code == 403
     page = c.get("/")
     assert page.headers["cache-control"] == "no-store"
-    assert f'<meta name="h2m-token" content="{TOKEN}" />' in page.text
-    assert '<meta name="h2m-mode" content="replay" />' in page.text
+    assert f'<meta name="armed-token" content="{TOKEN}" />' in page.text
+    assert '<meta name="armed-mode" content="replay" />' in page.text
 
 
 def test_replay_of_a_folder_skips_unsafe_names(tmp_path, sample):
@@ -262,20 +262,20 @@ def test_replay_of_a_folder_skips_unsafe_names(tmp_path, sample):
 
 
 # ── learner: provenance, trigger and the virtual camera ──────────────────────
-def test_incident_meta_records_provenance_and_trigger(h2m):
-    data = learning.flinch_and_explain(h2m)
-    meta = json.loads((h2m.learner.root / data["incident_id"] / "meta.json").read_text())
+def test_incident_meta_records_provenance_and_trigger(armed):
+    data = learning.flinch_and_explain(armed)
+    meta = json.loads((armed.learner.root / data["incident_id"] / "meta.json").read_text())
     assert meta["trigger"]["source"] == "brace" and meta["trigger"]["onset_t"] is not None
     assert meta["provenance"] == {"arm": "virtual", "arm_hardware": False, "emg": "off",
                                   "emg_hardware": None, "camera": "off", "simulation": True}
     assert source_label(meta)["label"] == "SIMULATION"
 
 
-def test_virtual_camera_is_never_used_with_a_real_camera(h2m):
+def test_virtual_camera_is_never_used_with_a_real_camera(armed):
     calls = []
-    h2m.learner.virtual_camera = lambda: calls.append(1) or np.zeros((4, 4, 3), np.uint8)
-    h2m.learner.sample()
-    assert calls == [1] and h2m.learner.buffer._frames[-1].overhead is not None
+    armed.learner.virtual_camera = lambda: calls.append(1) or np.zeros((4, 4, 3), np.uint8)
+    armed.learner.sample()
+    assert calls == [1] and armed.learner.buffer._frames[-1].overhead is not None
 
     class Cam:
         def latest(self):
@@ -284,10 +284,10 @@ def test_virtual_camera_is_never_used_with_a_real_camera(h2m):
     class Vision:
         scene, wrist = Cam(), None
 
-    h2m.vision = Vision()
-    h2m.learner.buffer.reset()
-    h2m.learner.sample()
-    assert calls == [1] and h2m.learner.buffer._frames[-1].overhead.max() == 1
+    armed.vision = Vision()
+    armed.learner.buffer.reset()
+    armed.learner.sample()
+    assert calls == [1] and armed.learner.buffer._frames[-1].overhead.max() == 1
 
 
 def test_canned_client_labels_its_explanation():
@@ -316,16 +316,16 @@ def test_scenario_config_forces_simulation_and_keeps_every_threshold():
 
 
 def test_scenario_refuses_a_hardware_arm(monkeypatch, tmp_path):
-    from h2m.robot.backend import VirtualArm
+    from armed.robot.backend import VirtualArm
 
     monkeypatch.setattr(VirtualArm, "is_hardware", True)
     sc = Scenario(fast_cfg(), tmp_path, FAST)
     assert sc.run() == "failed" and "not the virtual arm" in sc.error
-    assert sc.h2m is None  # never started, never armed
+    assert sc.armed is None  # never started, never armed
 
 
 def test_scenario_refuses_non_synthetic_emg(monkeypatch, tmp_path):
-    import h2m.scenario as scenario_mod
+    import armed.scenario as scenario_mod
 
     real = scenario_mod.scenario_config
     monkeypatch.setattr(scenario_mod, "scenario_config",
@@ -376,7 +376,7 @@ def test_scenario_plays_the_whole_story(full_run):
 
 def test_scenario_used_only_its_own_stores_and_the_canned_client(full_run):
     sc, _, _, work = full_run
-    h = sc.h2m
+    h = sc.armed
     assert h.learner.muse.calls == h.learner.muse.turns >= 1 and h.llm is None
     assert Path(h.rules.path).is_relative_to(work) and h.learner.root.is_relative_to(work)
     assert h.emg.profile.name == "synthetic-sim" and h.arm.backend.is_hardware is False
@@ -412,7 +412,7 @@ def test_operator_stop_aborts_the_scenario_and_stays_latched(tmp_path):
     thread = sc.start()
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
-        h = sc.h2m
+        h = sc.armed
         if h is not None and h.arm.state is ArmState.MOVING:
             break
         time.sleep(0.02)
@@ -421,7 +421,7 @@ def test_operator_stop_aborts_the_scenario_and_stays_latched(tmp_path):
     c = client(ReplayLibrary(), sc)
     assert c.post("/api/stop").json()["ok"]  # the UI's STOP: tokenless, always safe
     thread.join(10)
-    h = sc.h2m
+    h = sc.armed
     assert sc.state == "aborted" and "operator stop" in sc.error
     assert h.arm.state is ArmState.STOPPED and h.arm.reason == "ui stop"
     time.sleep(0.3)  # nothing resets or re-arms it afterwards
@@ -435,7 +435,7 @@ def test_operator_stop_aborts_the_scenario_and_stays_latched(tmp_path):
 def test_script_never_resets_a_stop_it_did_not_script(tmp_path):
     sc = Scenario(fast_cfg(), tmp_path, FAST, until="approve")
     assert sc.run() == "done", sc.error
-    h = sc.h2m
+    h = sc.armed
     assert h.arm.state is ArmState.STOPPED and h.arm.reason == "brace (EMG)"
     h.stop("someone else's stop")  # latched again, for a reason the script did not cause
     with pytest.raises(ScenarioAborted):
@@ -450,7 +450,7 @@ def test_scenario_close_stops_its_threads(tmp_path):
     time.sleep(0.5)
     sc.close()
     thread.join(10)
-    assert not thread.is_alive() and sc.h2m is None
+    assert not thread.is_alive() and sc.armed is None
     assert threading.active_count() < 50
 
 # added alongside today's changes

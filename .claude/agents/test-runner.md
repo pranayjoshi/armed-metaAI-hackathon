@@ -5,4 +5,4 @@ tools: Read, Grep, Glob, Bash
 model: haiku
 effort: low
 ---
-Run `python -m pytest -q` (and ruff if configured) in the h2m repo. Report pass/fail counts, and for each failure the test, the one-line cause and the likely file. Do not edit files.
+Run `python -m pytest -q` (and ruff if configured) in the armed repo. Report pass/fail counts, and for each failure the test, the one-line cause and the likely file. Do not edit files.

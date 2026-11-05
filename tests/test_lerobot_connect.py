@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from h2m.robot.backend import JOINTS, BackendError, LeRobotArm
+from armed.robot.backend import JOINTS, BackendError, LeRobotArm
 
 
 class FakeFollower:

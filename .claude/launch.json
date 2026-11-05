@@ -2,8 +2,8 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "h2m-dev",
-      "runtimeExecutable": ".venv/bin/h2m",
+      "name": "armed-dev",
+      "runtimeExecutable": ".venv/bin/armed",
       "runtimeArgs": [
         "run",
         "--arm",
@@ -20,8 +20,30 @@
       "port": 8080
     },
     {
-      "name": "h2m-demo",
-      "runtimeExecutable": ".venv/bin/h2m",
+      "name": "armed-desk-virtual",
+      "runtimeExecutable": ".venv/bin/armed",
+      "runtimeArgs": [
+        "run",
+        "--profile",
+        "live",
+        "--arm",
+        "virtual",
+        "--emg",
+        "synthetic",
+        "--vision",
+        "off",
+        "--speech",
+        "off",
+        "--llm",
+        "off",
+        "--port",
+        "8092"
+      ],
+      "port": 8092
+    },
+    {
+      "name": "armed-demo",
+      "runtimeExecutable": ".venv/bin/armed",
       "runtimeArgs": [
         "demo",
         "--loop",

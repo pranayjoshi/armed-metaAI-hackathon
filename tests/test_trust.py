@@ -1,5 +1,5 @@
-"""The trust ladder and the proactive layer (docs/PROACTIVE.md §3-4; h2m/safety.py::ladder,
-h2m/selection.py veto ring, h2m/proactive.py) on the virtual arm with a fake Spark. No
+"""The trust ladder and the proactive layer (docs/PROACTIVE.md §3-4; armed/safety.py::ladder,
+armed/selection.py veto ring, armed/proactive.py) on the virtual arm with a fake Spark. No
 network, no hardware.
 
 Covers: the ladder only lowers a rung (never near a person, never carrying, never for
@@ -18,21 +18,21 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from h2m.contract import StepContract, Verb
-from h2m.core import now
-from h2m.intent import Candidate, Option
-from h2m.proactive import Proposer
-from h2m.robot import ArmState
-from h2m.safety import RUNGS, Verdict, action_rung, decide, ladder
-from h2m.selection import INTENT, Selection
-from h2m.server import create_app
+from armed.contract import StepContract, Verb
+from armed.core import now
+from armed.intent import Candidate, Option
+from armed.proactive import Proposer
+from armed.robot import ArmState
+from armed.safety import RUNGS, Verdict, action_rung, decide, ladder
+from armed.selection import INTENT, Selection
+from armed.server import create_app
 from tests import test_app_embodied as base
 from tests.test_app_embodied import prove_empty, started
 from tests.test_selection import enable, kinds, wait
 
-h2m = base.h2m  # the shared app fixture: virtual arm, EMG / vision / speech off
+armed = base.armed  # the shared app fixture: virtual arm, EMG / vision / speech off
 TOKEN = "t0k"
-GOOD = {"X-H2M-Token": TOKEN}
+GOOD = {"X-Armed-Token": TOKEN}
 NOON = time.mktime((2026, 11, 3, 12, 0, 0, 0, 0, -1))
 ROUTINES = """
 routines:
@@ -185,13 +185,13 @@ def run(h, seconds, until=None, tick=False):
     return bool(until()) if until is not None else False
 
 
-def test_a_routine_due_becomes_a_card_with_its_rows_lit_and_the_packet_published(h2m, tmp_path):
+def test_a_routine_due_becomes_a_card_with_its_rows_lit_and_the_packet_published(armed, tmp_path):
     clock = Clock()
-    p = proactive(h2m, tmp_path, clock)
-    menu = tick(h2m)
+    p = proactive(armed, tmp_path, clock)
+    menu = tick(armed)
     assert menu is not None and menu.highlighted.id == "pick_place:cup"  # the plain menu first
     assert menu.highlighted.routine is None
-    snap = h2m.snapshot()
+    snap = armed.snapshot()
     pk = snap["context"]
     assert pk["clock"] == "12:00 Tue" and [o["name"] for o in pk["objects"]] == ["paper cup", "wooden block", "phone"]
     assert pk["objects"][0]["slot"] == "1" and pk["present"] == [] and pk["hand"] is None and pk["lit"] == []
@@ -199,7 +199,7 @@ def test_a_routine_due_becomes_a_card_with_its_rows_lit_and_the_packet_published
     assert [r["name"] for r in snap["routines"]["routines"]] == ["water", "check", "hello"]
     clock.t += 3601  # check (due at 30 min, announce off -> a card) and water come due: the
     # untouched menu is superseded and the routine cards lead, oldest due first
-    menu = tick(h2m)
+    menu = tick(armed)
     assert menu is not None and [c.id for c in menu.cards] == ["skill:wave", "skill:bow", "pick_place:cup"]
     assert [c.routine for c in menu.cards] == ["check", "hello", "water"]
     hl, water = menu.highlighted, menu.cards[2]
@@ -207,130 +207,130 @@ def test_a_routine_due_becomes_a_card_with_its_rows_lit_and_the_packet_published
     assert water.rung == "ask" and water.label == "Water?" and water.tool_call == ("pick_place", {"object_id": "cup"})
     rows = [e["row"] for e in water.evidence]
     assert rows == ["routines", "clock"] and "every 60 min" in water.evidence[0]["text"]
-    snap = h2m.snapshot()
+    snap = armed.snapshot()
     assert snap["context"]["lit"] == ["routines", "clock"]
     assert snap["selection"]["cards"][2]["evidence"][0]["row"] == "routines"
     assert snap["selection"]["cards"][2]["routine"] == "water" and snap["selection"]["veto_until"] is None
     assert any(e["kind"] == "task.abandoned" and e["outcome"] == "superseded" for e in snap["events"])
-    assert {e["name"] for e in kinds(h2m, "routine.proposed")} == {"check", "hello", "water"}
+    assert {e["name"] for e in kinds(armed, "routine.proposed")} == {"check", "hello", "water"}
     assert p.book.get("water").next_due == clock.t + 3600  # proposed: moves on by one interval
 
 
-def test_an_ask_card_never_runs_from_time_alone(h2m, tmp_path):
+def test_an_ask_card_never_runs_from_time_alone(armed, tmp_path):
     clock = Clock()
-    proactive(h2m, tmp_path, clock, text='routines:\n  water: {action: pick_place, object: cup, every: 60m, label: "Water?"}\n',
+    proactive(armed, tmp_path, clock, text='routines:\n  water: {action: pick_place, object: cup, every: 60m, label: "Water?"}\n',
               announce=True)
     clock.t += 3601
-    menu = tick(h2m)
+    menu = tick(armed)
     assert menu.highlighted.routine == "water" and menu.highlighted.rung == "ask"
-    assert menu.veto_until is None and h2m.selection.veto_due(now() + 1000) is None
-    assert not run(h2m, 5, until=lambda: started(h2m), tick=True)
-    assert h2m.pending is None and h2m.selection.menu is not None and not kinds(h2m, "selection.accept")
+    assert menu.veto_until is None and armed.selection.veto_due(now() + 1000) is None
+    assert not run(armed, 5, until=lambda: started(armed), tick=True)
+    assert armed.pending is None and armed.selection.menu is not None and not kinds(armed, "selection.accept")
 
 
-def test_announce_routine_rings_then_runs_through_the_gate_when_untouched(h2m, tmp_path):
+def test_announce_routine_rings_then_runs_through_the_gate_when_untouched(armed, tmp_path):
     clock = Clock()
-    p = proactive(h2m, tmp_path, clock, announce=True)
+    p = proactive(armed, tmp_path, clock, announce=True)
     clock.t += 1801  # check (bow, announce) is due
-    menu = tick(h2m)
+    menu = tick(armed)
     assert menu is not None and menu.highlighted.id == "skill:wave" and menu.highlighted.rung == "announce"
     assert menu.veto_until is not None and menu.veto_total_s == 3.0
-    snap = h2m.snapshot()
+    snap = armed.snapshot()
     assert snap["selection"]["auto"]["card_id"] == "skill:wave" and 0 < snap["selection"]["auto"]["remaining_s"] <= 3.0
     assert snap["selection"]["veto_until"] == menu.veto_until
-    assert kinds(h2m, "routine.announced")[-1]["say"] == "Checking the desk."
-    assert wait(lambda: h2m.spoken and "Brace to cancel" in h2m.spoken[-1])
-    assert not started(h2m)
+    assert kinds(armed, "routine.announced")[-1]["say"] == "Checking the desk."
+    assert wait(lambda: armed.spoken and "Brace to cancel" in armed.spoken[-1])
+    assert not started(armed)
     # nothing touches it: the ring lapses, the card goes through the tool path and the gate
-    assert run(h2m, 8, until=lambda: started(h2m), tick=True), kinds(h2m, "selection.accept")[-1]["detail"]
-    acc = kinds(h2m, "selection.accept")[-1]
+    assert run(armed, 8, until=lambda: started(armed), tick=True), kinds(armed, "selection.accept")[-1]["detail"]
+    acc = kinds(armed, "selection.accept")[-1]
     assert acc["ok"] and acc["answered"] and acc["by"] == "veto_window" and acc["card"] == "skill:wave"
-    assert kinds(h2m, "routine.auto_run")[-1]["name"] == "check"
-    assert h2m.last["contract"]["utterance"] == "wave" and h2m.last["contract"]["evidence"]["confirmed_veto_window"] == 1.0
-    assert h2m.last["decision"]["verdict"] == "approve"  # the gate's re-check with confirmed=True
-    assert run(h2m, 60, until=lambda: h2m.arm.state is ArmState.READY, tick=True)
-    h2m._selection_tick()
-    done = kinds(h2m, "task.completed")[-1]
+    assert kinds(armed, "routine.auto_run")[-1]["name"] == "check"
+    assert armed.last["contract"]["utterance"] == "wave" and armed.last["contract"]["evidence"]["confirmed_veto_window"] == 1.0
+    assert armed.last["decision"]["verdict"] == "approve"  # the gate's re-check with confirmed=True
+    assert run(armed, 60, until=lambda: armed.arm.state is ArmState.READY, tick=True)
+    armed._selection_tick()
+    done = kinds(armed, "task.completed")[-1]
     assert done["card"] == "skill:wave" and done["auto"] is True
-    assert p.book.get("check").runs == 1 and kinds(h2m, "routine.done")[-1]["auto"] is True
+    assert p.book.get("check").runs == 1 and kinds(armed, "routine.done")[-1]["auto"] is True
 
 
-def test_a_brace_in_the_ring_cancels_quietly_and_writes_dont_propose(h2m, tmp_path):
+def test_a_brace_in_the_ring_cancels_quietly_and_writes_dont_propose(armed, tmp_path):
     clock = Clock()
-    p = proactive(h2m, tmp_path, clock, announce=True)
+    p = proactive(armed, tmp_path, clock, announce=True)
     clock.t += 1801
-    menu = tick(h2m)
+    menu = tick(armed)
     assert menu.highlighted.id == "skill:wave" and menu.veto_until is not None
-    incidents = len(kinds(h2m, "incident.triggered"))
-    h2m.log.emit("emg.brace", trigger="cocontraction")
-    assert wait(lambda: h2m.selection.menu is None)
-    ev = {e.kind for e in h2m.log.recent(100, {"selection.auto_cancelled", "selection.dismiss", "task.abandoned",
+    incidents = len(kinds(armed, "incident.triggered"))
+    armed.log.emit("emg.brace", trigger="cocontraction")
+    assert wait(lambda: armed.selection.menu is None)
+    ev = {e.kind for e in armed.log.recent(100, {"selection.auto_cancelled", "selection.dismiss", "task.abandoned",
                                                "routine.refused", "incident.triggered"})}
     assert {"selection.auto_cancelled", "selection.dismiss", "task.abandoned", "routine.refused"} <= ev
-    assert len(kinds(h2m, "incident.triggered")) == incidents  # no incident: the arm never moved
-    assert kinds(h2m, "task.abandoned")[-1]["outcome"] == "vetoed"
-    assert h2m.arm.state is ArmState.READY and not started(h2m)
-    ref = kinds(h2m, "routine.refused")[-1]
+    assert len(kinds(armed, "incident.triggered")) == incidents  # no incident: the arm never moved
+    assert kinds(armed, "task.abandoned")[-1]["outcome"] == "vetoed"
+    assert armed.arm.state is ArmState.READY and not started(armed)
+    ref = kinds(armed, "routine.refused")[-1]
     assert ref["vetoed"] is True and ref["dont_propose"] == "don't propose Check the desk? at the desk in the afternoon"
     assert p.book.blocked("wave") and p.book.get("check").refusals == 1
-    assert h2m.snapshot()["quiet"]["text"].startswith("Noted.")
-    assert h2m.snapshot()["context"]["rules"][-1]["text"].startswith("don't propose Check the desk?")
+    assert armed.snapshot()["quiet"]["text"].startswith("Noted.")
+    assert armed.snapshot()["context"]["rules"][-1]["text"].startswith("don't propose Check the desk?")
     # cooled down and blocked in this context: forcing it due proposes nothing
     p.book.force_due("check")
-    h2m.selection._last_veto_t = -math.inf
-    h2m.selection._quiet_until = 0.0  # past the reshow pause after the abandoned task
-    h2m._last_stop_t = -math.inf
+    armed.selection._last_veto_t = -math.inf
+    armed.selection._quiet_until = 0.0  # past the reshow pause after the abandoned task
+    armed._last_stop_t = -math.inf
     for _ in range(5):
-        h2m._selection_tick()
-    menu = h2m.selection.menu
+        armed._selection_tick()
+    menu = armed.selection.menu
     assert menu is not None and all(c.routine != "check" for c in menu.cards)
 
 
-def test_announce_falls_back_to_a_card_when_the_relaxation_is_off(h2m, tmp_path):
+def test_announce_falls_back_to_a_card_when_the_relaxation_is_off(armed, tmp_path):
     clock = Clock()
-    proactive(h2m, tmp_path, clock, announce=False)
+    proactive(armed, tmp_path, clock, announce=False)
     clock.t += 1801
-    menu = tick(h2m)
+    menu = tick(armed)
     assert menu.highlighted.id == "skill:wave" and menu.highlighted.rung == "ask" and menu.veto_until is None
 
 
-def test_nothing_is_proposed_in_quiet_hours_or_request_only_or_after_a_brace(h2m, tmp_path):
+def test_nothing_is_proposed_in_quiet_hours_or_request_only_or_after_a_brace(armed, tmp_path):
     clock = Clock(time.mktime((2026, 11, 3, 23, 30, 0, 0, 0, -1)))
-    p = proactive(h2m, tmp_path, clock, text=ROUTINES + 'quiet_hours: "23:00-07:00"\n', announce=True)
+    p = proactive(armed, tmp_path, clock, text=ROUTINES + 'quiet_hours: "23:00-07:00"\n', announce=True)
     clock.t += 3601
-    menu = tick(h2m)
+    menu = tick(armed)
     assert menu is not None and all(c.routine is None for c in menu.cards)  # the plain menu only
-    assert h2m.snapshot()["proactive"]["quiet_now"] is True
+    assert armed.snapshot()["proactive"]["quiet_now"] is True
     clock.t = NOON + 3601
     p.set_request_only(True)
-    h2m._emit_selection(h2m.selection.supersede(now(), "test"))
-    menu = tick(h2m)
+    armed._emit_selection(armed.selection.supersede(now(), "test"))
+    menu = tick(armed)
     assert all(c.routine is None for c in menu.cards)
     p.set_request_only(False)
-    h2m.log.emit("emg.brace", trigger="cocontraction")  # idle brace: refuses a card, holds 3 s
+    armed.log.emit("emg.brace", trigger="cocontraction")  # idle brace: refuses a card, holds 3 s
     time.sleep(0.1)
-    menu = tick(h2m)
+    menu = tick(armed)
     assert menu is None or all(c.routine is None for c in menu.cards)
 
 
-def test_another_speakers_request_becomes_a_card_the_wearer_decides(h2m, tmp_path):
+def test_another_speakers_request_becomes_a_card_the_wearer_decides(armed, tmp_path):
     clock = Clock()
-    proactive(h2m, tmp_path, clock, announce=True)
-    tick(h2m)
-    h2m.log.emit("speech.utterance", text="can you pass him the wooden block", speaker="X", asked_by="X", source="voice")
-    menu = tick(h2m, 4)
+    proactive(armed, tmp_path, clock, announce=True)
+    tick(armed)
+    armed.log.emit("speech.utterance", text="can you pass him the wooden block", speaker="X", asked_by="X", source="voice")
+    menu = tick(armed, 4)
     hl = menu.highlighted
     assert hl.id == "pick_place:block" and hl.asked_by == "X" and hl.rung == "ask"
     assert hl.label == "X asked: bring wooden block" and hl.evidence[0]["row"] == "present"
-    snap = h2m.snapshot()
+    snap = armed.snapshot()
     assert snap["selection"]["asked_by"] == "X" and snap["selection"]["cards"][0]["asked_by"] == "X"
     assert snap["context"]["lit"] == ["present"]
 
 
-def test_a_sound_triggers_its_routine_and_the_ranker_gets_the_packet(h2m, tmp_path, monkeypatch):
+def test_a_sound_triggers_its_routine_and_the_ranker_gets_the_packet(armed, tmp_path, monkeypatch):
     clock = Clock()
     text = ROUTINES + '  phone: {action: hold_up, object: ball, "on": phone_buzz, mode: ask, label: "Show you the phone?"}\n'
-    proactive(h2m, tmp_path, clock, text=text)
+    proactive(armed, tmp_path, clock, text=text)
     seen: dict = {}
 
     class Spy:
@@ -343,32 +343,32 @@ def test_a_sound_triggers_its_routine_and_the_ranker_gets_the_packet(h2m, tmp_pa
             seen.update(json.loads(messages[1]["content"]))
             return json.dumps({"choices": [{"option": "o1", "confidence": "likely", "reason": "the phone just buzzed"}]})
 
-    h2m.ranker.client = Spy()
-    h2m.log.emit("sound.event", label="phone buzz")
-    menu = tick(h2m, 4)
+    armed.ranker.client = Spy()
+    armed.log.emit("sound.event", label="phone buzz")
+    menu = tick(armed, 4)
     assert menu.highlighted.id == "skill:hold_up:ball" and menu.highlighted.routine == "phone"
     assert menu.highlighted.evidence[0] == {"row": "sounds", "text": "phone buzz", "age_s": 0}
     assert wait(lambda: menu.source == "muse")
     assert seen["options"][0]["why"] == "just now: phone buzz -> routine phone is due (on phone buzz)"
     assert seen["context"]["sounds"] == ["phone buzz"]
-    snap = h2m.snapshot()  # the highlighted card keeps its identity; its reason is layered on in the snapshot
+    snap = armed.snapshot()  # the highlighted card keeps its identity; its reason is layered on in the snapshot
     assert snap["selection"]["cards"][0]["evidence"][-1] == {"row": "rank", "text": "the phone just buzzed",
                                                              "source": "muse-spark-1.3"}
     calls = snap["calls"]
     assert calls and calls[-1]["model"] == "fake-spark" and calls[-1]["for"] == "sounds" and "ms" in calls[-1]
 
 
-def test_a_typed_request_for_a_never_action_is_rejected_by_the_gate(h2m, tmp_path):
-    proactive(h2m, tmp_path, Clock())
-    h2m.on_utterance("sip", source="typed")
-    assert h2m.last["decision"]["verdict"] == "reject" and "never" in h2m.last["decision"]["reason"]
-    assert h2m.pending is None and not started(h2m)
+def test_a_typed_request_for_a_never_action_is_rejected_by_the_gate(armed, tmp_path):
+    proactive(armed, tmp_path, Clock())
+    armed.on_utterance("sip", source="typed")
+    assert armed.last["decision"]["verdict"] == "reject" and "never" in armed.last["decision"]["reason"]
+    assert armed.pending is None and not started(armed)
 
 
-def test_routines_api_reads_edits_and_never_moves(h2m, tmp_path):
+def test_routines_api_reads_edits_and_never_moves(armed, tmp_path):
     clock = Clock()
-    p = proactive(h2m, tmp_path, clock)
-    c = TestClient(create_app(h2m, token=TOKEN), base_url="http://127.0.0.1")
+    p = proactive(armed, tmp_path, clock)
+    c = TestClient(create_app(armed, token=TOKEN), base_url="http://127.0.0.1")
     body = c.get("/api/routines").json()
     assert body["enabled"] and [r["name"] for r in body["routines"]] == ["water", "check", "hello"]
     assert c.post("/api/routines", json={"name": "water", "every": "2h"}).status_code == 403  # token
@@ -381,8 +381,8 @@ def test_routines_api_reads_edits_and_never_moves(h2m, tmp_path):
     assert p.book.get("hello").next_due == clock.t
     assert c.post("/api/routines", json={"request_only": True}, headers=GOOD).json()["request_only"] is True
     assert c.post("/api/routines", json={"name": "hello", "delete": True}, headers=GOOD).status_code == 200
-    assert p.book.get("hello") is None and not started(h2m) and h2m.pending is None
-    h2m.proactive = None
+    assert p.book.get("hello") is None and not started(armed) and armed.pending is None
+    armed.proactive = None
     assert c.get("/api/routines").json()["enabled"] is False
     assert c.post("/api/routines", json={"run_now": "x"}, headers=GOOD).status_code == 409
 
@@ -400,10 +400,10 @@ def test_start_veto_is_refused_for_cards_the_person_did_not_pre_approve(rung):
     assert sel.start_veto("skill:wave", 1.0, 5.0)[0][1]["ok"] is False and sel.veto_due(100.0) is None
 
 
-def test_snapshot_keeps_the_wonder_calls_beside_the_spark_calls(h2m, tmp_path):
+def test_snapshot_keeps_the_wonder_calls_beside_the_spark_calls(armed, tmp_path):
     """The proactive layer appends its Spark calls to the vision, speech and Wonder calls; it never replaces them."""
-    proactive(h2m, tmp_path, Clock())
-    h2m.learner.calls.append({"model": "muse-wonder-1.0", "for": "investigate", "ms": 12, "started_at_ms": 1})
-    h2m.proactive.calls.note({"model": "muse-spark-1.3", "for": "rank", "ms": 8})
-    models = {c["model"] for c in h2m.snapshot()["calls"]}
+    proactive(armed, tmp_path, Clock())
+    armed.learner.calls.append({"model": "muse-wonder-1.0", "for": "investigate", "ms": 12, "started_at_ms": 1})
+    armed.proactive.calls.note({"model": "muse-spark-1.3", "for": "rank", "ms": 8})
+    models = {c["model"] for c in armed.snapshot()["calls"]}
     assert {"muse-wonder-1.0", "muse-spark-1.3"} <= models

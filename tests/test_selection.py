@@ -24,24 +24,24 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-import h2m.app as app_mod
-from h2m.core import load_config, now
-from h2m.intent import Candidate, SparkClient
-from h2m.learning import RuleProposal
-from h2m.robot import ArmState
-from h2m.robot.skills import plan_home
-from h2m.rules import Rule
-from h2m.selection import INPUTS, INTENT, MODES, Selection
-from h2m.sensors import emg
-from h2m.server import create_app
+import armed.app as app_mod
+from armed.core import load_config, now
+from armed.intent import Candidate, SparkClient
+from armed.learning import RuleProposal
+from armed.robot import ArmState
+from armed.robot.skills import plan_home
+from armed.rules import Rule
+from armed.selection import INPUTS, INTENT, MODES, Selection
+from armed.sensors import emg
+from armed.server import create_app
 from tests import test_app_embodied as base
 from tests.test_app_embodied import prove_empty, run, started
 from tests.test_twitch import Rig as EmgRig
 
-h2m = base.h2m  # the shared app fixture: virtual arm, EMG / vision / speech off
+armed = base.armed  # the shared app fixture: virtual arm, EMG / vision / speech off
 
 TOKEN = "t0k"
-GOOD = {"X-H2M-Token": TOKEN}
+GOOD = {"X-Armed-Token": TOKEN}
 PICKS = ["pick_place:cup", "pick_place:block", "pick_place:ball"]
 LOOKS = ["look_at:cup", "look_at:block", "look_at:ball"]
 ANSWERS = {"selection.accept", "selection.select"}
@@ -76,10 +76,10 @@ def enable(h, **over):
 
 
 @pytest.fixture
-def h(h2m):
-    enable(h2m)
-    prove_empty(h2m)  # the plain confirmation; see the unknown-gripper test for the other
-    return h2m
+def h(armed):
+    enable(armed)
+    prove_empty(armed)  # the plain confirmation; see the unknown-gripper test for the other
+    return armed
 
 
 def kinds(h, kind):
@@ -149,24 +149,24 @@ def complete(h):
 
 
 # ── shipped config (fix 1) ─────────────────────────────────────────────────────
-def test_selection_ships_off_with_the_ack_and_the_slower_reaction(h2m):
+def test_selection_ships_off_with_the_ack_and_the_slower_reaction(armed):
     cfg = load_config()["selection"]
     assert cfg["enabled"] is False and cfg["require_ack"] is True
     assert cfg["reaction_s"] >= 0.7 and cfg["after_veto_s"] >= 3.0
-    assert h2m.selection_enabled is False  # the shared fixture uses the shipped config
-    assert h2m.selection.require_ack and h2m.selection.reaction_s == pytest.approx(0.7)
-    h2m.ranker.client = None
-    assert show(h2m) is None
-    h2m.on_utterance("hand me the block", source="typed")
-    pending = h2m.pending
-    h2m.log.emit("emg.twitch", held_ms=200, detect_ms=900)
+    assert armed.selection_enabled is False  # the shared fixture uses the shipped config
+    assert armed.selection.require_ack and armed.selection.reaction_s == pytest.approx(0.7)
+    armed.ranker.client = None
+    assert show(armed) is None
+    armed.on_utterance("hand me the block", source="typed")
+    pending = armed.pending
+    armed.log.emit("emg.twitch", held_ms=200, detect_ms=900)
     time.sleep(0.1)
-    assert h2m.pending is pending and not started(h2m) and not answers(h2m)
+    assert armed.pending is pending and not started(armed) and not answers(armed)
 
 
-def test_config_can_only_make_the_selection_gates_stricter(h2m):
-    enable(h2m, reaction_s=0.05, after_veto_s=0.0, require_ack="no", confirm_s=600)
-    sel = h2m.selection
+def test_config_can_only_make_the_selection_gates_stricter(armed):
+    enable(armed, reaction_s=0.05, after_veto_s=0.0, require_ack="no", confirm_s=600)
+    sel = armed.selection
     assert sel.reaction_s == pytest.approx(0.3)  # MIN_CONFIRM_REACTION_S floor
     assert sel.after_veto_s == pytest.approx(3.0) and sel.confirm_s == pytest.approx(30.0)
     assert sel.require_ack is True  # only the literal false turns the ack off
@@ -578,10 +578,10 @@ def test_say_card_speaks_and_completes_without_motion(h):
 
 
 # ── consent: a twitch is only ever the answer to the highlighted card ──────────
-def test_a_warning_the_card_never_showed_is_not_answered_by_the_twitch(h2m):
+def test_a_warning_the_card_never_showed_is_not_answered_by_the_twitch(armed):
     """Gripper not proven empty (startup): the gate's question warns the object may
     drop. The card did not say that, so the request waits for a squeeze / yes / click."""
-    h = enable(h2m)
+    h = enable(armed)
     assert h.gripper.state().status == "unknown"
     show(h)
     acc = accept(h)
@@ -645,7 +645,7 @@ def test_a_brace_between_the_twitch_and_the_gate_drops_the_card(h, monkeypatch):
 
     class BraceFirst(real_thread):
         def start(self):
-            if self.name == "h2m-select":
+            if self.name == "armed-select":
                 h.log.emit("emg.brace", onset_t=now())  # lands before the gate runs
             super().start()
 
@@ -736,7 +736,7 @@ def test_a_confirm_race_won_before_the_motion_started_keeps_the_binding(h, monke
 
 
 def test_finish_failure_after_the_motion_started_keeps_the_binding():
-    from h2m.intent import rank_candidates
+    from armed.intent import rank_candidates
 
     scene = [{"id": "cup", "name": "cup", "table_xy": [0.25, 0.55]}]
     sel = Selection("intent", require_ack=False)
@@ -850,11 +850,11 @@ def test_burst_freeze_ships_off_and_selection_alone_does_not_enable_it(h):
 
 
 @pytest.mark.parametrize("value", ["true", 1, "yes"])
-def test_only_the_literal_true_enables_the_burst_freeze(h2m, value):
-    cfg = {**h2m.cfg, "emg": {**h2m.cfg["emg"], "source": "off", "burst_freeze": value}}
-    assert app_mod.H2M(cfg).burst_freeze is False
+def test_only_the_literal_true_enables_the_burst_freeze(armed, value):
+    cfg = {**armed.cfg, "emg": {**armed.cfg["emg"], "source": "off", "burst_freeze": value}}
+    assert app_mod.Armed(cfg).burst_freeze is False
     cfg["emg"]["burst_freeze"] = True
-    assert app_mod.H2M(cfg).burst_freeze is True
+    assert app_mod.Armed(cfg).burst_freeze is True
 
 
 def test_a_retwitch_after_a_card_carry_starts_does_not_latch_a_stop(h):
@@ -958,15 +958,15 @@ def test_burst_onset_during_a_card_motion_freezes_and_ends_the_task(h):
     assert ab["outcome"] == "stopped" and ab["reason"] == app_mod.BURST_STOP
 
 
-def test_brace_and_open_hand_still_freeze_without_waiting(h2m):
+def test_brace_and_open_hand_still_freeze_without_waiting(armed):
     for kind, data in (("emg.brace", {"onset_t": now()}), ("emg.open_hand", {"extensor": 0.9})):
-        if h2m.arm.state is ArmState.STOPPED:
-            h2m.arm.reset()
-            h2m.arm.arm()
-        assert h2m.arm.execute(plan_home(h2m.arm.poses))[0]
+        if armed.arm.state is ArmState.STOPPED:
+            armed.arm.reset()
+            armed.arm.arm()
+        assert armed.arm.execute(plan_home(armed.arm.poses))[0]
         t0 = time.perf_counter()
-        h2m.log.emit(kind, **data)
-        assert h2m.arm.state is ArmState.STOPPED and time.perf_counter() - t0 < 0.05
+        armed.log.emit(kind, **data)
+        assert armed.arm.state is ArmState.STOPPED and time.perf_counter() - t0 < 0.05
 
 
 # ── fix 5: re-arming rebuilds the cards; incidents block ──────────────────────
@@ -1110,7 +1110,7 @@ def test_muse_upgrade_applies_only_before_the_first_input(h):
 
 
 def test_an_upgrade_that_beats_the_first_cards_is_applied_on_show():
-    from h2m.intent import rank_candidates
+    from armed.intent import rank_candidates
 
     scene = [{"id": o, "name": o, "table_xy": [0.25 * (i + 1), 0.55]}
              for i, o in enumerate(("cup", "block", "ball"))]

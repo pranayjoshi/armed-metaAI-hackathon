@@ -1,4 +1,4 @@
-// Shared runtime for the H2M operator UI: state stream, API, event bus, frame loop, helpers.
+// Shared runtime for the Armed operator UI: state stream, API, event bus, frame loop, helpers.
 // Views import from here (or receive the same things on `ctx`). Nothing here draws UI.
 
 export const $ = (sel, root = document) => root.querySelector(sel);
@@ -92,13 +92,13 @@ export function toast(text, tone = "") {
 
 // Per-session token the server writes into this page (docs/LOCAL_API.md); every
 // POST/DELETE must carry it or the server refuses with 403.
-const TOKEN = document.querySelector('meta[name="h2m-token"]')?.content || "";
-/** "live" on `h2m run`; "replay" on `h2m demo` / `h2m replay` (read-only, no actuation routes exist). */
-export const mode = document.querySelector('meta[name="h2m-mode"]')?.content === "replay" ? "replay" : "live";
+const TOKEN = document.querySelector('meta[name="armed-token"]')?.content || "";
+/** "live" on `armed run`; "replay" on `armed demo` / `armed replay` (read-only, no actuation routes exist). */
+export const mode = document.querySelector('meta[name="armed-mode"]')?.content === "replay" ? "replay" : "live";
 document.documentElement.dataset.mode = mode;
 
 async function request(method, path, body) {
-  const headers = { "X-H2M-Token": TOKEN };
+  const headers = { "X-Armed-Token": TOKEN };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const res = await fetch(path, {
     method,

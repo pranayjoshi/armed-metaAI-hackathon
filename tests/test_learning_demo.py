@@ -1,4 +1,4 @@
-"""`h2m demo`'s scripted scenario drives the real investigation tool loop with a canned
+"""`armed demo`'s scripted scenario drives the real investigation tool loop with a canned
 script (no model, no network): a wrong proposal the checker rejects, then the canned
 one, both ticks, and a rehearsal for the twin. Everything stays labelled SIMULATION."""
 
@@ -9,9 +9,9 @@ import socket
 import httpx
 import pytest
 
-from h2m.core import load_config
-from h2m.replay import CANNED_EXPLANATION
-from h2m.scenario import CANNED_WRONG_PROPOSAL, CannedMuse, Scenario, ScenarioSettings
+from armed.core import load_config
+from armed.replay import CANNED_EXPLANATION
+from armed.scenario import CANNED_WRONG_PROPOSAL, CannedMuse, Scenario, ScenarioSettings
 
 FAST = ScenarioSettings(beat_s=0.05, approve_after_s=3.1, step_timeout_s=20.0)
 
@@ -44,7 +44,7 @@ def explained(tmp_path_factory):
 def test_demo_reaches_a_rejected_proposal_then_the_canned_one(explained):
     sc, state = explained
     assert state == "done", sc.error
-    h = sc.h2m
+    h = sc.armed
     snap = h.snapshot()
     learning = snap["learning"]
     feed = learning["investigation"]

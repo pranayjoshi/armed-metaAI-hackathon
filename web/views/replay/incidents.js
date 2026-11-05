@@ -5,7 +5,7 @@ import { esc, getJSON, words, f2, num, fmtT, shortId, provBadge, typeInto, ruleS
 
 const JOINT_SHORT = { shoulder_pan: "pan", shoulder_lift: "lift", elbow_flex: "elbow", wrist_flex: "wrist", wrist_roll: "roll", gripper: "grip" };
 const SOURCE = {
-  canned: ["CANNED · fixed demo text", "canned", "Fixed text from h2m/replay.py or the scripted scenario. No model was called."],
+  canned: ["CANNED · fixed demo text", "canned", "Fixed text from armed/replay.py or the scripted scenario. No model was called."],
   fallback: ["LOCAL FALLBACK · not a model", "canned", "The runtime's own fallback question. It proposes no rule."],
 };
 function sourceBadge(exp) {
@@ -177,7 +177,7 @@ export class Incidents {
     this.listSig = sig;
     this.q(".inc-count").textContent = String(items.length);
     if (!items.length) {
-      this.listEl.innerHTML = `<div class="empty-mini"><b>No incidents recorded in this folder</b><p>Incidents are saved when a brace or an open hand freezes the arm. Try <code>h2m replay data/incidents</code> or <code>h2m demo</code>.</p></div>`;
+      this.listEl.innerHTML = `<div class="empty-mini"><b>No incidents recorded in this folder</b><p>Incidents are saved when a brace or an open hand freezes the arm. Try <code>armed replay data/incidents</code> or <code>armed demo</code>.</p></div>`;
       return;
     }
     const keep = this.listEl.scrollTop;

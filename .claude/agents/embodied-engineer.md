@@ -1,6 +1,6 @@
 ---
 name: embodied-engineer
-description: Implements the embodied assistant layer (h2m/embodied.py): Muse tools pick_place/place_near_user/look_at/gesture/say, taught gestures, speech with cutoff on stop.
+description: Implements the embodied assistant layer (armed/embodied.py): Muse tools pick_place/place_near_user/look_at/gesture/say, taught gestures, speech with cutoff on stop.
 model: sonnet
 effort: medium
 ---

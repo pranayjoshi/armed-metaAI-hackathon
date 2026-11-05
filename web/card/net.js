@@ -3,8 +3,8 @@
 
 const meta = (name) => document.querySelector(`meta[name="${name}"]`)?.content || "";
 
-let token = meta("h2m-token");
-let mode = meta("h2m-mode") === "replay" ? "replay" : "live";
+let token = meta("armed-token");
+let mode = meta("armed-mode") === "replay" ? "replay" : "live";
 let bootstrap = null;
 
 /** The server writes the token only into pages it renders (`/`, later `/card`). Served as a plain
@@ -15,8 +15,8 @@ export function ensureToken() {
   bootstrap ||= fetch("/", { cache: "no-store" })
     .then((r) => r.text())
     .then((html) => {
-      token = /name="h2m-token"\s+content="([^"]*)"/.exec(html)?.[1] || "";
-      if (/name="h2m-mode"\s+content="replay"/.test(html)) mode = "replay";
+      token = /name="armed-token"\s+content="([^"]*)"/.exec(html)?.[1] || "";
+      if (/name="armed-mode"\s+content="replay"/.test(html)) mode = "replay";
       if (!token) bootstrap = null; // try again on the next call
       return token;
     })
@@ -33,7 +33,7 @@ export const isReplayPage = () => mode === "replay";
 export async function post(path, body) {
   const headers = { "Content-Type": "application/json" };
   const t = await ensureToken();
-  if (t) headers["X-H2M-Token"] = t;
+  if (t) headers["X-Armed-Token"] = t;
   try {
     const res = await fetch(path, { method: "POST", headers, body: JSON.stringify(body ?? {}) });
     const data = await res.json().catch(() => ({}));

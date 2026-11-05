@@ -6,16 +6,16 @@ from __future__ import annotations
 
 import pytest
 
-from h2m.compiler.grammar import build_vocabulary, parse
-from h2m.compiler.resolve import compile_contract
-from h2m.contract import StepContract, Verb
-from h2m.core import ROOT, load_config
-from h2m.embodied import Embodied, skill_facts, skill_speed
-from h2m.robot import ArmState
-from h2m.robot.backend import GRIPPER
-from h2m.robot.skills import PoseError, load_poses, load_skills, plan_move, plan_skill
-from h2m.safety import Verdict, decide
-from h2m.speech_out import SpeechOut
+from armed.compiler.grammar import build_vocabulary, parse
+from armed.compiler.resolve import compile_contract
+from armed.contract import StepContract, Verb
+from armed.core import ROOT, load_config
+from armed.embodied import Embodied, skill_facts, skill_speed
+from armed.robot import ArmState
+from armed.robot.backend import GRIPPER
+from armed.robot.skills import PoseError, load_poses, load_skills, plan_move, plan_skill
+from armed.safety import Verdict, decide
+from armed.speech_out import SpeechOut
 
 CFG = load_config()
 SAFETY = CFG["safety"]
@@ -43,7 +43,10 @@ def test_every_shipped_skill_plans_from_the_pose_file():
         slot = LIB.slots["slot_1"] if skill.requires_object else None
         plan = plan_skill(LIB, skill, 30.0, 20.0, slot, handover="handover")
         assert plan.skill == f"skill.{skill.name}"
-        assert plan.waypoints[-1].label == "home" and GRIPPER not in plan.waypoints[-1].joints
+        if skill.holds:  # ends holding it for someone: stays there, no trip home
+            assert all(w.label != "home" for w in plan.waypoints)
+        else:
+            assert plan.waypoints[-1].label == "home" and GRIPPER not in plan.waypoints[-1].joints
         # placeholders: the real arm would refuse every one of them
         assert plan.untaught()
 
@@ -240,15 +243,15 @@ def test_compile_carries_skill_name_and_destination():
 
 # app -----------------------------------------------------------------------------
 @pytest.fixture
-def h2m(monkeypatch, tmp_path):
-    from h2m.app import H2M
+def armed(monkeypatch, tmp_path):
+    from armed.app import Armed
 
-    monkeypatch.setattr("h2m.recorder.SESSIONS", tmp_path)
+    monkeypatch.setattr("armed.recorder.SESSIONS", tmp_path)
     cfg = load_config()
     for key in ("emg", "vision", "speech"):
         cfg[key] = {**cfg[key], "source": "off"}
     cfg["compiler"] = {**cfg["compiler"], "llm": "off"}
-    h = H2M(cfg)
+    h = Armed(cfg)
     h.arm.backend.connect()
     h.arm._measured = h.arm.backend.read_joints()
     h.arm._cmd = dict(h.arm._measured)
@@ -269,28 +272,28 @@ def run_to_end(h, limit_s=120.0):
     return t
 
 
-def test_typed_wave_asks_then_runs_on_confirm(h2m):
-    h2m.on_utterance("wave", {}, "typed")
-    pending = h2m.pending
+def test_typed_wave_asks_then_runs_on_confirm(armed):
+    armed.on_utterance("wave", {}, "typed")
+    pending = armed.pending
     assert pending is not None and pending.contract.verb is Verb.SKILL
     assert pending.decision.verdict is Verdict.ASK
     pending.announced_at -= 5  # past the reaction-time gate
-    ok, why = h2m.confirm(by="ui")
+    ok, why = armed.confirm(by="ui")
     assert ok, why
-    assert h2m.arm.state is ArmState.MOVING
-    started = events(h2m, "arm.started")[-1]
+    assert armed.arm.state is ArmState.MOVING
+    started = events(armed, "arm.started")[-1]
     assert started["skill"] == "skill.wave" and started["speed"] == SKILLS["wave"].speed
-    run_to_end(h2m)
-    assert h2m.arm.state is ArmState.READY
-    assert events(h2m, "arm.completed")
+    run_to_end(armed)
+    assert armed.arm.state is ArmState.READY
+    assert events(armed, "arm.completed")
 
 
-def test_wave_while_holding_is_a_held_move(h2m):
-    from h2m.world import HOLDING, GripperState
+def test_wave_while_holding_is_a_held_move(armed):
+    from armed.world import HOLDING, GripperState
 
-    h2m.gripper._state = GripperState(HOLDING, "cup", "test")
-    h2m.on_utterance("wave", {}, "typed")
-    last = events(h2m, "intent")[-1]
+    armed.gripper._state = GripperState(HOLDING, "cup", "test")
+    armed.on_utterance("wave", {}, "typed")
+    last = events(armed, "intent")[-1]
     assert last["decision"]["verdict"] in ("ask", "hold")
     assert "route_clear" in last["decision"]["checks"]
     if last["decision"]["verdict"] == "ask":
@@ -299,27 +302,27 @@ def test_wave_while_holding_is_a_held_move(h2m):
 
 
 
-def test_typed_move_to_an_occupied_slot_is_held(h2m):
+def test_typed_move_to_an_occupied_slot_is_held(armed):
     # the virtual table has cup on slot_1, block on slot_2, ball on slot_3
-    h2m.on_utterance("move the cup to slot 2", {}, "typed")
-    assert h2m.pending is None
-    last = events(h2m, "intent")[-1]
+    armed.on_utterance("move the cup to slot 2", {}, "typed")
+    assert armed.pending is None
+    last = events(armed, "intent")[-1]
     assert last["decision"]["verdict"] == "hold" and "block" in last["decision"]["reason"]
 
 
-def test_typed_move_runs_after_confirm_when_the_slot_is_free(h2m, monkeypatch):
-    objects = [o for o in h2m.visible_objects() if o["id"] != "block"]
-    monkeypatch.setattr(h2m, "visible_objects", lambda: objects)
-    h2m.on_utterance("move the cup to slot 2", {}, "typed")
-    pending = h2m.pending
+def test_typed_move_runs_after_confirm_when_the_slot_is_free(armed, monkeypatch):
+    objects = [o for o in armed.visible_objects() if o["id"] != "block"]
+    monkeypatch.setattr(armed, "visible_objects", lambda: objects)
+    armed.on_utterance("move the cup to slot 2", {}, "typed")
+    pending = armed.pending
     assert pending is not None and pending.contract.verb is Verb.MOVE
     pending.announced_at -= 5
-    ok, why = h2m.confirm(by="ui")
+    ok, why = armed.confirm(by="ui")
     assert ok, why
-    started = events(h2m, "arm.started")[-1]
+    started = events(armed, "arm.started")[-1]
     assert started["skill"] == "move" and started["destination"] == "slot_2"
-    run_to_end(h2m)
-    assert h2m.arm.state is ArmState.READY
+    run_to_end(armed)
+    assert armed.arm.state is ArmState.READY
 
 # added alongside today's changes
 def test_near_person_ships_on_for_the_real_arm_and_holds_when_off():
@@ -333,61 +336,61 @@ def test_near_person_ships_on_for_the_real_arm_and_holds_when_off():
     d = decide(skill_contract("take_this"), world(**skill_facts(SKILLS["take_this"], off)), off)
     assert d.verdict is Verdict.HOLD and "near_person_enabled" in d.reason
 
-def test_place_near_user_still_held_on_an_unmeasured_or_unwatched_handover(h2m):
+def test_place_near_user_still_held_on_an_unmeasured_or_unwatched_handover(armed):
     """The flag does not relax place_near_user: on hardware an unmeasured handover
     polyline is dropped from the proof (no taught path), and a camera not checked to see
     past the arm makes the spot unwatchable. Either way the gate holds."""
     from dataclasses import replace
 
-    from h2m.routing import Handover, plan_handover
+    from armed.routing import Handover, plan_handover
 
-    assert h2m.safety_cfg.get("near_person_enabled") is True
+    assert armed.safety_cfg.get("near_person_enabled") is True
     unmeasured = Handover("home", [(0.5, 0.7), (0.15, 0.85)], (0.15, 0.85), 0.1,
                           measured=False, camera_sees_past_arm=True)
-    routes = replace(h2m.routes, handover=unmeasured)
+    routes = replace(armed.routes, handover=unmeasured)
     assert routes.for_proof(hardware=True).handover is None
     shaping = plan_handover([], [], routes.for_proof(hardware=True))
     assert shaping.problem and "taught path" in shaping.problem
     unwatched = replace(unmeasured, measured=True, camera_sees_past_arm=False)
-    h2m.routes = replace(h2m.routes, handover=unwatched)
-    watchable, why = h2m._spot_watchable()
+    armed.routes = replace(armed.routes, handover=unwatched)
+    watchable, why = armed._spot_watchable()
     assert watchable is False and "camera" in why
     c = StepContract(verb=Verb.PLACE_NEAR_USER, confidence=0.9)
     d = decide(c, world(holding=True, spot_watchable=watchable, spot_clear=True, watch_reason=why), SAFETY)
     assert d.verdict is Verdict.HOLD and "camera" in d.reason
 
-def test_typed_take_this_asks_with_near_person_on_and_holds_when_off(h2m):
-    from h2m.world import EMPTY, GripperState
+def test_typed_take_this_asks_with_near_person_on_and_holds_when_off(armed):
+    from armed.world import EMPTY, GripperState
 
-    h2m.gripper._state = GripperState(EMPTY, None, "test")  # unknown would hold first
-    h2m.on_utterance("take this", {}, "typed")
-    pending = h2m.pending
+    armed.gripper._state = GripperState(EMPTY, None, "test")  # unknown would hold first
+    armed.on_utterance("take this", {}, "typed")
+    pending = armed.pending
     assert pending is not None and pending.decision.verdict is Verdict.ASK
     assert pending.decision.checks["near_person_ok"] is True
     assert pending.contract.speed <= SAFETY["near_person_speed_cap"]
-    h2m.cancel("test")
-    h2m.safety_cfg["near_person_enabled"] = False  # the one gate config, shared with embodied
-    h2m.on_utterance("take this", {}, "typed")
-    assert h2m.pending is None
-    last = events(h2m, "intent")[-1]
+    armed.cancel("test")
+    armed.safety_cfg["near_person_enabled"] = False  # the one gate config, shared with embodied
+    armed.on_utterance("take this", {}, "typed")
+    assert armed.pending is None
+    last = events(armed, "intent")[-1]
     assert last["decision"]["verdict"] == "hold"
     assert "near_person_enabled" in last["decision"]["reason"]
 
 
-def test_touch_close_uses_the_taught_point_jaws_and_falls_back_when_untaught(h2m):
-    from h2m.robot.arm import Grip
+def test_touch_close_uses_the_taught_point_jaws_and_falls_back_when_untaught(armed):
+    from armed.robot.arm import Grip
 
-    slot = h2m.arm.poses.slots["slot_1"]
+    slot = armed.arm.poses.slots["slot_1"]
     grip = Grip(0.5, 12.5, 0.3)
-    h2m.cfg["arm"]["use_taught_touch_close"] = True
-    h2m.cfg["arm"]["touch_squeeze_pct"] = 8
+    armed.cfg["arm"]["use_taught_touch_close"] = True
+    armed.cfg["arm"]["touch_squeeze_pct"] = 8
     assert not slot.point.taught
-    assert h2m._touch_close_pct(slot, grip) == 12.5  # untaught point: the effort-mapped close
+    assert armed._touch_close_pct(slot, grip) == 12.5  # untaught point: the effort-mapped close
     taught = type(slot.point)(
         slot.point.name, {**slot.point.joints, "gripper": 35.0}, True
     )
     slot = type(slot)(slot.slot_id, slot.table_xy, slot.above, slot.grasp, taught)
-    assert h2m._touch_close_pct(slot, grip) == 31.0  # touch 35 less 8 x 0.5
-    h2m.cfg["arm"]["use_taught_touch_close"] = False
-    assert h2m._touch_close_pct(slot, grip) == 12.5
-    assert h2m._touch_close_pct(None, grip) == 12.5
+    assert armed._touch_close_pct(slot, grip) == 31.0  # touch 35 less 8 x 0.5
+    armed.cfg["arm"]["use_taught_touch_close"] = False
+    assert armed._touch_close_pct(slot, grip) == 12.5
+    assert armed._touch_close_pct(None, grip) == 12.5

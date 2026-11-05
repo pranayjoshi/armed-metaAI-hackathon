@@ -13,7 +13,7 @@ let memTarget = null, lastPulse = -9, lastState = null, lastStatus = "";
 const words = (v, fb = "—") => (v ? String(v).replaceAll("_", " ") : fb);
 const typing = () => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
 
-// ── what the arm is doing, in a sentence (BUILD_PLAN §6) ─────────────────────
+// ── what the arm is doing, in a sentence ─────────────────────
 const PHRASE = { pick_place: "pick up", point: "point at", home: "go home", gesture: "gesture", place_near_user: "set down" };
 const DOING = { pick_place: "Picking up", point: "Pointing at", home: "Going home", gesture: "Gesturing", place_near_user: "Setting down" };
 const STAGE = { approach: "reaching", grasp: "gripping", carry: "carrying", release: "letting go", return: "returning", home: "homing", point: "pointing" };
@@ -175,7 +175,7 @@ async function loadRules() {
   if (res && !res.detail) rules = { zones: res.zones ?? null, routes: res.routes ?? null };
 }
 
-// Replay without `h2m demo`: the snapshot has no arm, EMG, vision or events at all.
+// Replay without `armed demo`: the snapshot has no arm, EMG, vision or events at all.
 function renderEmpty(s) {
   const { esc } = ctx;
   deck.updateEmpty(s);

@@ -1,4 +1,4 @@
-"""Calibration tools (h2m/calibrate.py, `h2m calibrate ...`) and the shoot profile. No
+"""Calibration tools (armed/calibrate.py, `armed calibrate ...`) and the shoot profile. No
 camera, no display, no arm but the virtual one, no network: every writer runs on a
 temporary copy of the config files and the records go to a temporary folder."""
 
@@ -10,12 +10,12 @@ import numpy as np
 import pytest
 import yaml
 
-from h2m import calibrate as cal
-from h2m import cli
-from h2m.core import ROOT, deep_merge, load_config
-from h2m.grasp import load_grasp
-from h2m.robot.skills import load_poses
-from h2m.routing import load_routes
+from armed import calibrate as cal
+from armed import cli
+from armed.core import ROOT, deep_merge, load_config
+from armed.grasp import load_grasp
+from armed.robot.skills import load_poses
+from armed.routing import load_routes
 
 FIXTURE_POSES = ROOT / "tests" / "fixtures" / "poses.yaml"
 
@@ -30,14 +30,14 @@ def records(tmp_path, monkeypatch):
 
 @pytest.fixture
 def files(tmp_path):
-    """Temporary copies of configs/h2m.yaml and configs/routes.yaml, the config pointing
+    """Temporary copies of configs/armed.yaml and configs/routes.yaml, the config pointing
     at the copied routes file and the fixture poses."""
     routes = tmp_path / "routes.yaml"
     shutil.copy(ROOT / "configs" / "routes.yaml", routes)
-    cfg = yaml.safe_load((ROOT / "configs" / "h2m.yaml").read_text())
+    cfg = yaml.safe_load((ROOT / "configs" / "armed.yaml").read_text())
     cfg["rules"]["routes_file"] = str(routes)
     cfg["arm"]["poses_file"] = str(FIXTURE_POSES)
-    config = tmp_path / "h2m.yaml"
+    config = tmp_path / "armed.yaml"
     config.write_text(yaml.safe_dump(cfg, sort_keys=False))
     return config, routes
 
@@ -95,7 +95,7 @@ def test_write_homography_edits_one_line_and_keeps_the_rest(files):
     assert np.allclose(cal.read_homography(after), H)
     del after["vision"]["table_homography"], before["vision"]["table_homography"]
     assert after == before
-    assert "h2m calibrate table" in config.read_text()
+    assert "armed calibrate table" in config.read_text()
 
 
 def test_read_homography_rejects_a_malformed_matrix():
@@ -202,8 +202,8 @@ def test_crossings_and_film_verdicts(files):
 
 
 def test_jog_route_moves_the_virtual_arm_pose_by_pose():
-    from h2m.robot import build_arm
-    from h2m.robot.arm import ArmState
+    from armed.robot import build_arm
+    from armed.robot.arm import ArmState
 
     arm = build_arm({"backend": "virtual", "poses_file": str(FIXTURE_POSES), "max_joint_speed_deg_s": 100})
     arm.connect()
@@ -234,7 +234,7 @@ JAW_CONFIG = """grasp:
 
 
 def test_jaw_points_are_written_and_checked(tmp_path):
-    config = tmp_path / "h2m.yaml"
+    config = tmp_path / "armed.yaml"
     config.write_text(JAW_CONFIG)
     with pytest.raises(ValueError):
         cal.parse_jaw_points("30:25,60:50,100:80")  # the placeholder
@@ -320,7 +320,7 @@ def test_run_shoot_refuses_without_a_key_then_with_placeholder_routes(files, mon
     monkeypatch.setenv("MODEL_API_KEY", "x")
     assert cli.main(["--config", str(config), "run", "--profile", "shoot"]) == 2
     out = capsys.readouterr().out
-    assert "route direct slot_1 is a placeholder" in out and "h2m calibrate route direct slot_1" in out
+    assert "route direct slot_1 is a placeholder" in out and "armed calibrate route direct slot_1" in out
     assert "x" not in out.split("MODEL_API_KEY")[1][:5]  # the key value is never printed
     # the routes measured: the preflight passes and the e-stop rule is the next refusal
     cal.write_route(routes, "direct", "slot_1", [(0.25, 0.55), (0.3, 0.2), (0.5, 0.2)])
@@ -411,12 +411,12 @@ def test_cli_table_write_slots_puts_the_tapes_into_the_poses_file(files, tmp_pat
 def test_sam_markers_fall_back_to_clicks_without_a_client(monkeypatch):
     import sys
 
-    monkeypatch.setitem(sys.modules, "h2m.sensors.sam", None)  # import fails: no client
+    monkeypatch.setitem(sys.modules, "armed.sensors.sam", None)  # import fails: no client
     assert cal.sam_boxes(np.zeros((4, 4, 3), np.uint8), "marker") is None
 
 
 def test_sam_markers_scale_the_client_boxes_to_pixels(monkeypatch):
-    from h2m.sensors import sam
+    from armed.sensors import sam
 
     real_client = sam.SamClient
 
@@ -444,7 +444,7 @@ def test_sam_markers_scale_the_client_boxes_to_pixels(monkeypatch):
 def test_writers_cope_with_block_style_files(tmp_path):
     """A file written by a YAML dump (block lists) is edited to one flow line with no
     dangling items: what the jaw writer hit on a dumped config."""
-    config = tmp_path / "h2m.yaml"
+    config = tmp_path / "armed.yaml"
     config.write_text(yaml.safe_dump(yaml.safe_load(JAW_CONFIG)) + "server:\n  port: 1\n")
     cal.write_jaw_points(config, [(30.0, 24.0), (60.0, 51.0), (100.0, 79.0)])
     data = yaml.safe_load(config.read_text())

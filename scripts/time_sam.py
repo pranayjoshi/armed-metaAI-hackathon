@@ -6,10 +6,10 @@
 
 Needs MODEL_API_KEY in the environment (or .env; the key is read, never printed). The
 default frame is the newest image under outputs/captured_images (git-ignored captures);
-pass a path to time another. Phrases default to the catalog prompts in configs/h2m.yaml
+pass a path to time another. Phrases default to the catalog prompts in configs/armed.yaml
 plus `hand` and `face`, which is what the runtime asks. Writes nothing to the repo.
 
-The decision this answers (docs/COMPLIANCE.md section 6): under 1.5 s p50, scan on scene
+The decision this answers (docs/LIVE_RUNTIME.md): under 1.5 s p50, scan on scene
 change and events as configured; over 3 s, scan on events only and let the tracker carry
 the rest (raise vision.scan_every_s).
 """
@@ -27,8 +27,8 @@ sys.path.insert(0, str(ROOT))
 
 import cv2  # noqa: E402
 
-from h2m.core import load_config, load_env  # noqa: E402
-from h2m.sensors.sam import FACE, HAND, SamClient  # noqa: E402
+from armed.core import load_config, load_env  # noqa: E402
+from armed.sensors.sam import FACE, HAND, SamClient  # noqa: E402
 
 
 def newest_capture() -> Path | None:

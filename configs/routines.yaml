@@ -1,11 +1,11 @@
-# Routines: what the arm offers on its own, when (docs/PROACTIVE.md §5, h2m/routines.py).
+# Routines: what the arm offers on its own, when (docs/PROACTIVE.md §5, armed/routines.py).
 # Editable here or through GET/POST /api/routines. A routine only ever becomes a card:
-# `mode` is the trust rung the person set for it, and h2m/safety.py::ladder can only
+# `mode` is the trust rung the person set for it, and armed/safety.py::ladder can only
 # lower it (anything near a person or carrying is always a card; `announce` needs
-# trust.announce_enabled in configs/h2m.yaml).
+# trust.announce_enabled in configs/armed.yaml).
 #
 #   action      a skill id from configs/skills.yaml, or pick_place / look_at / say
-#   object      the catalog object (configs/h2m.yaml objects) when the action takes one
+#   object      the catalog object (configs/armed.yaml objects) when the action takes one
 #   every / at / on   exactly one: an interval, wall-clock times, or an event
 #                     (phone_buzz, knock, door, sit_down, lie_down, stand_up, lights_off,
 #                     new_object, hand_out, person_arrived)
@@ -21,28 +21,38 @@
 #   first_after  for `every`: when the first one is due after start (default: the interval)
 routines:
   water:
-    action: pick_place
+    # For the film: the card and the line come at once (no water on the desk, but the
+    # protein shake with a straw). Muse is still woken with the routine as the reason, so
+    # the Mind view shows it reading the desk.
+    action: bring_drink
     object: cup
     every: 60m
     mode: ask
     window: 5m
-    label: "Water?"
+    profile: desk
+    label: "Bring your shake up?"
+    say: "It's water time. No water here, but there's your protein shake. Bring it up?"
   desk_check:
-    action: bow
+    # One piece of rubbish per veto ring (toy, 3D print, a finished drink) into the bin,
+    # again until the desk is clear. Never the phone or the keys.
+    action: pick_place
+    object: trash
     every: 30m
     mode: announce
     window: 2m
     profile: desk
     conditions: ["hand not at keyboard"]
-    label: "Check the desk?"
-    say: "Checking the desk."
+    say: "Clearing the desk."
   phone:
+    # The ring is seen, not heard: Muse sees the phone's screen light up on slot 2 (screen
+    # up, the jaws grip its sides) and raises phone_buzz. The console's button still works.
     action: hold_up
     object: ball
     "on": phone_buzz
     mode: ask
     window: 90s
-    label: "Show you the phone?"
+    label: "Bring the phone?"
+    say: "Bring the phone?"
   knock:
     action: wave
     "on": knock
@@ -52,22 +62,66 @@ routines:
   take_it:
     action: take_this
     "on": hand_out
-    mode: ask
+    mode: never   # off for the film: a held-out jar is Muse's call (hold_it), not this
     window: 30s
     label: "Take it from you?"
   hold_it:
+    # Muse sees it from the laptop camera: phone at the ear, talking, a jar held out.
     action: hold_jar
-    "on": hand_out
+    "on": on_call_holding
     mode: ask
     window: 30s
+    profile: desk
     label: "Hold the jar?"
+  let_go_jar:
+    # The lid is off: one flicker and the jaws open.
+    action: let_go
+    "on": jar_held
+    mode: ask
+    window: 2m
+    profile: desk
+    label: "Let go?"
+  chips:
+    # Someone offers something ("have some chips"): Muse judges it, the veto ring runs,
+    # and the arm takes it at the visitor's spot.
+    action: accept_item
+    "on": offered
+    mode: announce
+    window: 30s
+    profile: desk
+    label: "Take it from them?"
+    say: "I'll take that."
+  stow_it:
+    # The chips are held: put them in the tray, or (hold_it_up) hold them up for you.
+    action: stow_held
+    "on": holding
+    mode: ask
+    window: 30s
+    profile: desk
+    label: "Put it in the tray?"
+  hold_it_up:
+    action: hold_out_held
+    "on": holding
+    mode: ask
+    window: 30s
+    profile: desk
+    label: "Hold it up for you?"
+  keys:
+    # Getting up to leave: the keys from slot 3 to the hand.
+    action: hand_keys
+    object: keys
+    "on": leaving
+    mode: ask
+    window: 60s
+    profile: desk
+    label: "Your keys?"
   pills:
     action: hand_over
     object: pill_cup
     every: 30m
-    mode: ask
+    mode: announce   # the veto ring: it says the line, waits, then hands the pills over
     window: 5m
     profile: bed
     label: "Pills?"
-    say: "It's {time} Pranay, time for your pills."
+    say: "It's 8 AM Pranay, time for your pills."   # the film's morning; {time} says the real time
 quiet_hours: "23:00-07:00"

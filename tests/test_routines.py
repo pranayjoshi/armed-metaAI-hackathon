@@ -1,4 +1,4 @@
-"""Routines (docs/PROACTIVE.md §5, h2m/routines.py): parsing, due times, conditions that
+"""Routines (docs/PROACTIVE.md §5, armed/routines.py): parsing, due times, conditions that
 fail closed, manners state and the file round trip. Wall clock is a fake."""
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ import time
 import pytest
 import yaml
 
-from h2m.routines import (
+from armed.routines import (
     RoutineBook,
     RoutineError,
     condition_holds,

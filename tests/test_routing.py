@@ -7,13 +7,13 @@ from dataclasses import replace
 
 import pytest
 
-from h2m.contract import StepContract, Verb
-from h2m.core import ROOT, load_config
-from h2m.robot import ArmState, build_arm
-from h2m.robot.skills import plan_pick_place
-from h2m.routing import RouteConfig, RoutesUnavailable, load_routes, plan_carry
-from h2m.rules import Rule, RulesUnavailable
-from h2m.safety import Verdict, decide
+from armed.contract import StepContract, Verb
+from armed.core import ROOT, load_config
+from armed.robot import ArmState, build_arm
+from armed.robot.skills import plan_pick_place
+from armed.routing import RouteConfig, RoutesUnavailable, load_routes, plan_carry
+from armed.rules import Rule, RulesUnavailable
+from armed.safety import Verdict, decide
 
 ROUTES = load_routes(ROOT / "configs" / "routes.yaml")
 ALL = ROUTES.routes.keys()
@@ -140,7 +140,7 @@ def test_via_poses_are_taught_poses_and_refused_untaught_on_hardware(arm):
 def test_route_with_undefined_pose_is_rejected(tmp_path):
     import yaml
 
-    from h2m.robot.skills import PoseError, load_poses
+    from armed.robot.skills import PoseError, load_poses
 
     data = yaml.safe_load((ROOT / "tests" / "fixtures" / "poses.yaml").read_text())
     data["routes"]["sneaky"] = ["not_a_pose"]
@@ -154,7 +154,7 @@ def test_route_with_undefined_pose_is_rejected(tmp_path):
 def test_shipped_routes_are_per_slot_and_flagged_placeholders():
     assert set(ROUTES.routes) == {"direct", "via_left", "via_high"}
     for per_slot in ROUTES.routes.values():
-        assert set(per_slot) == {"slot_1", "slot_2", "slot_3"}
+        assert set(per_slot) == {"slot_1", "slot_2", "slot_3", "slot_4"}
     assert ROUTES.unmeasured == {(r, s) for r in ROUTES.routes for s in ROUTES.routes[r]}
     assert ROUTES.handover.measured is False and ROUTES.handover.camera_sees_past_arm is False
 
@@ -213,15 +213,15 @@ def test_measured_flag_must_be_exactly_true(tmp_path):
 def test_app_on_hardware_holds_a_rule_shaped_carry_with_placeholder_routes(tmp_path, monkeypatch):
     """Review repro (untaught via on hardware): the carry holds at the gate,
     with a reason, before any untaught via pose could matter."""
-    from h2m.app import H2M
-    from h2m.rules import RuleStore
+    from armed.app import Armed
+    from armed.rules import RuleStore
 
     monkeypatch.delenv("MODEL_API_KEY", raising=False)
-    monkeypatch.setattr("h2m.recorder.SESSIONS", tmp_path)
+    monkeypatch.setattr("armed.recorder.SESSIONS", tmp_path)
     cfg = load_config()
     for part in ("emg", "vision", "speech"):
         cfg[part] = {**cfg[part], "source": "off"}
-    h = H2M(cfg)
+    h = Armed(cfg)
     h.rules = RuleStore("t", root=tmp_path / "rules")
     h.rules.add(Rule(["liquid"], "laptop", "route_around", approved=True))
     h.arm.backend.is_hardware = True
@@ -231,7 +231,7 @@ def test_app_on_hardware_holds_a_rule_shaped_carry_with_placeholder_routes(tmp_p
     assert d["verdict"] == "hold" and "measured route" in d["reason"] and h.pending is None
 
 # imports added with the tests below
-from h2m.routing import (  # noqa: E402
+from armed.routing import (  # noqa: E402
     Checks,
     applied_detail,
     check_proposal,
@@ -283,7 +283,7 @@ def test_checker_fails_closed_without_a_route_map_and_holds_count_as_prevented()
 
 def test_permitted_table_covers_every_object_and_slot():
     table = permitted_table(ROUTES, [rule("route_around")], ALL, OBJECTS)
-    assert set(table) == {(o, s) for o in OBJECTS for s in ("slot_1", "slot_2", "slot_3")}
+    assert set(table) == {(o, s) for o in OBJECTS for s in ("slot_1", "slot_2", "slot_3", "slot_4")}
     assert "direct" not in table[("cup", "slot_1")].routes
     assert table[("block", "slot_1")].routes == frozenset(ALL)
 

@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from h2m.contract import StepContract, Verb
-from h2m.core import load_config
-from h2m.embodied import (
+from armed.contract import StepContract, Verb
+from armed.core import load_config
+from armed.embodied import (
     GESTURES,
     TOOLS,
     Embodied,
@@ -17,9 +17,9 @@ from h2m.embodied import (
     load_gestures,
     validate_args,
 )
-from h2m.robot.skills import PoseError, load_poses
-from h2m.safety import Verdict, decide
-from h2m.speech_out import SpeechOut
+from armed.robot.skills import PoseError, load_poses
+from armed.safety import Verdict, decide
+from armed.speech_out import SpeechOut
 
 ROOT = Path(__file__).resolve().parent.parent
 CFG = load_config()
@@ -305,8 +305,8 @@ def test_scene_vision_failure_is_graceful():
 
 
 def test_teach_saves_gesture_keyframe(tmp_path):
-    from h2m.embodied import load_gestures
-    from h2m.robot.skills import load_poses, save_pose
+    from armed.embodied import load_gestures
+    from armed.robot.skills import load_poses, save_pose
 
     src = Path("tests/fixtures/poses.yaml")
     path = tmp_path / "poses.yaml"

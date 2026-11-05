@@ -7,9 +7,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from h2m.core import EventLog, now
-from h2m.sensors.speech import BurstStop, SpeechService, build_speech
-from h2m.sensors.voice import Final
+from armed.core import EventLog, now
+from armed.sensors.speech import BurstStop, SpeechService, build_speech
+from armed.sensors.voice import Final
 
 CATALOG = [{"id": "cup", "name": "paper cup"}, {"id": "ball", "name": "phone"}]
 

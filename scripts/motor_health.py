@@ -9,7 +9,7 @@ import sys
 
 from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 
-PORT = os.environ.get("H2M_ARM_PORT", "/dev/tty.usbmodem5AE60746561")
+PORT = os.environ.get("ARMED_ARM_PORT", "/dev/tty.usbmodem5AE60746561")
 REGS = (
     "Present_Voltage",
     "Present_Temperature",

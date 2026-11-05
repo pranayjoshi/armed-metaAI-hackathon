@@ -11,12 +11,12 @@ import time
 
 import pytest
 
-import h2m.learning as learning_mod
-from h2m.core import load_config, now
-from h2m.incident import FALLBACK_SAY
-from h2m.robot import ArmState
-from h2m.robot.skills import plan_home
-from h2m.rules import Rule, RuleStore
+import armed.learning as learning_mod
+from armed.core import load_config, now
+from armed.incident import FALLBACK_SAY
+from armed.robot import ArmState
+from armed.robot.skills import plan_home
+from armed.rules import Rule, RuleStore
 
 GOOD = {
     "cause_object": "laptop",
@@ -45,17 +45,17 @@ class FakeMuse:
 
 
 @pytest.fixture
-def h2m(monkeypatch, tmp_path):
-    monkeypatch.setattr("h2m.recorder.SESSIONS", tmp_path / "sessions")
+def armed(monkeypatch, tmp_path):
+    monkeypatch.setattr("armed.recorder.SESSIONS", tmp_path / "sessions")
     monkeypatch.delenv("MODEL_API_KEY", raising=False)
     cfg = load_config()
     for part in ("emg", "vision", "speech"):
         cfg[part] = {**cfg[part], "source": "off"}
     cfg["compiler"] = {**cfg["compiler"], "llm": "off"}
     cfg["incident"] = {**cfg["incident"], "after_s": 0.0}
-    from h2m.app import H2M
+    from armed.app import Armed
 
-    h = H2M(cfg)
+    h = Armed(cfg)
     h.rules = RuleStore("test", root=tmp_path / "rules")
     h.learner.root = tmp_path / "incidents"
     h.learner.muse = FakeMuse()
@@ -109,7 +109,7 @@ def took_it_back(h):
     """The flinch froze the arm holding the cup. A pick while HOLDING holds ("place it
     first"), so model the person taking the cup out and the runtime restarting: the
     gripper is unknown again (never assumed empty)."""
-    from h2m.world import GripperTracker
+    from armed.world import GripperTracker
 
     assert h.gripper.state().holding
     h.gripper = GripperTracker()
@@ -121,60 +121,60 @@ def answer_later(p, s=1.0):
 
 
 # ── freeze path ──────────────────────────────────────────────────────────────
-def test_brace_freeze_never_waits_on_incident_or_muse(h2m):
+def test_brace_freeze_never_waits_on_incident_or_muse(armed):
     gate = threading.Event()
-    h2m.learner.muse = FakeMuse(block=gate)
-    start_carry(h2m)
+    armed.learner.muse = FakeMuse(block=gate)
+    start_carry(armed)
     t0 = time.perf_counter()
-    h2m.log.emit("emg.brace", onset_t=now())
+    armed.log.emit("emg.brace", onset_t=now())
     elapsed = time.perf_counter() - t0
-    assert h2m.arm.state is ArmState.STOPPED
+    assert armed.arm.state is ArmState.STOPPED
     assert elapsed < 0.05  # only an enqueue on the event thread
-    assert h2m.learner.muse.calls == []  # no model on the freeze path
-    assert not h2m.learner.buffer.frozen  # freeze/save not done on the event thread either
-    worker = threading.Thread(target=h2m.learner.run_once, args=(2.0,), name="h2m-incident")
+    assert armed.learner.muse.calls == []  # no model on the freeze path
+    assert not armed.learner.buffer.frozen  # freeze/save not done on the event thread either
+    worker = threading.Thread(target=armed.learner.run_once, args=(2.0,), name="armed-incident")
     worker.start()
     deadline = time.time() + 2
-    while not h2m.learner.muse.calls and time.time() < deadline:
+    while not armed.learner.muse.calls and time.time() < deadline:
         time.sleep(0.01)
-    assert h2m.learner.muse.threads == ["h2m-incident"]
+    assert armed.learner.muse.threads == ["armed-incident"]
     gate.set()
     worker.join(2)
-    assert kinds(h2m, "incident.explained")
+    assert kinds(armed, "incident.explained")
 
 
-def test_idle_brace_starts_no_incident(h2m):
-    h2m.log.emit("emg.brace", onset_t=now())
-    assert not h2m.learner.run_once(timeout=0.05)
+def test_idle_brace_starts_no_incident(armed):
+    armed.log.emit("emg.brace", onset_t=now())
+    assert not armed.learner.run_once(timeout=0.05)
 
 
 # ── explain and propose ─────────────────────────────────────────────────────
-def test_incident_saved_explained_and_proposed_unapproved(h2m, tmp_path):
-    data = flinch_and_explain(h2m)
+def test_incident_saved_explained_and_proposed_unapproved(armed, tmp_path):
+    data = flinch_and_explain(armed)
     assert data["say"] == GOOD["say"]
     rule = data["proposal"]["rule"]
     assert rule["approved"] is False and rule["avoid"] == "laptop"
-    assert h2m.rules.list() == []  # nothing saved without approval
+    assert armed.rules.list() == []  # nothing saved without approval
     inc_dir = tmp_path / "incidents" / data["incident_id"]
     assert (inc_dir / "meta.json").exists() and (inc_dir / "explanation.json").exists()
     meta = json.loads((inc_dir / "meta.json").read_text())
     assert meta["held"] == "paper cup (tags: liquid, fragile)"
     assert any(c["contract"]["stage"] == "carry" for c in meta["contracts"])
     # the prompt names the avoid zones so a rule can point at one
-    prompt = h2m.learner.muse.calls[0][1][1]["content"][0]["text"]
+    prompt = armed.learner.muse.calls[0][1][1]["content"][0]["text"]
     assert "avoid_zone" in prompt and "laptop" in prompt
     # the stop is still latched: the incident pipeline never resets or arms
-    assert h2m.arm.state is ArmState.STOPPED
-    assert not h2m.arm.execute(plan_home(h2m.arm.poses))[0]
+    assert armed.arm.state is ArmState.STOPPED
+    assert not armed.arm.execute(plan_home(armed.arm.poses))[0]
 
 
 @pytest.mark.parametrize("muse", [None, FakeMuse(fail=True), FakeMuse(reply={"say": "hm"})])
-def test_muse_missing_or_failing_falls_back(h2m, muse):
-    h2m.learner.muse = muse
-    data = flinch_and_explain(h2m)
+def test_muse_missing_or_failing_falls_back(armed, muse):
+    armed.learner.muse = muse
+    data = flinch_and_explain(armed)
     assert data["say"] == FALLBACK_SAY and data["proposal"] is None
     assert data["explanation"]["source"] == "fallback"
-    assert h2m.arm.state is ArmState.STOPPED
+    assert armed.arm.state is ArmState.STOPPED
 
 
 @pytest.mark.parametrize(
@@ -184,34 +184,34 @@ def test_muse_missing_or_failing_falls_back(h2m, muse):
         ({"when_holding": ["radioactive"], "avoid": "laptop", "response": "slow_down"}, "tag"),
     ],
 )
-def test_rule_with_unknown_zone_or_tag_is_not_proposed(h2m, rule, problem):
-    h2m.learner.muse = FakeMuse(reply={**GOOD, "rule": rule})
-    data = flinch_and_explain(h2m)
+def test_rule_with_unknown_zone_or_tag_is_not_proposed(armed, rule, problem):
+    armed.learner.muse = FakeMuse(reply={**GOOD, "rule": rule})
+    data = flinch_and_explain(armed)
     assert data["proposal"] is None and problem in " ".join(data["problems"])
     assert data["say"] == FALLBACK_SAY  # don't ask a yes/no we cannot act on
 
 
-def test_muse_save_failure_still_explains(h2m, monkeypatch):
+def test_muse_save_failure_still_explains(armed, monkeypatch):
     def boom(*a, **k):
         raise OSError("disk full")
 
-    monkeypatch.setattr(h2m.learner.buffer, "save", boom)
-    data = flinch_and_explain(h2m)
-    assert data["say"] == FALLBACK_SAY and kinds(h2m, "incident.error")
-    assert not h2m.learner.buffer.frozen  # recording resumes
+    monkeypatch.setattr(armed.learner.buffer, "save", boom)
+    data = flinch_and_explain(armed)
+    assert data["say"] == FALLBACK_SAY and kinds(armed, "incident.error")
+    assert not armed.learner.buffer.frozen  # recording resumes
 
 
 # ── approval ─────────────────────────────────────────────────────────────────
-def test_brace_never_approves(h2m):
-    flinch_and_explain(h2m)
-    p = h2m.learner.proposal
+def test_brace_never_approves(armed):
+    flinch_and_explain(armed)
+    p = armed.learner.proposal
     answer_later(p)
-    h2m.log.emit("emg.brace", onset_t=now())
+    armed.log.emit("emg.brace", onset_t=now())
     time.sleep(0.1)
-    assert h2m.learner.proposal is p and h2m.rules.list() == []
+    assert armed.learner.proposal is p and armed.rules.list() == []
     for by in ("brace", "auto", "system"):
-        assert h2m.learner.approve(by=by) == (False, f"{by} cannot approve a rule")
-    assert h2m.rules.list() == []
+        assert armed.learner.approve(by=by) == (False, f"{by} cannot approve a rule")
+    assert armed.rules.list() == []
 
 
 def _squeeze(h, since_announce_s, held_ms=350):
@@ -222,84 +222,84 @@ def _squeeze(h, since_announce_s, held_ms=350):
     return p
 
 
-def test_squeeze_too_soon_does_not_approve(h2m):
-    flinch_and_explain(h2m)
-    p = _squeeze(h2m, since_announce_s=0.1)
-    assert h2m.learner.proposal is p and h2m.rules.list() == []
-    assert kinds(h2m, "emg.squeeze_rejected")
+def test_squeeze_too_soon_does_not_approve(armed):
+    flinch_and_explain(armed)
+    p = _squeeze(armed, since_announce_s=0.1)
+    assert armed.learner.proposal is p and armed.rules.list() == []
+    assert kinds(armed, "emg.squeeze_rejected")
 
 
-def test_squeeze_after_reaction_time_approves_and_saves(h2m):
-    flinch_and_explain(h2m)
-    p = _squeeze(h2m, since_announce_s=learning_mod.MIN_APPROVE_REACTION_S + 0.2)
-    rules = h2m.rules.list()
+def test_squeeze_after_reaction_time_approves_and_saves(armed):
+    flinch_and_explain(armed)
+    p = _squeeze(armed, since_announce_s=learning_mod.MIN_APPROVE_REACTION_S + 0.2)
+    rules = armed.rules.list()
     assert [r.id for r in rules] == [p.rule.id] and rules[0].approved is True
     assert rules[0].incident_id == p.incident_id and rules[0].clip
-    assert kinds(h2m, "rule.approved")[-1].data["by"] == "emg"
+    assert kinds(armed, "rule.approved")[-1].data["by"] == "emg"
 
 
-def test_squeeze_is_ambiguous_with_request_and_rule_waiting(h2m):
+def test_squeeze_is_ambiguous_with_request_and_rule_waiting(armed):
     from tests.test_app_stop import make_pending
 
-    flinch_and_explain(h2m)
-    make_pending(h2m, announced_at=now() - 5)
-    answer_later(h2m.learner.proposal, 5)
-    h2m.log.emit("emg.squeeze", effort=0.6, held_ms=350)
+    flinch_and_explain(armed)
+    make_pending(armed, announced_at=now() - 5)
+    answer_later(armed.learner.proposal, 5)
+    armed.log.emit("emg.squeeze", effort=0.6, held_ms=350)
     time.sleep(0.2)
-    assert h2m.rules.list() == [] and h2m.pending is not None
-    assert "ambiguous" in kinds(h2m, "emg.squeeze_rejected")[-1].data["reason"]
+    assert armed.rules.list() == [] and armed.pending is not None
+    assert "ambiguous" in kinds(armed, "emg.squeeze_rejected")[-1].data["reason"]
 
 
-def test_yes_approves_and_no_rejects(h2m):
-    flinch_and_explain(h2m)
-    answer_later(h2m.learner.proposal)
-    h2m.on_utterance("yes", source="typed")
-    assert len(h2m.rules.list()) == 1
-    h2m.arm.reset(), h2m.arm.arm()
-    took_it_back(h2m)
+def test_yes_approves_and_no_rejects(armed):
+    flinch_and_explain(armed)
+    answer_later(armed.learner.proposal)
+    armed.on_utterance("yes", source="typed")
+    assert len(armed.rules.list()) == 1
+    armed.arm.reset(), armed.arm.arm()
+    took_it_back(armed)
     # The second carry is already rerouted, so the same rule would change nothing and the
     # checker rejects it (see test_duplicate_rule_that_changes_nothing_is_not_proposed).
     # A different one (slow down) is proposed, and "no" drops it.
-    h2m.learner.muse = FakeMuse(reply={**GOOD, "rule": {**GOOD["rule"], "response": "slow_down"}})
-    flinch_and_explain(h2m)
-    answer_later(h2m.learner.proposal)
-    h2m.on_utterance("no", source="typed")
-    assert h2m.learner.proposal is None and len(h2m.rules.list()) == 1
+    armed.learner.muse = FakeMuse(reply={**GOOD, "rule": {**GOOD["rule"], "response": "slow_down"}})
+    flinch_and_explain(armed)
+    answer_later(armed.learner.proposal)
+    armed.on_utterance("no", source="typed")
+    assert armed.learner.proposal is None and len(armed.rules.list()) == 1
 
 
-def test_spoken_yes_counts_from_speech_onset(h2m):
-    flinch_and_explain(h2m)
-    h2m.learner.proposal.announced_at = now() - 0.5
+def test_spoken_yes_counts_from_speech_onset(armed):
+    flinch_and_explain(armed)
+    armed.learner.proposal.announced_at = now() - 0.5
     # 0.5 s ago minus 0.4 s of audio and 0.2 s of ASR: began before the question + 0.3 s
-    h2m.on_utterance("yes", {"asr_ms": 200, "audio_s": 0.4, "echo": False}, source="voice")
-    assert h2m.rules.list() == [] and h2m.learner.proposal is not None
+    armed.on_utterance("yes", {"asr_ms": 200, "audio_s": 0.4, "echo": False}, source="voice")
+    assert armed.rules.list() == [] and armed.learner.proposal is not None
 
 
-def test_ui_approval_pins_the_proposal_and_expires(h2m):
-    flinch_and_explain(h2m)
-    p = h2m.learner.proposal
+def test_ui_approval_pins_the_proposal_and_expires(armed):
+    flinch_and_explain(armed)
+    p = armed.learner.proposal
     answer_later(p)
-    assert h2m.learner.approve(by="ui", expected_id="r_stale") == (False, "proposal changed")
+    assert armed.learner.approve(by="ui", expected_id="r_stale") == (False, "proposal changed")
     p.expires_at = now() - 1
-    assert h2m.learner.approve(by="ui", expected_id=p.rule.id) == (False, "proposal expired")
-    assert h2m.rules.list() == []
+    assert armed.learner.approve(by="ui", expected_id=p.rule.id) == (False, "proposal expired")
+    assert armed.rules.list() == []
 
 
-def test_unanswered_proposal_expires(h2m):
-    flinch_and_explain(h2m)
-    h2m.learner.proposal.expires_at = now() - 1
-    h2m.learner.expire()
-    assert h2m.learner.proposal is None and kinds(h2m, "rule.expired")
+def test_unanswered_proposal_expires(armed):
+    flinch_and_explain(armed)
+    armed.learner.proposal.expires_at = now() - 1
+    armed.learner.expire()
+    assert armed.learner.proposal is None and kinds(armed, "rule.expired")
 
 
-def test_approval_fails_closed_on_corrupt_store(h2m):
-    flinch_and_explain(h2m)
-    answer_later(h2m.learner.proposal)
-    h2m.rules.path.parent.mkdir(parents=True, exist_ok=True)
-    h2m.rules.path.write_text("{not json")
-    ok, why = h2m.learner.approve(by="ui")
+def test_approval_fails_closed_on_corrupt_store(armed):
+    flinch_and_explain(armed)
+    answer_later(armed.learner.proposal)
+    armed.rules.path.parent.mkdir(parents=True, exist_ok=True)
+    armed.rules.path.write_text("{not json")
+    ok, why = armed.learner.approve(by="ui")
     assert not ok and "could not save" in why
-    assert h2m.rules.path.read_text() == "{not json"  # never overwritten
+    assert armed.rules.path.read_text() == "{not json"  # never overwritten
 
 
 # ── review 2, item 2: no squeeze answer or rule approval right after a stop ────
@@ -310,72 +310,72 @@ def wait_for(pred, timeout=2.0):
     return bool(pred())
 
 
-def test_after_stop_hold_off_ships_at_three_seconds_and_only_rises(h2m):
-    from h2m.app import H2M
+def test_after_stop_hold_off_ships_at_three_seconds_and_only_rises(armed):
+    from armed.app import Armed
 
-    assert load_config()["safety"]["after_stop_s"] == 3.0 and h2m.after_stop_s == 3.0
-    cfg = {**h2m.cfg, "safety": {**h2m.cfg["safety"], "after_stop_s": 0.5}}
-    assert H2M(cfg).after_stop_s == 3.0  # floor
-    assert h2m.stopped_recently(float("nan")) and h2m.stopped_recently(float("inf"))
+    assert load_config()["safety"]["after_stop_s"] == 3.0 and armed.after_stop_s == 3.0
+    cfg = {**armed.cfg, "safety": {**armed.cfg["safety"], "after_stop_s": 0.5}}
+    assert Armed(cfg).after_stop_s == 3.0  # floor
+    assert armed.stopped_recently(float("nan")) and armed.stopped_recently(float("inf"))
 
 
 @pytest.mark.parametrize("veto", ["emg.brace", "emg.open_hand"])
-def test_N5_a_startle_squeeze_after_an_idle_brace_confirms_nothing(h2m, veto):
+def test_N5_a_startle_squeeze_after_an_idle_brace_confirms_nothing(armed, veto):
     """R8 / N5: a startle on an idle arm (brace or open hand), a request waiting, and the
     startle's squeeze ~2 s later. The squeeze passes the request's own reaction gate but
     began within 3 s of the brace: rejected. 3 s later a squeeze confirms."""
-    h2m.log.emit(veto, onset_t=now(), extensor=0.9)
-    assert h2m.arm.state is ArmState.READY  # idle: the brace stopped nothing
-    h2m.on_utterance("hand me the cup", source="typed")
-    pending = h2m.pending
+    armed.log.emit(veto, onset_t=now(), extensor=0.9)
+    assert armed.arm.state is ArmState.READY  # idle: the brace stopped nothing
+    armed.on_utterance("hand me the cup", source="typed")
+    pending = armed.pending
     assert pending is not None
     pending.announced_at = now() - 2.5
-    h2m.log.emit("emg.squeeze", effort=0.78, held_ms=405)
+    armed.log.emit("emg.squeeze", effort=0.78, held_ms=405)
     time.sleep(0.2)
-    assert h2m.pending is pending and not kinds(h2m, "arm.started")
-    assert kinds(h2m, "emg.squeeze_rejected")[-1].data["reason"] == "too soon after a stop"
-    stop_was_long_ago(h2m, 3.5)
-    h2m.log.emit("emg.squeeze", effort=0.78, held_ms=405)
-    assert wait_for(lambda: kinds(h2m, "arm.started"))
+    assert armed.pending is pending and not kinds(armed, "arm.started")
+    assert kinds(armed, "emg.squeeze_rejected")[-1].data["reason"] == "too soon after a stop"
+    stop_was_long_ago(armed, 3.5)
+    armed.log.emit("emg.squeeze", effort=0.78, held_ms=405)
+    assert wait_for(lambda: kinds(armed, "arm.started"))
 
 
-def test_a_squeeze_right_after_a_burst_stop_confirms_nothing(h2m):
-    h2m.burst_freeze = True
-    start_carry(h2m)
-    h2m.log.emit("emg.burst_onset", onset_t=now())
-    assert h2m.arm.state is ArmState.STOPPED
-    h2m.learner._queue.get_nowait()  # the incident worker is not running here
-    assert h2m.arm.reset()[0] and h2m.arm.arm()[0]
-    took_it_back(h2m)
-    h2m.on_utterance("hand me the block", source="typed")
-    pending = h2m.pending
+def test_a_squeeze_right_after_a_burst_stop_confirms_nothing(armed):
+    armed.burst_freeze = True
+    start_carry(armed)
+    armed.log.emit("emg.burst_onset", onset_t=now())
+    assert armed.arm.state is ArmState.STOPPED
+    armed.learner._queue.get_nowait()  # the incident worker is not running here
+    assert armed.arm.reset()[0] and armed.arm.arm()[0]
+    took_it_back(armed)
+    armed.on_utterance("hand me the block", source="typed")
+    pending = armed.pending
     assert pending is not None
     pending.announced_at = now() - 2
-    n = len(kinds(h2m, "arm.started"))
-    h2m.log.emit("emg.squeeze", effort=0.6, held_ms=350)
+    n = len(kinds(armed, "arm.started"))
+    armed.log.emit("emg.squeeze", effort=0.6, held_ms=350)
     time.sleep(0.2)
-    assert h2m.pending is pending and len(kinds(h2m, "arm.started")) == n
-    assert kinds(h2m, "emg.squeeze_rejected")[-1].data["reason"] == "too soon after a stop"
+    assert armed.pending is pending and len(kinds(armed, "arm.started")) == n
+    assert kinds(armed, "emg.squeeze_rejected")[-1].data["reason"] == "too soon after a stop"
 
 
 @pytest.mark.parametrize("how", ["ui", "yes", "squeeze"])
-def test_no_rule_is_approved_within_three_seconds_of_a_stop(h2m, how):
-    flinch_and_explain(h2m)
-    p = h2m.learner.proposal
+def test_no_rule_is_approved_within_three_seconds_of_a_stop(armed, how):
+    flinch_and_explain(armed)
+    p = armed.learner.proposal
     answer_later(p, 5)
-    h2m.log.emit("emg.open_hand", extensor=0.9)  # another startle while the card is up
+    armed.log.emit("emg.open_hand", extensor=0.9)  # another startle while the card is up
     if how == "ui":
-        ok, why = h2m.learner.approve(by="ui", expected_id=p.rule.id)
+        ok, why = armed.learner.approve(by="ui", expected_id=p.rule.id)
         assert not ok and "too soon after a stop" in why
     elif how == "yes":
-        h2m.on_utterance("yes", source="typed")
-        assert "too soon after a stop" in h2m.reply
+        armed.on_utterance("yes", source="typed")
+        assert "too soon after a stop" in armed.reply
     else:
-        h2m.log.emit("emg.squeeze", effort=0.6, held_ms=350)
+        armed.log.emit("emg.squeeze", effort=0.6, held_ms=350)
         time.sleep(0.2)
-    assert h2m.rules.list() == [] and h2m.learner.proposal is p
-    stop_was_long_ago(h2m, 3.5)
-    assert h2m.learner.approve(by="ui", expected_id=p.rule.id)[0]
+    assert armed.rules.list() == [] and armed.learner.proposal is p
+    stop_was_long_ago(armed, 3.5)
+    assert armed.learner.approve(by="ui", expected_id=p.rule.id)[0]
 
 
 # ── review 2, item 3: a burst stop is possibly voluntary ──────────────────────
@@ -390,47 +390,47 @@ def prompt_text(h):
     return h.learner.muse.calls[-1][1][1]["content"][0]["text"]
 
 
-def test_burst_stop_with_no_flinch_after_it_proposes_no_rule(h2m, monkeypatch):
+def test_burst_stop_with_no_flinch_after_it_proposes_no_rule(armed, monkeypatch):
     monkeypatch.setattr(learning_mod, "BURST_FOLLOW_S", 0.3)
-    burst_stop(h2m)
-    assert h2m.learner.run_once(timeout=1.0)
-    data = kinds(h2m, "incident.explained")[-1].data
+    burst_stop(armed)
+    assert armed.learner.run_once(timeout=1.0)
+    data = kinds(armed, "incident.explained")[-1].data
     assert data["source"] == "burst" and data["proposal"] is None
-    assert learning_mod.NO_FOLLOW in data["problems"] and h2m.learner.proposal is None
+    assert learning_mod.NO_FOLLOW in data["problems"] and armed.learner.proposal is None
     assert data["say"] == FALLBACK_SAY  # no yes/no question it could not act on
-    text = prompt_text(h2m)
+    text = prompt_text(armed)
     assert "POSSIBLY VOLUNTARY" in text and "No brace or open hand followed" in text
-    meta = json.loads((h2m.learner.root / data["incident_id"] / "meta.json").read_text())
+    meta = json.loads((armed.learner.root / data["incident_id"] / "meta.json").read_text())
     assert meta["trigger"]["possibly_voluntary"] is True
     assert meta["trigger"]["followed_by_flinch"] is False
 
 
-def test_burst_stop_with_a_brace_too_late_after_it_proposes_no_rule(h2m, monkeypatch):
+def test_burst_stop_with_a_brace_too_late_after_it_proposes_no_rule(armed, monkeypatch):
     monkeypatch.setattr(learning_mod, "BURST_FOLLOW_S", 0.3)
-    burst_stop(h2m)
+    burst_stop(armed)
     time.sleep(0.4)
-    h2m.log.emit("emg.brace", onset_t=now())  # after the follow window
-    assert h2m.learner.run_once(timeout=1.0)
-    assert kinds(h2m, "incident.explained")[-1].data["proposal"] is None
+    armed.log.emit("emg.brace", onset_t=now())  # after the follow window
+    assert armed.learner.run_once(timeout=1.0)
+    assert kinds(armed, "incident.explained")[-1].data["proposal"] is None
 
 
 @pytest.mark.parametrize("veto", ["emg.brace", "emg.open_hand"])
-def test_burst_stop_followed_by_a_flinch_proposes_as_usual(h2m, monkeypatch, veto):
+def test_burst_stop_followed_by_a_flinch_proposes_as_usual(armed, monkeypatch, veto):
     monkeypatch.setattr(learning_mod, "BURST_FOLLOW_S", 0.5)
-    burst_stop(h2m)
+    burst_stop(armed)
     time.sleep(0.05)
-    h2m.log.emit(veto, onset_t=now(), extensor=0.9)  # the arm is already stopped
-    assert len(kinds(h2m, "incident.triggered")) == 1  # still one incident
-    assert h2m.learner.run_once(timeout=1.0)
-    data = kinds(h2m, "incident.explained")[-1].data
+    armed.log.emit(veto, onset_t=now(), extensor=0.9)  # the arm is already stopped
+    assert len(kinds(armed, "incident.triggered")) == 1  # still one incident
+    assert armed.learner.run_once(timeout=1.0)
+    data = kinds(armed, "incident.explained")[-1].data
     assert data["proposal"] is not None and data["proposal"]["rule"]["approved"] is False
-    text = prompt_text(h2m)
+    text = prompt_text(armed)
     assert "POSSIBLY VOLUNTARY" in text and "A brace or open hand followed" in text
 
 
-def test_a_brace_incident_is_not_labelled_possibly_voluntary(h2m):
-    flinch_and_explain(h2m)
-    assert "VOLUNTARY" not in prompt_text(h2m)
+def test_a_brace_incident_is_not_labelled_possibly_voluntary(armed):
+    flinch_and_explain(armed)
+    assert "VOLUNTARY" not in prompt_text(armed)
 
 
 # ── route choice and modifiers ───────────────────────────────────────────────
@@ -445,122 +445,122 @@ def ask(h, text="hand me the cup"):
     return h.last["contract"], h.last["decision"]
 
 
-def test_full_loop_reroutes_after_approval(h2m):
-    _, _ = ask(h2m)
-    assert h2m.last["contract"]["route"] == "direct"
-    h2m.cancel("test")
-    flinch_and_explain(h2m)
-    answer_later(h2m.learner.proposal)
-    rule_id = h2m.learner.proposal.rule.id
-    assert h2m.learner.approve(by="ui", expected_id=rule_id)[0]
-    assert h2m.arm.state is ArmState.STOPPED  # approving never resumes motion
-    assert h2m.arm.reset()[0] and h2m.arm.arm()[0]
-    took_it_back(h2m)
-    contract, decision = ask(h2m)
+def test_full_loop_reroutes_after_approval(armed):
+    _, _ = ask(armed)
+    assert armed.last["contract"]["route"] == "direct"
+    armed.cancel("test")
+    flinch_and_explain(armed)
+    answer_later(armed.learner.proposal)
+    rule_id = armed.learner.proposal.rule.id
+    assert armed.learner.approve(by="ui", expected_id=rule_id)[0]
+    assert armed.arm.state is ArmState.STOPPED  # approving never resumes motion
+    assert armed.arm.reset()[0] and armed.arm.arm()[0]
+    took_it_back(armed)
+    contract, decision = ask(armed)
     assert decision["verdict"] == "ask"  # a carry still needs a confirmation
     assert contract["route"] == "via_left" and contract["applied_rules"] == [rule_id]
-    assert h2m.confirm(by="ui")[0]
-    started = kinds(h2m, "arm.started")[-1].data
+    assert armed.confirm(by="ui")[0]
+    started = kinds(armed, "arm.started")[-1].data
     assert started["route"] == "via_left" and started["applied_rules"] == [rule_id]
-    assert any(wp.label == "via.via_left" for wp in h2m.arm._plan.waypoints)
+    assert any(wp.label == "via.via_left" for wp in armed.arm._plan.waypoints)
     # generalization: an untagged object is unaffected
-    h2m.arm.stop("test"), h2m.arm.reset(), h2m.arm.arm()
-    contract, _ = ask(h2m, "hand me the block")
+    armed.arm.stop("test"), armed.arm.reset(), armed.arm.arm()
+    contract, _ = ask(armed, "hand me the block")
     assert contract["route"] == "direct" and contract["applied_rules"] == []
 
 
-def test_no_route_left_holds_and_says_why(h2m):
-    r = save(h2m, "route_around")
+def test_no_route_left_holds_and_says_why(armed):
+    r = save(armed, "route_around")
     from dataclasses import replace
 
-    h2m.routes = replace(h2m.routes, zones={"laptop": (-1.0, -1.0, 2.0, 2.0)})
-    contract, decision = ask(h2m)
+    armed.routes = replace(armed.routes, zones={"laptop": (-1.0, -1.0, 2.0, 2.0)})
+    contract, decision = ask(armed)
     assert decision["verdict"] == "hold" and contract["route"] is None
-    assert "Every route" in decision["reason"] and h2m.reply == decision["reason"]
-    assert contract["applied_rules"] == [r.id] and h2m.pending is None
+    assert "Every route" in decision["reason"] and armed.reply == decision["reason"]
+    assert contract["applied_rules"] == [r.id] and armed.pending is None
 
 
-def test_corrupt_rules_hold_tagged_carry_only(h2m):
-    h2m.rules.path.parent.mkdir(parents=True, exist_ok=True)
-    h2m.rules.path.write_text("[{]")
-    _, decision = ask(h2m)
+def test_corrupt_rules_hold_tagged_carry_only(armed):
+    armed.rules.path.parent.mkdir(parents=True, exist_ok=True)
+    armed.rules.path.write_text("[{]")
+    _, decision = ask(armed)
     assert decision["verdict"] == "hold" and "can't read my saved rules" in decision["reason"]
-    _, decision = ask(h2m, "hand me the block")  # no rule can match an untagged object
+    _, decision = ask(armed, "hand me the block")  # no rule can match an untagged object
     assert decision["verdict"] == "ask"
 
 
-def test_missing_route_map_holds_when_rules_exist(h2m):
-    h2m.routes = None
-    _, decision = ask(h2m)
+def test_missing_route_map_holds_when_rules_exist(armed):
+    armed.routes = None
+    _, decision = ask(armed)
     assert decision["verdict"] == "ask"  # no rules: nothing to avoid
-    save(h2m, "slow_down")
+    save(armed, "slow_down")
     for text in ("hand me the cup", "hand me the block"):  # tags unknown without the map
-        _, decision = ask(h2m, text)
+        _, decision = ask(armed, text)
         assert decision["verdict"] == "hold" and "route map" in decision["reason"]
 
 
-def test_slow_down_and_grip_gentler_only_lower(h2m):
-    slow, gentle = save(h2m, "slow_down"), save(h2m, "grip_gentler")
-    contract, _ = ask(h2m, "gently hand me the cup")
+def test_slow_down_and_grip_gentler_only_lower(armed):
+    slow, gentle = save(armed, "slow_down"), save(armed, "grip_gentler")
+    contract, _ = ask(armed, "gently hand me the cup")
     assert contract["speed"] == 0.5
     assert contract["grip_effort"] <= 0.35 * 0.6 + 1e-9
     assert set(contract["applied_rules"]) == {slow.id, gentle.id}
-    assert h2m.confirm(by="ui")[0]
-    started = kinds(h2m, "arm.started")[-1].data
+    assert armed.confirm(by="ui")[0]
+    started = kinds(armed, "arm.started")[-1].data
     assert started["speed"] == 0.5 and started["grip"]["effort"] <= 0.35 * 0.6 + 1e-9
 
 
-def test_misconfigured_caps_never_raise_speed_or_grip(h2m):
-    h2m.rules_cfg = {**h2m.rules_cfg, "slow_down_speed": 5.0, "grip_gentler": 3.0}
-    save(h2m, "slow_down"), save(h2m, "grip_gentler")
-    contract, _ = ask(h2m, "firmly hand me the cup")
+def test_misconfigured_caps_never_raise_speed_or_grip(armed):
+    armed.rules_cfg = {**armed.rules_cfg, "slow_down_speed": 5.0, "grip_gentler": 3.0}
+    save(armed, "slow_down"), save(armed, "grip_gentler")
+    contract, _ = ask(armed, "firmly hand me the cup")
     assert contract["speed"] <= 1.0
     assert contract["grip_effort"] <= 0.85  # the spoken "firmly" effort, not raised
 
 
-def test_lift_higher_keeps_only_high_routes(h2m):
-    r = save(h2m, "lift_higher")
-    contract, _ = ask(h2m)
+def test_lift_higher_keeps_only_high_routes(armed):
+    r = save(armed, "lift_higher")
+    contract, _ = ask(armed)
     assert contract["route"] == "via_high" and contract["applied_rules"] == [r.id]
     from dataclasses import replace
 
-    h2m.routes = replace(h2m.routes, high_routes=[])
-    _, decision = ask(h2m)
+    armed.routes = replace(armed.routes, high_routes=[])
+    _, decision = ask(armed)
     assert decision["verdict"] == "hold"
 
 
-def test_route_without_taught_waypoints_is_never_chosen(h2m):
-    h2m.arm.poses.routes.pop("via_left")
-    save(h2m, "route_around")
-    contract, _ = ask(h2m)
+def test_route_without_taught_waypoints_is_never_chosen(armed):
+    armed.arm.poses.routes.pop("via_left")
+    save(armed, "route_around")
+    contract, _ = ask(armed)
     assert contract["route"] == "via_high"  # via_left is not executable
 
 
-def test_squeeze_confirm_effort_is_capped_by_grip_gentler(h2m):
-    save(h2m, "grip_gentler")
-    ask(h2m)
-    h2m.pending.announced_at = now() - 2
-    h2m.log.emit("emg.squeeze", effort=1.0, held_ms=350)
+def test_squeeze_confirm_effort_is_capped_by_grip_gentler(armed):
+    save(armed, "grip_gentler")
+    ask(armed)
+    armed.pending.announced_at = now() - 2
+    armed.log.emit("emg.squeeze", effort=1.0, held_ms=350)
     time.sleep(0.3)
-    started = kinds(h2m, "arm.started")[-1].data
+    started = kinds(armed, "arm.started")[-1].data
     assert started["grip"]["effort"] <= 0.35 * 0.6 + 1e-9
 
 
 # ── HTTP ─────────────────────────────────────────────────────────────────────
-def test_http_rules_and_incident_endpoints(h2m):
+def test_http_rules_and_incident_endpoints(armed):
     from fastapi.testclient import TestClient
 
-    from h2m.server import create_app
+    from armed.server import create_app
 
     client = TestClient(
-        create_app(h2m, token="t0k"), base_url="http://127.0.0.1", headers={"X-H2M-Token": "t0k"}
+        create_app(armed, token="t0k"), base_url="http://127.0.0.1", headers={"X-Armed-Token": "t0k"}
     )
     assert client.get("/api/rules").json()["rules"] == []
-    data = flinch_and_explain(h2m)
+    data = flinch_and_explain(armed)
     p = client.get("/api/rules/proposal").json()["proposal"]
     assert p["rule"]["approved"] is False
     assert client.post("/api/rules/proposal/r_stale/approve").status_code == 409
-    answer_later(h2m.learner.proposal)
+    answer_later(armed.learner.proposal)
     assert client.post(f"/api/rules/proposal/{p['rule']['id']}/approve").json()["ok"]
     rules = client.get("/api/rules").json()["rules"]
     assert [r["id"] for r in rules] == [p["rule"]["id"]]
@@ -571,23 +571,23 @@ def test_http_rules_and_incident_endpoints(h2m):
     assert client.get("/api/incident/nope").status_code == 404
     assert client.delete(f"/api/rules/{p['rule']['id']}").json()["ok"]
     assert client.delete("/api/rules/gone").status_code == 404
-    h2m.rules.path.write_text("garbage")
+    armed.rules.path.write_text("garbage")
     assert client.get("/api/rules").status_code == 503
     assert client.delete("/api/rules/x").status_code == 503
     assert client.post("/api/rules/proposal/x/reject").status_code == 409
 
 
-def test_shaping_never_raises_an_already_lower_speed_or_grip(h2m):
-    from h2m.contract import StepContract, Verb
+def test_shaping_never_raises_an_already_lower_speed_or_grip(armed):
+    from armed.contract import StepContract, Verb
 
-    save(h2m, "route_around")
+    save(armed, "route_around")
     c = StepContract(Verb.PICK_PLACE, "cup", "paper cup", (0.25, 0.55), grip_effort=0.1)
     c.speed = 0.3
-    assert h2m._shape_carry(c) is None
+    assert armed._shape_carry(c) is None
     assert c.speed == 0.3 and c.grip_effort == 0.1 and c.route == "via_left"
-    save(h2m, "slow_down"), save(h2m, "grip_gentler")
+    save(armed, "slow_down"), save(armed, "grip_gentler")
     for _ in range(3):  # idempotent across re-checks
-        h2m._shape_carry(c)
+        armed._shape_carry(c)
     assert c.speed == 0.3 and c.grip_effort == 0.1
 
 
@@ -646,14 +646,14 @@ def with_camera(h):
 
     h.learner.virtual_camera = lambda: np.full((240, 320, 3), 90, np.uint8)
 
-def test_tool_loop_publishes_feed_calls_checks_and_rehearsal(h2m):
-    with_camera(h2m)
-    h2m.learner.muse = ToolMuse(SCRIPT)
-    data = flinch_and_explain(h2m)
-    assert h2m.arm.state is ArmState.STOPPED  # the loop never touches the arm
+def test_tool_loop_publishes_feed_calls_checks_and_rehearsal(armed):
+    with_camera(armed)
+    armed.learner.muse = ToolMuse(SCRIPT)
+    data = flinch_and_explain(armed)
+    assert armed.arm.state is ArmState.STOPPED  # the loop never touches the arm
     assert data["explanation"]["source"] == "wonder" and data["investigation"]["status"] == "proposed"
     assert data["investigation"]["tool_calls"] == 5 and data["investigation"]["rejected"] == 0
-    snap = h2m.snapshot()
+    snap = armed.snapshot()
     learning = snap["learning"]
     # the feed: [{t, tool, args, result_summary, ms}] in order
     feed = learning["investigation"]
@@ -684,108 +684,108 @@ def test_tool_loop_publishes_feed_calls_checks_and_rehearsal(h2m):
     assert rh["source"] == {"file": "configs/routes.yaml", "measured": False}
     assert "placeholder" in rh["note"] and "twin only" in rh["note"]
     # the Wonder requests: the clip, the zones and tags it may use, then the tool outputs
-    first = h2m.learner.muse.bodies[0]
+    first = armed.learner.muse.bodies[0]
     assert first["model"] == "muse-wonder-1.0" and first["input"][0]["content"][-1]["type"] == "input_video"
     assert "laptop" in first["input"][0]["content"][0]["text"]
     assert "liquid" in first["input"][0]["content"][0]["text"]
-    outputs = [it for it in h2m.learner.muse.bodies[2]["input"] if it["type"] == "function_call_output"]
+    outputs = [it for it in armed.learner.muse.bodies[2]["input"] if it["type"] == "function_call_output"]
     seen = json.loads(outputs[0]["output"])["found_in"]
-    assert 1 <= seen <= h2m.learner.inv_cfg.track_frames  # one SAM call per frame, per phrase
+    assert 1 <= seen <= armed.learner.inv_cfg.track_frames  # one SAM call per frame, per phrase
     assert calls.count(("sam-3.1", "track")) == 2 * seen
     # the clip was saved next to the keyframes and the explanation records the loop
-    inc_dir = h2m.learner.root / data["incident_id"]
+    inc_dir = armed.learner.root / data["incident_id"]
     assert (inc_dir / "clip.mp4").exists()
     saved = json.loads((inc_dir / "explanation.json").read_text())
     assert saved["checks"]["prevented"] is True and saved["investigation"]["status"] == "proposed"
     assert json.loads((inc_dir / "meta.json").read_text())["carry"]["slot_id"] == "slot_1"
 
-def test_rehearsal_plays_in_the_twin_only_and_no_timer_approves(h2m):
-    h2m.learner.cfg["rehearsal_s"] = 0.2
-    h2m.learner.muse = ToolMuse(SCRIPT)
-    flinch_and_explain(h2m)
-    p = h2m.learner.proposal
+def test_rehearsal_plays_in_the_twin_only_and_no_timer_approves(armed):
+    armed.learner.cfg["rehearsal_s"] = 0.2
+    armed.learner.muse = ToolMuse(SCRIPT)
+    flinch_and_explain(armed)
+    p = armed.learner.proposal
     assert p.rehearsal_state()["state"] == "playing"
     time.sleep(0.3)
     done = p.rehearsal_state()
     assert done["state"] == "done" and done["progress"] == 1.0
-    assert h2m.rules.list() == [] and h2m.learner.proposal is p  # finishing approves nothing
-    assert h2m.arm.state is ArmState.STOPPED  # and moves nothing, virtual or real
-    assert not kinds(h2m, "arm.started")[1:]  # only the carry's start is in the log
+    assert armed.rules.list() == [] and armed.learner.proposal is p  # finishing approves nothing
+    assert armed.arm.state is ArmState.STOPPED  # and moves nothing, virtual or real
+    assert not kinds(armed, "arm.started")[1:]  # only the carry's start is in the log
 
-def test_rejected_proposal_goes_back_to_wonder_once_then_is_dropped(h2m):
-    h2m.learner.muse = ToolMuse([[("propose_rule", WRONG)], [("propose_rule", GOOD)]])
-    data = flinch_and_explain(h2m)
+def test_rejected_proposal_goes_back_to_wonder_once_then_is_dropped(armed):
+    armed.learner.muse = ToolMuse([[("propose_rule", WRONG)], [("propose_rule", GOOD)]])
+    data = flinch_and_explain(armed)
     assert data["investigation"]["rejected"] == 1 and data["proposal"]["rule"]["when_holding"] == ["liquid"]
-    feed = h2m.learner.snapshot()["investigation"]
+    feed = armed.learner.snapshot()["investigation"]
     checker = [e for e in feed if e["tool"] == "checker"]
     assert checker[0]["ok"] is False and checker[0]["ticks"] == [True, False]
     assert "rigid" in checker[0]["result_summary"] and checker[1]["ticks"] == [True, True]
     # the reason went back to Wonder as the tool's result
-    out = json.loads(h2m.learner.muse.bodies[1]["input"][-1]["output"])
+    out = json.loads(armed.learner.muse.bodies[1]["input"][-1]["output"])
     assert out["ok"] is False and "not prevented" in out["reason"] and "liquid" in out["tags"]
     # two rejections: dropped, the one-shot path runs next, and the arm stays stopped
-    h2m.arm.reset(), h2m.arm.arm()
-    took_it_back(h2m)
-    h2m.learner.muse = ToolMuse([[("propose_rule", WRONG)], [("propose_rule", WRONG)]])
-    data = flinch_and_explain(h2m)
+    armed.arm.reset(), armed.arm.arm()
+    took_it_back(armed)
+    armed.learner.muse = ToolMuse([[("propose_rule", WRONG)], [("propose_rule", WRONG)]])
+    data = flinch_and_explain(armed)
     assert data["investigation"]["status"] == "rejected" and data["investigation"]["rejected"] == 2
-    assert h2m.learner.muse.turn == 2  # no third turn
+    assert armed.learner.muse.turn == 2  # no third turn
     assert data["proposal"] is None and data["say"] == FALLBACK_SAY
     assert data["explanation"]["source"] == "fallback"  # no second opinion from chat()
-    assert h2m.learner.muse.calls == []  # the one-shot path did not run
-    assert h2m.arm.state is ArmState.STOPPED
+    assert armed.learner.muse.calls == []  # the one-shot path did not run
+    assert armed.arm.state is ArmState.STOPPED
 
-def test_loop_failure_falls_back_to_the_one_shot_path_then_the_fixed_question(h2m):
-    h2m.learner.muse = ToolMuse(SCRIPT, fail=True)  # respond raises; chat still answers GOOD
-    data = flinch_and_explain(h2m)
+def test_loop_failure_falls_back_to_the_one_shot_path_then_the_fixed_question(armed):
+    armed.learner.muse = ToolMuse(SCRIPT, fail=True)  # respond raises; chat still answers GOOD
+    data = flinch_and_explain(armed)
     assert data["investigation"]["status"] == "error"
     assert data["explanation"]["source"] == "wonder" and data["proposal"]["checks"]["prevented"]
-    assert h2m.arm.state is ArmState.STOPPED
-    h2m.arm.reset(), h2m.arm.arm()
-    took_it_back(h2m)
+    assert armed.arm.state is ArmState.STOPPED
+    armed.arm.reset(), armed.arm.arm()
+    took_it_back(armed)
     muse = ToolMuse([], fail=True)
     muse.fail = True  # chat fails too
-    h2m.learner.muse = muse
-    data = flinch_and_explain(h2m)
+    armed.learner.muse = muse
+    data = flinch_and_explain(armed)
     assert data["explanation"]["source"] == "fallback" and data["say"] == FALLBACK_SAY
-    assert data["proposal"] is None and h2m.arm.state is ArmState.STOPPED
+    assert data["proposal"] is None and armed.arm.state is ArmState.STOPPED
     # tools off in the config: the one-shot path only, no Responses call
-    h2m.arm.reset(), h2m.arm.arm()
-    took_it_back(h2m)
-    h2m.learner.tools = False
-    h2m.learner.muse = ToolMuse(SCRIPT)
-    data = flinch_and_explain(h2m)
-    assert data["investigation"] is None and h2m.learner.muse.bodies == []
-    assert data["proposal"] is not None and h2m.learner.snapshot()["tools"] is False
+    armed.arm.reset(), armed.arm.arm()
+    took_it_back(armed)
+    armed.learner.tools = False
+    armed.learner.muse = ToolMuse(SCRIPT)
+    data = flinch_and_explain(armed)
+    assert data["investigation"] is None and armed.learner.muse.bodies == []
+    assert data["proposal"] is not None and armed.learner.snapshot()["tools"] is False
 
-def test_one_shot_proposal_is_checked_too(h2m):
-    h2m.learner.muse = FakeMuse(reply=WRONG)  # chat() only: the one-shot path
-    data = flinch_and_explain(h2m)
+def test_one_shot_proposal_is_checked_too(armed):
+    armed.learner.muse = FakeMuse(reply=WRONG)  # chat() only: the one-shot path
+    data = flinch_and_explain(armed)
     assert data["proposal"] is None and any("not prevented" in p for p in data["problems"])
     assert data["say"] == FALLBACK_SAY
 
-def test_duplicate_rule_that_changes_nothing_is_not_proposed(h2m):
-    flinch_and_explain(h2m)
-    answer_later(h2m.learner.proposal)
-    assert h2m.learner.approve(by="ui")[0]
-    h2m.arm.reset(), h2m.arm.arm()
-    took_it_back(h2m)
-    data = flinch_and_explain(h2m)  # the carry was on via_left, clear of the laptop
+def test_duplicate_rule_that_changes_nothing_is_not_proposed(armed):
+    flinch_and_explain(armed)
+    answer_later(armed.learner.proposal)
+    assert armed.learner.approve(by="ui")[0]
+    armed.arm.reset(), armed.arm.arm()
+    took_it_back(armed)
+    data = flinch_and_explain(armed)  # the carry was on via_left, clear of the laptop
     assert data["proposal"] is None
     assert any("never crosses" in p for p in data["problems"])
 
-def test_applied_rules_name_the_tag_that_matched(h2m):
-    flinch_and_explain(h2m)
-    answer_later(h2m.learner.proposal)
-    rule_id = h2m.learner.proposal.rule.id
-    assert h2m.learner.approve(by="ui")[0]
-    h2m.arm.reset(), h2m.arm.arm()
-    took_it_back(h2m)
-    contract, _ = ask(h2m)
+def test_applied_rules_name_the_tag_that_matched(armed):
+    flinch_and_explain(armed)
+    answer_later(armed.learner.proposal)
+    rule_id = armed.learner.proposal.rule.id
+    assert armed.learner.approve(by="ui")[0]
+    armed.arm.reset(), armed.arm.arm()
+    took_it_back(armed)
+    contract, _ = ask(armed)
     assert contract["applied_rules"] == [rule_id]
-    assert h2m.snapshot()["learning"]["applied_rules"] == [
+    assert armed.snapshot()["learning"]["applied_rules"] == [
         {"id": rule_id, "index": 1, "tags": ["liquid"], "response": "route_around", "avoid": "laptop"}
     ]
-    h2m.cancel("test")
-    ask(h2m, "hand me the block")
-    assert h2m.snapshot()["learning"]["applied_rules"] == []
+    armed.cancel("test")
+    ask(armed, "hand me the block")
+    assert armed.snapshot()["learning"]["applied_rules"] == []

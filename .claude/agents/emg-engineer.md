@@ -1,6 +1,6 @@
 ---
 name: emg-engineer
-description: Implements and tunes EMG signal processing in h2m/sensors/emg.py and h2m/flinch.py: the brace detector, fast window, onset rule, calibration step, priority rules and latency measurement.
+description: Implements and tunes EMG signal processing in armed/sensors/emg.py and armed/flinch.py: the brace detector, fast window, onset rule, calibration step, priority rules and latency measurement.
 model: sonnet
 effort: high
 ---

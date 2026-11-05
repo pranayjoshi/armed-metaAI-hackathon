@@ -19,7 +19,7 @@ export function createDevices(pane, ctx) {
         <div class="packets" data-ref="packets"></div>
         <div class="hub" data-ref="hub" style="left:${HUB[0]}%;top:${HUB[1]}%">
           <span class="hub-ring"></span><span class="hub-ring r2"></span>
-          <div class="hub-core"><b>H2M</b><small data-ref="hubmeta">runtime</small></div>
+          <div class="hub-core"><b>Armed</b><small data-ref="hubmeta">runtime</small></div>
         </div>
         <div data-ref="nodes"></div>
       </div>
@@ -147,19 +147,19 @@ export function createDevices(pane, ctx) {
 
     // poses
     const a = s.arm;
-    const cmd = (p) => `h2m arm teach ${p}`;
+    const cmd = (p) => `armed arm teach ${p}`;
     if (a.hardware) {
       q.posechip.className = `chip ${a.untaught.length ? "warn" : "ok"}`;
       q.posechip.innerHTML = `<i></i>${a.untaught.length ? `${a.untaught.length} untaught` : "all taught"}`;
       q.poses.innerHTML = a.untaught.length
         ? `<p class="fine">The real arm refuses any plan that uses an untaught pose. Hand-guide the follower to the pose, then run:</p>
            <ul class="cmds">${a.untaught.map((p) => `<li><code>${esc(cmd(p))}</code><button class="btn copy" data-copy="${esc(cmd(p))}">Copy</button></li>`).join("")}</ul>`
-        : `<p class="fine">Every pose the library lists is taught. Re-teach one with:</p><ul class="cmds"><li><code>h2m arm teach &lt;pose&gt;</code><button class="btn copy" data-copy="h2m arm teach ">Copy</button></li></ul>`;
+        : `<p class="fine">Every pose the library lists is taught. Re-teach one with:</p><ul class="cmds"><li><code>armed arm teach &lt;pose&gt;</code><button class="btn copy" data-copy="armed arm teach ">Copy</button></li></ul>`;
     } else {
       q.posechip.className = "chip warn";
       q.posechip.innerHTML = "<i></i>virtual arm";
       q.poses.innerHTML = `<p class="fine">The virtual arm runs the placeholder poses as they are. Teaching applies to the SO-101 only:</p>
-        <ul class="cmds"><li><code>h2m arm teach &lt;pose&gt;</code><button class="btn copy" data-copy="h2m arm teach ">Copy</button></li></ul>
+        <ul class="cmds"><li><code>armed arm teach &lt;pose&gt;</code><button class="btn copy" data-copy="armed arm teach ">Copy</button></li></ul>
         <p class="muted fine">The runtime reports untaught poses only when a real arm is attached.</p>`;
     }
 

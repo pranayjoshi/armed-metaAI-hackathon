@@ -1,11 +1,11 @@
-"""`h2m bench --results`: the results table is measured, self-test only, or not measured."""
+"""`armed bench --results`: the results table is measured, self-test only, or not measured."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from h2m.bench import NOT_MEASURED, load_sessions, main, render_results, results_rows
+from armed.bench import NOT_MEASURED, load_sessions, main, render_results, results_rows
 
 
 def write_session(root: Path, name: str, participant: str, events: list[dict]) -> Path:

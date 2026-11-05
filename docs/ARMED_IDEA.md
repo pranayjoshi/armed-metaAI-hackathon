@@ -1,6 +1,6 @@
 # Armed: the idea
 
-Written November 3, 2026. The one current description of what Armed is, how it is executed, why it uses the Meta models it uses, and what it claims. The write-up, the README and the submission text are built from this file. The demo that shows it is `DEMO_STORY.md`; the build state is `ACTIONS.md`, `PROACTIVE.md`, `UI.md`, `COMPLIANCE.md`.
+Written November 3, 2026. The one current description of what Armed is, how it is executed, why it uses the Meta models it uses, and what it claims. The README is built from this file. The proactive layer is `PROACTIVE.md`, the interface `UI.md`, the live runtime `LIVE_RUNTIME.md`.
 
 ---
 
@@ -82,7 +82,7 @@ Not used, on purpose: Muse Image (a pictogram per card would be padding), Glimme
 
 **Not new, and credited:** VLM intent inference with a confirm key (CASPER, CoRL 2025); EMG-controlled assistive arms for severe impairment (DLR EDAN); ranked next-action menus (Naughton & Hauser, RA-L 2022); interface-aware shared control with spinal-cord-injury users (Argall's lab); the third arm itself (supernumerary-limb research since 2014, and the desk arms Apple and Lenovo are building). The scanning baseline numbers come from Simpson et al. 2011 and Bonaker et al., CHI 2022.
 
-**Not claimed:** "reads your mind"; "first ever"; "understands emotion"; "involuntary" unless a twenty-stimulus flinch test passes; any result about the population it is designed for; any learned motion.
+**Claimed precisely:** it reads four forearm electrodes, not thoughts or emotion; the stop is a brace, a deliberate tensing of the forearm; every motion is a taught pose.
 
 ## 7. What was built during the event
 
