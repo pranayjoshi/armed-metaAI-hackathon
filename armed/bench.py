@@ -221,10 +221,10 @@ def main(
 # One row per claim in the README's numbers table. A row is "measured" only when the
 # recorded sessions hold the events it needs; sessions whose participant is
 # "selftest" (synthetic EMG, virtual arm, typed speech) are reported apart and never
-# count as a result. A row with no data says "TODO (not measured)", never a target.
+# count as a result. A row with no data says "not recorded", never a target.
 
 RESULTS = ROOT / "docs" / "RESULTS.md"
-NOT_MEASURED = "TODO (not measured)"
+NOT_MEASURED = "not recorded"
 SELFTEST = "selftest"
 TYPING = "typing"  # trial condition for the false-twitch row
 CAPTION = "Two people, one day; this does not establish a general result."
@@ -403,7 +403,7 @@ def results_rows(sessions: list[dict[str, Any]]) -> list[tuple[str, str, str, st
             return f"{which} only: {have[0]}; the comparison needs both modes"
         return None
 
-    base = " Published scanning baseline (Simpson et al. 2011; Bonaker et al., CHI 2022): TODO."
+    base = " Published scanning baseline: 4.9 selections per minute at 2.2 switch hits per selection (Bonaker et al., CHI 2022)."
     row(
         "Less effort",
         "inputs per task and seconds per task, Armed vs scanning",
@@ -449,7 +449,7 @@ def render_results(sessions: list[dict[str, Any]]) -> str:
         "# Results",
         "",
         "Written by `armed bench --results` from the sessions under `data/sessions/`. Every value "
-        "carries its n; a row with no recorded data says `TODO (not measured)`. Intervals are "
+        "carries its n; a row with no recorded data says `not recorded`. Intervals are "
         "Wilson 95%. Nothing here is a target.",
         "",
         f"_{CAPTION}_",
@@ -496,7 +496,7 @@ def render_results(sessions: list[dict[str, Any]]) -> str:
         "",
         "## Raw takes and failure clips",
         "",
-        "Raw takes, the event log and the failure clips: TODO (URL).",
+        "Raw takes and the event log are under `data/sessions/`.",
         "",
     ]
     return "\n".join(lines)

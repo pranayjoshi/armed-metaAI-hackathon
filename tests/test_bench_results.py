@@ -42,7 +42,7 @@ def test_no_sessions_every_row_is_not_measured():
     assert all(r[2].startswith(NOT_MEASURED) and r[3] == "not measured" for r in rows)
     text = render_results([])
     assert "this does not establish a general result" in text
-    assert "TODO (URL)" in text
+    assert "data/sessions" in text
 
 
 def test_selftest_stop_latency_is_labelled_self_test(tmp_path):
@@ -55,7 +55,7 @@ def test_selftest_stop_latency_is_labelled_self_test(tmp_path):
     stop = row(rows, "Stops fast and locally")
     assert stop[3] == "self-test only"
     assert "n=1" in stop[2] and "self-test" in stop[2]
-    assert "physical stop from 60 fps video: TODO (not measured)" in stop[2]
+    assert "physical stop from 60 fps video: not recorded" in stop[2]
     assert [r[3] for r in rows].count("self-test only") == 1
 
 
@@ -73,7 +73,7 @@ def test_real_session_rows_carry_n_and_intervals(tmp_path):
     effort = row(rows, "Less effort")
     assert effort[3] == "measured"
     assert "Armed" in effort[2] and "scanning" in effort[2] and "n=2" in effort[2]
-    assert "baseline" in effort[2] and "TODO" in effort[2]
+    assert "baseline" in effort[2] and "Bonaker" in effort[2]
     first = row(rows, "Proposals are right")
     assert first[3] == "measured"
     assert "1/3 = 33%" in first[2] and "[" in first[2]

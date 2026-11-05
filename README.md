@@ -7,7 +7,6 @@
 <p align="center"><img src="docs/media/desk.jpg" alt="Armed on the desk: the SO-101 beside the laptop, the phone, the shake and the overhead camera" width="900"></p>
 
 <p align="center">
-  <a href="#the-film">Film</a> ·
   <a href="#a-day-with-it">A day with it</a> ·
   <a href="#four-meta-models-each-where-only-it-fits">Meta models</a> ·
   <a href="#how-it-works">How it works</a> ·
@@ -25,10 +24,6 @@ Built in nine days by one person for the Meta Global AI Developer Hackathon, ind
 
 > **Nothing a model says can move a motor.** Muse Spark proposes, Muse Wonder investigates, SAM 3.1 sees, Muse Voice Transcribe listens. Motion is taught poses only, behind a pure-function gate. The stop path has no model and no network in it. Joint values from a model: zero.
 
-## The film
-
-<p align="center"><a href="#"><img src="docs/media/stage.png" alt="Watch the film" width="800"></a><br><sub>▶ Watch the film (2:30)</sub></p>
-
 ## A day with it
 
 | | What happens | What you see on screen |
@@ -42,6 +37,14 @@ Built in nine days by one person for the Meta Global AI Developer Hackathon, ind
 | **Bedside** | Same arm, clamped to the headboard. Someone else asks it to pass the marker; it waits for the wearer, then lands the marker in an open palm. | *X asked: marker*, the speaker label from Voice Transcribe, *Waiting for Pranay* |
 | **Desk check** | Every half hour it looks at the desk. Rubbish goes in the bin after a five-second veto ring. The phone and the shake stay. | The ring counting down, the chain *1/2 · 2/2* |
 | **Keys** | Standing up at the end of the day. *Your keys?* | The last card |
+
+<table>
+<tr>
+<td width="33%"><img src="docs/media/film_emg.jpg" alt="Forearm EMG beside the arm, with the arm speed readout"><br><sub>The forearm trace and the arm's speed, side by side.</sub></td>
+<td width="33%"><img src="docs/media/film_jar.jpg" alt="Holding the jar on a call while the arm holds it"><br><sub>On a call, hands full: the arm holds the jar.</sub></td>
+<td width="33%"><img src="docs/media/film_marker.jpg" alt="The arm placing a marker into an open palm"><br><sub>The marker, into an open palm.</sub></td>
+</tr>
+</table>
 
 Every yes in that day is one muscle. Words spoken to it: zero.
 
@@ -173,8 +176,6 @@ A refusal uses the same machinery: brace the same card twice in a day and *don't
 
 <p align="center"><img src="docs/media/slots.jpg" alt="The desk from the overhead camera: four taught slots for the toy, the phone, the 3D print and the shake" width="700"><br><sub>The desk from the robot's own camera. Four taught slots; SAM 3.1 finds what is on them by phrase.</sub></p>
 
-<p align="center"><img src="docs/media/phone.jpg" alt="The phone slot, with the wearer's hands on the keyboard" width="700"><br><sub>Both hands on the keyboard. The phone is Armed's job.</sub></p>
-
 | Part | Role | List price |
 |---|---|---|
 | SO-101 follower arm, six STS3215 servos, printed frame | the arm, clamped to the desk or the headboard | about $120 to $230 as a kit |
@@ -210,7 +211,7 @@ The full live runtime on the SO-101 and the Ganglion, with every Meta model live
 
 `--profile live,bed` switches to the headboard profile. The arm starts disarmed; say *arm yourself*, then *yes*. Bring-up of the arm, cameras and calibration: [docs/hardware](docs/hardware/README.md). How the live runtime behaves, what Spark sees and may do, and the measured latencies: [docs/LIVE_RUNTIME.md](docs/LIVE_RUNTIME.md).
 
-Tests: `.venv/bin/python -m pytest -q` (900+ tests on the virtual arm, the decoder, the gate, the checker and the APIs).
+Tests: `.venv/bin/python -m pytest -q`.
 
 ## Repository map
 
@@ -232,6 +233,6 @@ tests/          900+ tests
 
 ## Built during the event
 
-Everything in this repository was written between October 26 and November 4, 2026, by one person working with AI coding agents (their definitions are in `.claude/agents/`). The dated commit list is [docs/BUILT_DURING_EVENT.md](docs/BUILT_DURING_EVENT.md).
+Everything in this repository was written between October 26 and November 4, 2026, by one person, working with AI coding agents. The dated commit list is [docs/BUILT_DURING_EVENT.md](docs/BUILT_DURING_EVENT.md).
 
 **Builds on, and credits:** VLM intent inference with a confirm key (CASPER, CoRL 2025); EMG-controlled assistive arms (DLR EDAN); ranked next-action menus (Naughton & Hauser, RA-L 2022); interface-aware shared control (Argall's lab); supernumerary-limb research. **Reused:** the SO-101 design and LeRobot's driver and calibration (Hugging Face, TheRobotStudio); OpenBCI's Ganglion and BrainFlow; Three.js; Electron. **Models:** Muse Spark 1.3, Muse Wonder 1.0, SAM 3.1 and Muse Voice Transcribe 1.0 through the Meta Model API.
