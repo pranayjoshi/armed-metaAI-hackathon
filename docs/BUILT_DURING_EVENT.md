@@ -1,6 +1,6 @@
 # What was built during the event
 
-The hackathon window is October 26 to November 4, 2026. Everything below was written inside it by me, one person, working with AI coding agents (Claude Code; their definitions are under `.claude/agents/`), except what is credited under Reused. This list has two parts, and they are different kinds of evidence:
+The hackathon window is October 26 to November 4, 2026. Everything below was written inside it by me, one person, working with AI coding agents (Claude Code; their definitions are under `.claude/agents/`), except what is credited under Reused. This list has two parts:
 
 - **Commits** (first part): dated by `git log --date=short main`. A commit date is when I committed, not when the work finished; the one-line summary is mine, the hash and subject are the repository's. Regenerate with `git log --date=short --format='%ad %h %s' main`.
 - **Working tree** (second part): files that are **not committed** when this file is generated. They have no commit date. They are listed from `git status --short` so a reader can see what the build contains beyond the history, and they are checked against the history once committed. Nothing in the second part can be dated from the repository.
@@ -9,10 +9,11 @@ The package and command are `armed`.
 
 ## Part 1: commits on `main`
 
-56 commits on 5 days, verbatim from `git log`. The package was scaffolded as `h2m` on October 27 and renamed to `armed` on November 4; older subjects use the old name.
+57 commits on 5 days, verbatim from `git log`. The package was scaffolded as `h2m` on October 27 and renamed to `armed` on November 4; older subjects use the old name.
 
-### 2026-11-04 · 9 commits
+### 2026-11-04 · 10 commits
 
+- `7bab7d4` Rename to Armed and finish the submission
 - `367f08c` Add screenshots and diagrams to the README
 - `9741294` Add live runtime doc and refresh Armed docs
 - `f2c4737` Update card and shell styles for the bed flow
@@ -84,7 +85,7 @@ The package and command are `armed`.
 
 ## Part 2: uncommitted working tree
 
-Snapshot of `git status --short` when this file was last generated: 212 entries (the November 4 rename to `armed`, the final docs and the live-run tuning). Regenerate after the final commit.
+None. Every file in the repository is in a dated commit above.
 
 ## Reused, and credited
 
